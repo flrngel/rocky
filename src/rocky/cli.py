@@ -10,7 +10,7 @@ from rich.console import Console
 
 from rocky.app import RockyRuntime
 from rocky.core.permissions import PermissionRequest
-from rocky.ui.repl import EventPrinter, RockyRepl
+from rocky.ui.repl import EventPrinter, RockyRepl, render_console_text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.json:
                 print(json.dumps({"name": result.name, "text": result.text, "data": result.data}, ensure_ascii=False))
             else:
-                console.print(result.text)
+                render_console_text(console, result.text)
             return 0
 
         printer = None if args.json else EventPrinter(console)
@@ -105,15 +105,15 @@ def main(argv: list[str] | None = None) -> int:
             if printer and printer.streamed_text:
                 printer.finish()
             else:
-                console.print(response.text)
+                render_console_text(console, response.text)
             if response.verification.get("status") != "pass":
-                console.print(f"[yellow]Verification:[/] {response.verification.get('message')}")
+                console.print(f"[yellow]Verification:[/] {response.verification.get('message')}", markup=False)
         return 0
     except Exception as exc:
         if args.json:
             print(json.dumps({"error": exc.__class__.__name__, "message": str(exc)}, ensure_ascii=False))
         else:
-            console.print(f"[red]Rocky failed:[/] {exc}")
+            console.print(f"Rocky failed: {exc}", markup=False, style="red")
         return 1
 
 

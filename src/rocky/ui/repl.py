@@ -12,11 +12,28 @@ from rich.console import Console
 from rich.json import JSON
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.text import Text
 
 from rocky.commands.registry import CommandResult
 from rocky.core.permissions import PermissionRequest
 from rocky.ui.completion import build_completer
 from rocky.util.text import safe_json
+
+
+def render_console_text(console: Console, text: str) -> None:
+    stripped = text.strip()
+    if not stripped:
+        return
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            console.print(JSON(stripped))
+            return
+        except Exception:
+            pass
+    if stripped.startswith("#") or stripped.startswith("- ") or stripped.startswith("```"):
+        console.print(Markdown(text))
+        return
+    console.print(Text(text))
 
 
 @dataclass(slots=True)
@@ -27,7 +44,7 @@ class EventPrinter:
 
     def _ensure_stream_line(self) -> None:
         if not self._stream_open:
-            self.console.print("[bold bright_white]assistant[/] ", end="")
+            self.console.print(Text("assistant ", style="bold bright_white"), end="")
             self._stream_open = True
 
     def _close_stream_line(self) -> None:
@@ -40,16 +57,19 @@ class EventPrinter:
         if kind == "assistant_chunk":
             self.streamed_text = True
             self._ensure_stream_line()
-            self.console.print(event.get("text", ""), end="")
+            self.console.print(Text(str(event.get("text", ""))), end="")
         elif kind == "tool_call":
             self._close_stream_line()
-            body = f"[bold cyan]{event.get('name', '')}[/]\n{safe_json(event.get('arguments') or {})}"
+            body = Text()
+            body.append(str(event.get("name", "")), style="bold cyan")
+            body.append("\n")
+            body.append(safe_json(event.get("arguments") or {}))
             self.console.print(Panel(body, title="tool call", border_style="cyan"))
         elif kind == "tool_result":
             self._close_stream_line()
             self.console.print(
                 Panel(
-                    event.get("text", ""),
+                    Text(str(event.get("text", ""))),
                     title=f"tool result: {event.get('name', '')}",
                     border_style="green" if event.get("success") else "red",
                 )
@@ -110,19 +130,7 @@ class RockyRepl:
         return answer.strip().lower() in {"y", "yes"}
 
     def print_text(self, text: str) -> None:
-        stripped = text.strip()
-        if not stripped:
-            return
-        if stripped.startswith("{") or stripped.startswith("["):
-            try:
-                self.console.print(JSON(stripped))
-                return
-            except Exception:
-                pass
-        if stripped.startswith("#") or stripped.startswith("- ") or stripped.startswith("```"):
-            self.console.print(Markdown(text))
-            return
-        self.console.print(text)
+        render_console_text(self.console, text)
 
     def print_command_result(self, result: CommandResult) -> None:
         self.print_text(result.text)
@@ -160,7 +168,7 @@ class RockyRepl:
             if response.verification.get("status") != "pass":
                 self.console.print(
                     Panel(
-                        response.verification.get("message", ""),
+                        Text(str(response.verification.get("message", ""))),
                         title="verification",
                         border_style="yellow",
                     )
