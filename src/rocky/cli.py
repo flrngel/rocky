@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", help="Model override for the selected provider")
     parser.add_argument("--base-url", help="Base URL override for the selected provider")
     parser.add_argument("--permission-mode", choices=["plan", "supervised", "accept-edits", "auto", "bypass"])
+    parser.add_argument("--continue-session", action="store_true", help="Reuse current session history for one-shot tasks")
     parser.add_argument("-y", "--yes", action="store_true", help="Auto-approve permission prompts")
     parser.add_argument("--json", action="store_true", help="Print machine-readable output for one-shot tasks")
     return parser
@@ -128,7 +129,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         printer = None if args.json else EventPrinter(make_live_console(console))
-        response = runtime.run_prompt(text, stream=not args.json, event_handler=printer)
+        response = runtime.run_prompt(
+            text,
+            stream=not args.json,
+            event_handler=printer,
+            continue_session=args.continue_session,
+        )
         if args.json:
             print(
                 json.dumps(

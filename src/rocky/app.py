@@ -147,8 +147,19 @@ class RockyRuntime:
         self.provider_registry.config = config
         self.learning_manager.config = config.learning
 
-    def run_prompt(self, prompt: str, stream: bool = False, event_handler=None) -> AgentResponse:
-        return self.agent.run(prompt, stream=stream, event_handler=event_handler)
+    def run_prompt(
+        self,
+        prompt: str,
+        stream: bool = False,
+        event_handler=None,
+        continue_session: bool = True,
+    ) -> AgentResponse:
+        return self.agent.run(
+            prompt,
+            stream=stream,
+            event_handler=event_handler,
+            continue_session=continue_session,
+        )
 
     def meta_answer(self, prompt: str) -> str:
         lowered = prompt.lower()

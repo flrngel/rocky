@@ -36,11 +36,12 @@ class SessionStore:
     def _path(self, session_id: str) -> Path:
         return self.sessions_dir / f"{session_id}.json"
 
-    def create(self, title: str = "session") -> Session:
+    def create(self, title: str = "session", make_current: bool = True) -> Session:
         session = Session(id=f"ses_{uuid.uuid4().hex[:10]}", created_at=utc_iso(), title=title)
         self.save(session)
-        self.current = session
-        self.current_session_id_path.write_text(session.id, encoding="utf-8")
+        if make_current:
+            self.current = session
+            self.current_session_id_path.write_text(session.id, encoding="utf-8")
         return session
 
     def save(self, session: Session) -> None:

@@ -66,6 +66,10 @@ class AgentCore:
         trace_path.write_text(safe_json(trace) + "\n", encoding="utf-8")
         return str(trace_path)
 
+    def _session_title(self, prompt: str) -> str:
+        head = " ".join(prompt.strip().split())
+        return head[:60] or "session"
+
     def _error_response(
         self,
         session,
@@ -169,8 +173,13 @@ class AgentCore:
         prompt: str,
         stream: bool = False,
         event_handler: Callable[[dict[str, Any]], None] | None = None,
+        continue_session: bool = True,
     ) -> AgentResponse:
-        session = self.sessions.ensure_current()
+        session = (
+            self.sessions.ensure_current()
+            if continue_session
+            else self.sessions.create(title=self._session_title(prompt), make_current=False)
+        )
         route = self.router.route(prompt)
         if route.lane == Lane.META:
             text = self.meta_handler(prompt)
@@ -193,7 +202,7 @@ class AgentCore:
         context_summary = context.summary()
         self.last_context = context_summary
         system_prompt = build_system_prompt(context, self.permissions.config.mode, prompt)
-        recent_messages = session.recent_messages(limit=12)
+        recent_messages = session.recent_messages(limit=12) if continue_session else []
         messages = [*recent_messages, Message(role="user", content=prompt)]
         provider = self.provider_registry.provider_for_task(needs_tools=bool(route.tool_families))
         selected_tools = [tool.name for tool in self.tool_registry.select(route.tool_families)]

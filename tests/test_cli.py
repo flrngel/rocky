@@ -46,9 +46,11 @@ class _FakeRuntime:
         self.permissions = SimpleNamespace(ask_callback=None)
         self.commands = _FakeCommands()
         self.prompts: list[str] = []
+        self.continue_session_values: list[bool] = []
 
-    def run_prompt(self, text: str, stream: bool, event_handler):
+    def run_prompt(self, text: str, stream: bool, event_handler, continue_session: bool = True):
         self.prompts.append(text)
+        self.continue_session_values.append(continue_session)
         return SimpleNamespace(
             text="done",
             route=RouteDecision(Lane.DIRECT, TaskClass.CONVERSATION, "low", "test"),
@@ -67,6 +69,7 @@ def test_cli_reads_task_from_stdin(monkeypatch, capsys) -> None:
 
     assert exit_code == 0
     assert runtime.prompts == ["summarize this"]
+    assert runtime.continue_session_values == [False]
     payload = json.loads(capsys.readouterr().out)
     assert payload["text"] == "done"
 
@@ -81,6 +84,18 @@ def test_cli_maps_command_aliases(monkeypatch, capsys) -> None:
     assert runtime.commands.calls == ["/config"]
     payload = json.loads(capsys.readouterr().out)
     assert payload["name"] == "config"
+
+
+def test_cli_can_opt_into_session_continuation(monkeypatch, capsys) -> None:
+    runtime = _FakeRuntime()
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None: runtime)
+
+    exit_code = main(["--continue-session", "say hi", "--json"])
+
+    assert exit_code == 0
+    assert runtime.continue_session_values == [True]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["text"] == "done"
 
 
 def test_first_launch_noninteractive_writes_default_config(monkeypatch, tmp_path: Path) -> None:
