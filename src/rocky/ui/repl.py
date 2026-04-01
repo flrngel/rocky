@@ -51,12 +51,13 @@ def make_live_console(console: Console) -> Console:
 @dataclass(slots=True)
 class EventPrinter:
     console: Console
+    speaker_label: str = field(default="Rocky")
     streamed_text: bool = field(default=False)
     _stream_open: bool = field(default=False)
 
     def _ensure_stream_line(self) -> None:
         if not self._stream_open:
-            self.console.print(Text("assistant ", style="bold bright_white"), end="")
+            self.console.print(Text(f"{self.speaker_label} ", style="bold bright_white"), end="")
             self._stream_open = True
 
     def _close_stream_line(self) -> None:
