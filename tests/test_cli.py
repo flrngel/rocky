@@ -107,3 +107,28 @@ def test_first_launch_noninteractive_writes_default_config(monkeypatch, tmp_path
     _maybe_run_first_launch_wizard(workspace, Console(file=io.StringIO()), allow_wizard=True)
 
     assert (tmp_path / "home" / ".config" / "rocky" / "config.yaml").exists()
+
+
+def test_cli_verification_output_is_plain_text(monkeypatch, capsys) -> None:
+    runtime = _FakeRuntime()
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None: runtime)
+
+    def _run_prompt(text: str, stream: bool, event_handler, continue_session: bool = True):
+        runtime.prompts.append(text)
+        runtime.continue_session_values.append(continue_session)
+        return SimpleNamespace(
+            text="provider failure",
+            route=RouteDecision(Lane.DIRECT, TaskClass.CONVERSATION, "low", "test"),
+            verification={"status": "fail", "message": "[Errno 61] Connection refused"},
+            usage={},
+            trace={},
+        )
+
+    runtime.run_prompt = _run_prompt
+
+    exit_code = main(["hi"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Verification: [Errno 61] Connection refused" in output
+    assert "[yellow]" not in output

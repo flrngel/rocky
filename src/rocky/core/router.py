@@ -43,6 +43,22 @@ class Router:
     SHELL_FENCE_RE = re.compile(r"```(?:bash|sh|zsh|shell)?\s*\n(?P<body>.*?)```", re.I | re.S)
     SHELL_TOKEN_RE = re.compile(r"(^|\s)(?:[a-z0-9_./-]+)(?:\s+[-\\w./:=@]+)*(?:\s*(?:&&|\|\||\||;|>|>>)\s*.+)+", re.I | re.M)
     PATH_HINTS = ('.py', '.ts', '.tsx', '.js', '.jsx', '.rb', '.go', '.rs', '.java', '.json', '.yaml', '.yml', '.toml', '.md')
+    SHELL_INFO_PHRASES = (
+        'current shell',
+        'shell history',
+        'last history',
+        'last command',
+        'command history',
+        'what shell am i using',
+        'what shell am i',
+        'where am i',
+        'current directory',
+        'working directory',
+        'who am i',
+        'home directory',
+        'environment variable',
+    )
+    SHELL_INFO_TOKENS = ('history', 'pwd', 'whoami', '$shell', '$home')
 
     def _looks_like_shell_task(self, text: str, lowered: str) -> bool:
         has_fenced_shell = bool(self.SHELL_FENCE_RE.search(text))
@@ -61,6 +77,16 @@ class Router:
         ))
         starts_with_verb = lowered.startswith(self.COMMAND_VERBS)
         return has_fenced_shell or has_shell_tokens or asks_to_run or starts_with_verb
+
+    def _looks_like_shell_inspection_task(self, lowered: str) -> bool:
+        if any(phrase in lowered for phrase in self.SHELL_INFO_PHRASES):
+            return True
+        if any(token in lowered for token in self.SHELL_INFO_TOKENS):
+            return True
+        return (
+            ('shell' in lowered or 'terminal' in lowered)
+            and any(word in lowered for word in ('show me', 'tell me', 'what is', 'what are', 'last 10', 'last ten'))
+        )
 
     def _looks_like_repo_task(self, lowered: str) -> bool:
         return any(word in lowered for word in ['test', 'repo', 'code', 'bug', 'refactor', 'git', 'file', 'directory', 'module']) or any(
@@ -93,6 +119,16 @@ class Router:
                 'Explicit shell command or execution request',
                 ['filesystem', 'shell', 'python', 'git'],
                 'repo/shell_execution',
+            )
+        if self._looks_like_shell_inspection_task(lowered):
+            lane = Lane.DEEP if len(text) > 120 else Lane.STANDARD
+            return RouteDecision(
+                lane,
+                TaskClass.REPO,
+                'medium',
+                'Shell or environment inspection request',
+                ['shell', 'filesystem'],
+                'repo/shell_inspection',
             )
         if any(word in lowered for word in ['crawl', 'website', 'browser', 'click', 'scrape', 'site']):
             return RouteDecision(Lane.STANDARD, TaskClass.SITE, 'medium', 'Site/browser task', ['web', 'browser', 'filesystem'], 'site/understanding/general')

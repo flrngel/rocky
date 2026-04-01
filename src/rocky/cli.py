@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 render_console_text(console, response.text)
             if response.verification.get("status") != "pass":
-                console.print(f"[yellow]Verification:[/] {response.verification.get('message')}", markup=False)
+                console.print(f"Verification: {response.verification.get('message')}", style="yellow", markup=False)
         return 0
     except Exception as exc:
         if args.json:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from rocky.core.router import TaskClass
+from rocky.core.router import RouteDecision, TaskClass
 
 
 @dataclass(slots=True)
@@ -17,10 +17,14 @@ class VerifierRegistry:
     def verify(
         self,
         prompt: str,
+        route: RouteDecision,
         task_class: TaskClass,
         output: str,
         tool_events: list[dict],
     ) -> VerificationResult:
+        result = self._expected_tool_use(route, tool_events)
+        if result.status != "pass":
+            return result
         result = self._tool_failure(tool_events)
         if result.status != "pass":
             return result
@@ -31,6 +35,21 @@ class VerifierRegistry:
         if result.status != "pass":
             return result
         return VerificationResult("default_v1", "pass", "Passed basic verification")
+
+    def _expected_tool_use(
+        self,
+        route: RouteDecision,
+        tool_events: list[dict],
+    ) -> VerificationResult:
+        if route.task_signature.startswith("repo/shell") and "shell" in route.tool_families:
+            used_tools = any(event.get("type") == "tool_result" for event in tool_events)
+            if not used_tools:
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to inspect or execute with shell tools, but no tools were used",
+                )
+        return VerificationResult("tool_expectation_v1", "pass", "")
 
     def _tool_failure(self, tool_events: list[dict]) -> VerificationResult:
         failures = [

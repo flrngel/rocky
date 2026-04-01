@@ -19,6 +19,9 @@ def build_system_prompt(context: ContextPackage, mode: str, user_prompt: str = "
             "If the user asks to run or execute a command, or provides a fenced bash/sh/zsh block, call the shell tool first with the exact command. Never echo a command as if it were executed."
         )
         parts.append(
+            "If the user asks about shell history, current shell, current directory, user identity, home directory, or environment facts, inspect them with shell tools first. Prefer dedicated shell inspection/history tools over inventing commands."
+        )
+        parts.append(
             "Do not create planning files, setup scripts, or placeholder outputs unless the user explicitly asked for them."
         )
     if not context.tool_families:

@@ -242,6 +242,7 @@ class AgentCore:
 
         verification_result = self.verifier_registry.verify(
             prompt=prompt,
+            route=route,
             task_class=route.task_class,
             output=provider_response.text,
             tool_events=provider_response.tool_events,

@@ -20,3 +20,13 @@ def test_router_detects_shell_execution_requests() -> None:
     assert route.task_class == TaskClass.REPO
     assert route.task_signature == 'repo/shell_execution'
     assert 'shell' in route.tool_families
+
+
+def test_router_detects_shell_inspection_requests() -> None:
+    router = Router()
+
+    route = router.route('show me 10 last history of current shell')
+
+    assert route.task_class == TaskClass.REPO
+    assert route.task_signature == 'repo/shell_inspection'
+    assert route.tool_families == ['shell', 'filesystem']
