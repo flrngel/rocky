@@ -22,7 +22,6 @@ class CommandRegistry:
     runtime: "RockyRuntime"
     aliases: dict[str, str] = field(
         default_factory=lambda: {
-            "configure": "config",
             "setup": "init",
             "set-up": "init",
         }
@@ -90,6 +89,7 @@ class CommandRegistry:
                 "- `/resume [session_id]` resume a session",
                 "- `/new [title]` create a new session",
                 "- `/config` show effective config",
+                "- `/configure` run the global config wizard",
                 "- `/doctor` run basic health checks",
                 "- `/why` show last routing trace",
                 "- `/trace` show last full trace",
@@ -98,7 +98,7 @@ class CommandRegistry:
                 "- `/learn <feedback>` publish a learned skill from last answer",
                 "- `/undo` rollback latest learned skill",
                 "- `/init` create starter project files",
-                "- aliases: `/configure` -> `/config`, `/setup` or `/set-up` -> `/init`",
+                "- aliases: `/setup` or `/set-up` -> `/init`",
             ]
         )
 

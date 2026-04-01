@@ -139,6 +139,14 @@ class RockyRuntime:
         )
         self.agent.context_builder = self.context_builder
 
+    def reload_config(self, cli_overrides: dict[str, Any] | None = None) -> None:
+        config = ConfigLoader(self.global_root, self.workspace.root).load(cli_overrides)
+        self.config = config
+        self.permissions.config = config.permissions
+        self.tool_registry.context.config = config
+        self.provider_registry.config = config
+        self.learning_manager.config = config.learning
+
     def run_prompt(self, prompt: str, stream: bool = False, event_handler=None) -> AgentResponse:
         return self.agent.run(prompt, stream=stream, event_handler=event_handler)
 

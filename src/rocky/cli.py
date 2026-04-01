@@ -9,8 +9,11 @@ import sys
 from rich.console import Console
 
 from rocky.app import RockyRuntime
+from rocky.config.loader import ConfigLoader
+from rocky.config.wizard import run_config_wizard
 from rocky.core.permissions import PermissionRequest
 from rocky.ui.repl import EventPrinter, RockyRepl, render_console_text
+from rocky.util.paths import discover_workspace, ensure_global_layout
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,16 +44,53 @@ def _task_text(args) -> str | None:
     return None
 
 
+def _interactive_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _config_loader(cwd: Path) -> ConfigLoader:
+    workspace = discover_workspace(cwd.resolve())
+    global_root = ensure_global_layout()
+    return ConfigLoader(global_root, workspace.root)
+
+
+def _maybe_run_first_launch_wizard(cwd: Path, console: Console, allow_wizard: bool) -> None:
+    loader = _config_loader(cwd)
+    if loader.global_config.exists():
+        return
+    if allow_wizard and _interactive_terminal():
+        run_config_wizard(loader.global_config, console=console)
+        return
+    loader.ensure_defaults()
+
+
+def _run_configure_flow(cwd: Path, console: Console) -> dict:
+    loader = _config_loader(cwd)
+    if not loader.global_config.exists():
+        loader.ensure_defaults()
+    return run_config_wizard(loader.global_config, console=console)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    cwd = args.cwd or Path.cwd()
+    console = Console()
+    requested_text = " ".join(args.task).strip() if args.task else None
+    configure_requested = requested_text in {"configure", "/configure"}
+
+    _maybe_run_first_launch_wizard(cwd, console, allow_wizard=not args.json and not configure_requested)
+    if configure_requested and not args.json and _interactive_terminal():
+        _run_configure_flow(cwd, console)
+        return 0
+
     cli_overrides: dict[str, object] = {}
     if args.provider:
         cli_overrides["active_provider"] = args.provider
     if args.permission_mode:
         cli_overrides.setdefault("permissions", {})["mode"] = args.permission_mode
 
-    runtime = RockyRuntime.load_from(args.cwd or Path.cwd(), cli_overrides=cli_overrides)
+    runtime = RockyRuntime.load_from(cwd, cli_overrides=cli_overrides)
     provider_name = args.provider or runtime.config.active_provider
     provider_cfg = runtime.config.provider(provider_name)
     runtime.config.active_provider = provider_name
@@ -59,12 +99,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.base_url:
         provider_cfg.base_url = args.base_url.rstrip("/")
 
-    console = Console()
     text = _task_text(args)
     if text is not None:
         if args.yes:
             runtime.permissions.ask_callback = lambda request: True
-        elif sys.stdin.isatty():
+        elif _interactive_terminal():
             runtime.permissions.ask_callback = lambda request: _ask_cli(console, request)
         else:
             runtime.permissions.ask_callback = lambda request: False
@@ -77,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if text in runtime.commands.names:
         text = "/" + text
+    if text == "/configure" and (args.json or not _interactive_terminal()):
+        text = "/config"
     try:
         if text.startswith("/"):
             result = runtime.commands.handle(text)

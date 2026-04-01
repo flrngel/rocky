@@ -15,6 +15,8 @@ from rich.panel import Panel
 from rich.text import Text
 
 from rocky.commands.registry import CommandResult
+from rocky.config.loader import ConfigLoader
+from rocky.config.wizard import run_config_wizard
 from rocky.core.permissions import PermissionRequest
 from rocky.ui.completion import build_completer
 from rocky.util.text import safe_json
@@ -135,6 +137,12 @@ class RockyRepl:
     def print_command_result(self, result: CommandResult) -> None:
         self.print_text(result.text)
 
+    def run_config_wizard(self) -> None:
+        loader = ConfigLoader(self.runtime.global_root, self.runtime.workspace.root)
+        run_config_wizard(loader.global_config, console=self.console)
+        self.runtime.reload_config()
+        self.console.print("[bold green]Runtime config reloaded.[/]")
+
     def run(self) -> int:
         self.console.print("[bold green]Rocky[/] ready. Type /help for controls.")
         if self.runtime.permissions.ask_callback is None:
@@ -154,6 +162,9 @@ class RockyRepl:
             if line in {"/exit", "/quit"}:
                 self.console.print("[dim]bye[/]")
                 return 0
+            if line == "/configure":
+                self.run_config_wizard()
+                continue
             if line.startswith("/"):
                 result = self.runtime.commands.handle(line)
                 self.print_command_result(result)

@@ -5,7 +5,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from rocky.cli import main
+from rich.console import Console
+
+from rocky.cli import _maybe_run_first_launch_wizard, main
 from rocky.commands.registry import CommandResult
 from rocky.core.router import Lane, RouteDecision, TaskClass
 
@@ -76,6 +78,17 @@ def test_cli_maps_command_aliases(monkeypatch, capsys) -> None:
     exit_code = main(["configure", "--json"])
 
     assert exit_code == 0
-    assert runtime.commands.calls == ["/configure"]
+    assert runtime.commands.calls == ["/config"]
     payload = json.loads(capsys.readouterr().out)
     assert payload["name"] == "config"
+
+
+def test_first_launch_noninteractive_writes_default_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("rocky.cli._interactive_terminal", lambda: False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    _maybe_run_first_launch_wizard(workspace, Console(file=io.StringIO()), allow_wizard=True)
+
+    assert (tmp_path / "home" / ".config" / "rocky" / "config.yaml").exists()
