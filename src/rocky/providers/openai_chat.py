@@ -89,6 +89,52 @@ class OpenAIChatProvider:
         except Exception:
             return '"success": false' not in output.lower()
 
+    def _post_chat(self, client: httpx.Client, payload: dict[str, Any]) -> dict[str, Any]:
+        response = client.post(f"{self.config.base_url}/chat/completions", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def _forced_final_response(
+        self,
+        client: httpx.Client,
+        conversation: list[dict[str, Any]],
+        usage: dict[str, Any],
+        raw_rounds: list[dict[str, Any]],
+        tool_events: list[dict[str, Any]],
+        event_handler: Callable[[dict[str, Any]], None] | None = None,
+    ) -> ProviderResponse:
+        followup = [
+            *conversation,
+            {
+                "role": "user",
+                "content": (
+                    "Use the tool results already collected and answer the original request now. "
+                    "Do not call any more tools."
+                ),
+            },
+        ]
+        data = self._post_chat(
+            client,
+            {
+                "model": self.config.model,
+                "messages": followup,
+                "temperature": self.config.temperature,
+                "stream": False,
+            },
+        )
+        raw_rounds.append(data)
+        usage = data.get("usage") or usage
+        message = ((data.get("choices") or [{}])[0]).get("message") or {}
+        text = self._extract_content(message).strip() or "Tool loop ended without a final assistant response."
+        if event_handler and text:
+            event_handler({"type": "assistant_chunk", "text": text})
+        return ProviderResponse(
+            text=text,
+            usage=usage,
+            raw={"rounds": raw_rounds, "forced_final": True},
+            tool_events=tool_events,
+        )
+
     def complete(
         self,
         system_prompt: str,
@@ -181,9 +227,7 @@ class OpenAIChatProvider:
                     "temperature": self.config.temperature,
                     "stream": False,
                 }
-                response = client.post(f"{self.config.base_url}/chat/completions", json=payload)
-                response.raise_for_status()
-                data = response.json()
+                data = self._post_chat(client, payload)
                 raw_rounds.append(data)
                 usage = data.get("usage") or usage
                 message = ((data.get("choices") or [{}])[0]).get("message") or {}
@@ -238,12 +282,14 @@ class OpenAIChatProvider:
                             "success": self._tool_success(tool_output),
                         }
                     )
-        return ProviderResponse(
-            text="Tool loop ended without a final assistant response.",
-            usage=usage,
-            raw={"rounds": raw_rounds},
-            tool_events=tool_events,
-        )
+            return self._forced_final_response(
+                client=client,
+                conversation=conversation,
+                usage=usage,
+                raw_rounds=raw_rounds,
+                tool_events=tool_events,
+                event_handler=event_handler,
+            )
 
     def healthcheck(self) -> tuple[bool, str]:
         try:
