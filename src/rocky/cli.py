@@ -12,7 +12,7 @@ from rocky.app import RockyRuntime
 from rocky.config.loader import ConfigLoader
 from rocky.config.wizard import run_config_wizard
 from rocky.core.permissions import PermissionRequest
-from rocky.ui.repl import EventPrinter, RockyRepl, render_console_text
+from rocky.ui.repl import EventPrinter, RockyRepl, make_live_console, render_console_text
 from rocky.util.paths import discover_workspace, ensure_global_layout
 
 
@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
                 render_console_text(console, result.text)
             return 0
 
-        printer = None if args.json else EventPrinter(console)
+        printer = None if args.json else EventPrinter(make_live_console(console))
         response = runtime.run_prompt(text, stream=not args.json, event_handler=printer)
         if args.json:
             print(

@@ -38,6 +38,16 @@ def render_console_text(console: Console, text: str) -> None:
     console.print(Text(text))
 
 
+def make_live_console(console: Console) -> Console:
+    return Console(
+        file=console.file,
+        stderr=console.stderr,
+        no_color=True,
+        highlight=False,
+        force_terminal=False,
+    )
+
+
 @dataclass(slots=True)
 class EventPrinter:
     console: Console
@@ -85,6 +95,7 @@ class RockyRepl:
     def __init__(self, runtime) -> None:
         self.runtime = runtime
         self.console = Console()
+        self.live_console = make_live_console(self.console)
         self.prompt_style = Style.from_dict(
             {
                 "prompt": "bold ansibrightblue",
@@ -169,7 +180,7 @@ class RockyRepl:
                 result = self.runtime.commands.handle(line)
                 self.print_command_result(result)
                 continue
-            printer = EventPrinter(self.console)
+            printer = EventPrinter(self.live_console)
             with patch_stdout():
                 response = self.runtime.run_prompt(line, stream=True, event_handler=printer)
             if printer.streamed_text:
