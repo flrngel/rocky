@@ -20,6 +20,13 @@ class CommandResult:
 @dataclass(slots=True)
 class CommandRegistry:
     runtime: "RockyRuntime"
+    aliases: dict[str, str] = field(
+        default_factory=lambda: {
+            "configure": "config",
+            "setup": "init",
+            "set-up": "init",
+        }
+    )
     names: list[str] = field(
         default_factory=lambda: [
             "help",
@@ -42,6 +49,9 @@ class CommandRegistry:
             "undo",
             "init",
             "trace",
+            "configure",
+            "setup",
+            "set-up",
         ]
     )
 
@@ -56,11 +66,12 @@ class CommandRegistry:
             data = self.runtime.learn(feedback)
             return CommandResult("learn", dump_yaml(data), data)
         parts = shlex.split(stripped)
-        name = parts[0]
+        raw_name = parts[0]
+        name = self.aliases.get(raw_name, raw_name)
         args = parts[1:]
         method = getattr(self, f"cmd_{name.replace('-', '_')}", None)
         if method is None:
-            return CommandResult("error", f"Unknown command: /{name}\n\n{self._help_text()}")
+            return CommandResult("error", f"Unknown command: /{raw_name}\n\n{self._help_text()}")
         return method(args)
 
     def _help_text(self) -> str:
@@ -87,6 +98,7 @@ class CommandRegistry:
                 "- `/learn <feedback>` publish a learned skill from last answer",
                 "- `/undo` rollback latest learned skill",
                 "- `/init` create starter project files",
+                "- aliases: `/configure` -> `/config`, `/setup` or `/set-up` -> `/init`",
             ]
         )
 

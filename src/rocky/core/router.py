@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import re
 
 
 class Lane(str, Enum):
@@ -38,6 +39,33 @@ class Router:
         'what tools', 'what skills', 'show config', 'status', 'help', 'permissions', 'memory', 'sessions',
         '/help', '/tools', '/skills', '/status', '/config', '/memory', '/permissions',
     ]
+    COMMAND_VERBS = ('run', 'execute', 'exec', 'launch', 'check', 'inspect')
+    SHELL_FENCE_RE = re.compile(r"```(?:bash|sh|zsh|shell)?\s*\n(?P<body>.*?)```", re.I | re.S)
+    SHELL_TOKEN_RE = re.compile(r"(^|\s)(?:[a-z0-9_./-]+)(?:\s+[-\\w./:=@]+)*(?:\s*(?:&&|\|\||\||;|>|>>)\s*.+)+", re.I | re.M)
+    PATH_HINTS = ('.py', '.ts', '.tsx', '.js', '.jsx', '.rb', '.go', '.rs', '.java', '.json', '.yaml', '.yml', '.toml', '.md')
+
+    def _looks_like_shell_task(self, text: str, lowered: str) -> bool:
+        has_fenced_shell = bool(self.SHELL_FENCE_RE.search(text))
+        has_shell_tokens = bool(self.SHELL_TOKEN_RE.search(text))
+        asks_to_run = any(phrase in lowered for phrase in (
+            'run command',
+            'execute command',
+            'run this',
+            'execute this',
+            'run the following',
+            'execute the following',
+            'run this bash',
+            'execute this bash',
+            'run this shell',
+            'execute this shell',
+        ))
+        starts_with_verb = lowered.startswith(self.COMMAND_VERBS)
+        return has_fenced_shell or has_shell_tokens or asks_to_run or starts_with_verb
+
+    def _looks_like_repo_task(self, lowered: str) -> bool:
+        return any(word in lowered for word in ['test', 'repo', 'code', 'bug', 'refactor', 'git', 'file', 'directory', 'module']) or any(
+            hint in lowered for hint in self.PATH_HINTS
+        )
 
     def route(self, prompt: str) -> RouteDecision:
         text = prompt.strip()
@@ -56,13 +84,23 @@ class Router:
         if any(word in lowered for word in ['spreadsheet', 'excel', '.xlsx', '.csv', 'dataframe', 'analyze sheet']):
             lane = Lane.DEEP if len(text) > 120 else Lane.STANDARD
             return RouteDecision(lane, TaskClass.DATA, 'medium', 'Structured data task', ['filesystem', 'data', 'python'], 'data/spreadsheet/analysis')
+        if self._looks_like_shell_task(text, lowered):
+            lane = Lane.DEEP if len(text) > 180 else Lane.STANDARD
+            return RouteDecision(
+                lane,
+                TaskClass.REPO,
+                'medium',
+                'Explicit shell command or execution request',
+                ['filesystem', 'shell', 'python', 'git'],
+                'repo/shell_execution',
+            )
         if any(word in lowered for word in ['crawl', 'website', 'browser', 'click', 'scrape', 'site']):
             return RouteDecision(Lane.STANDARD, TaskClass.SITE, 'medium', 'Site/browser task', ['web', 'browser', 'filesystem'], 'site/understanding/general')
         if any(word in lowered for word in ['compare sources', 'compare', 'forecast', 'probability', 'market', 'weather', 'latest', 'research']):
             return RouteDecision(Lane.STANDARD, TaskClass.RESEARCH, 'medium', 'Research or live-source task', ['web', 'browser'], 'research/live_compare/general')
         if any(word in lowered for word in ['extract', 'normalize', 'classify', 'label', 'schema', 'json']):
             return RouteDecision(Lane.STANDARD, TaskClass.EXTRACTION, 'low', 'Extraction or structured-output task', ['filesystem', 'python', 'data'], 'extract/general')
-        if any(word in lowered for word in ['test', 'repo', 'code', 'bug', 'refactor', 'git', 'file', 'directory', 'module']):
+        if self._looks_like_repo_task(lowered):
             lane = Lane.DEEP if len(text) > 180 else Lane.STANDARD
             return RouteDecision(lane, TaskClass.REPO, 'medium', 'Repo or file task', ['filesystem', 'shell', 'git', 'python'], 'repo/general')
         if any(word in lowered for word in ['automate', 'workflow', 'repeat', 'script']):

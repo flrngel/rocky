@@ -27,8 +27,10 @@ class ToolRegistry:
         return [tool.openai_schema() for tool in selected]
 
     def select(self, families: list[str] | None = None) -> list[Tool]:
-        if not families:
+        if families is None:
             return list(self.tools.values())
+        if not families:
+            return []
         seen = set(families)
         return [tool for tool in self.tools.values() if tool.family in seen]
 

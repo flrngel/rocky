@@ -4,6 +4,7 @@ import argparse
 from dataclasses import asdict
 import json
 from pathlib import Path
+import sys
 
 from rich.console import Console
 
@@ -30,6 +31,16 @@ def _ask_cli(console: Console, request: PermissionRequest) -> bool:
     return answer.strip().lower() in {"y", "yes"}
 
 
+def _task_text(args) -> str | None:
+    if args.task:
+        return " ".join(args.task).strip()
+    if not sys.stdin.isatty():
+        piped = sys.stdin.read().strip()
+        if piped:
+            return piped
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -49,47 +60,61 @@ def main(argv: list[str] | None = None) -> int:
         provider_cfg.base_url = args.base_url.rstrip("/")
 
     console = Console()
-    if args.task:
-        runtime.permissions.ask_callback = (lambda request: True) if args.yes else (lambda request: _ask_cli(console, request))
+    text = _task_text(args)
+    if text is not None:
+        if args.yes:
+            runtime.permissions.ask_callback = lambda request: True
+        elif sys.stdin.isatty():
+            runtime.permissions.ask_callback = lambda request: _ask_cli(console, request)
+        else:
+            runtime.permissions.ask_callback = lambda request: False
     elif args.yes:
         runtime.permissions.ask_callback = lambda request: True
 
-    if not args.task:
+    if text is None:
         repl = RockyRepl(runtime)
         return repl.run()
 
-    text = " ".join(args.task).strip()
     if text in runtime.commands.names:
         text = "/" + text
-    if text.startswith("/"):
-        result = runtime.commands.handle(text)
-        if args.json:
-            print(json.dumps({"name": result.name, "text": result.text, "data": result.data}, ensure_ascii=False))
-        else:
-            console.print(result.text)
-        return 0
+    try:
+        if text.startswith("/"):
+            result = runtime.commands.handle(text)
+            if args.json:
+                print(json.dumps({"name": result.name, "text": result.text, "data": result.data}, ensure_ascii=False))
+            else:
+                console.print(result.text)
+            return 0
 
-    printer = None if args.json else EventPrinter(console)
-    response = runtime.run_prompt(text, stream=not args.json, event_handler=printer)
-    if args.json:
-        print(
-            json.dumps(
-                {
-                    "text": response.text,
-                    "route": asdict(response.route),
-                    "verification": response.verification,
-                    "usage": response.usage,
-                    "trace": response.trace,
-                },
-                ensure_ascii=False,
+        printer = None if args.json else EventPrinter(console)
+        response = runtime.run_prompt(text, stream=not args.json, event_handler=printer)
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "text": response.text,
+                        "route": asdict(response.route),
+                        "verification": response.verification,
+                        "usage": response.usage,
+                        "trace": response.trace,
+                    },
+                    ensure_ascii=False,
+                )
             )
-        )
-    else:
-        if not printer.streamed_text:
-            console.print(response.text)
-        if response.verification.get("status") != "pass":
-            console.print(f"[yellow]Verification:[/] {response.verification.get('message')}")
-    return 0
+        else:
+            if printer and printer.streamed_text:
+                printer.finish()
+            else:
+                console.print(response.text)
+            if response.verification.get("status") != "pass":
+                console.print(f"[yellow]Verification:[/] {response.verification.get('message')}")
+        return 0
+    except Exception as exc:
+        if args.json:
+            print(json.dumps({"error": exc.__class__.__name__, "message": str(exc)}, ensure_ascii=False))
+        else:
+            console.print(f"[red]Rocky failed:[/] {exc}")
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

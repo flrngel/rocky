@@ -66,6 +66,42 @@ class AgentCore:
         trace_path.write_text(safe_json(trace) + "\n", encoding="utf-8")
         return str(trace_path)
 
+    def _error_response(
+        self,
+        session,
+        prompt: str,
+        route: RouteDecision,
+        context_summary: dict[str, Any],
+        selected_tools: list[str],
+        selected_skills: list[str],
+        provider_name: str,
+        exc: Exception,
+        stream: bool = False,
+        event_handler: Callable[[dict[str, Any]], None] | None = None,
+    ) -> AgentResponse:
+        text = (
+            f"Provider request failed: {exc}\n\n"
+            "Rocky did not complete the task. Check the provider/base URL/model settings and try again."
+        )
+        if stream and event_handler:
+            event_handler({"type": "assistant_chunk", "text": text})
+        verification = {
+            "name": "provider_failure_v1",
+            "status": "fail",
+            "message": str(exc),
+        }
+        trace = {
+            "route": asdict(route),
+            "selected_tools": selected_tools,
+            "selected_skills": selected_skills,
+            "provider": provider_name,
+            "verification": verification,
+            "tool_events": [],
+            "context": context_summary,
+            "error": {"type": exc.__class__.__name__, "message": str(exc)},
+        }
+        return self._finalize(session, prompt, text, route, verification, {}, trace)
+
     def _run_tool(
         self,
         name: str,
@@ -156,26 +192,41 @@ class AgentCore:
         context = self.context_builder.build(prompt, route.task_signature, route.tool_families)
         context_summary = context.summary()
         self.last_context = context_summary
-        system_prompt = build_system_prompt(context, self.permissions.config.mode)
+        system_prompt = build_system_prompt(context, self.permissions.config.mode, prompt)
         recent_messages = session.recent_messages(limit=12)
         messages = [*recent_messages, Message(role="user", content=prompt)]
         provider = self.provider_registry.provider_for_task(needs_tools=bool(route.tool_families))
         selected_tools = [tool.name for tool in self.tool_registry.select(route.tool_families)]
         selected_skills = [item["name"] for item in context.skills]
+        provider_name = provider.__class__.__name__
 
-        if route.tool_families:
-            provider_response = provider.run_with_tools(
-                system_prompt=system_prompt,
-                messages=messages,
-                tools=self.tool_registry.get_openai_schemas(route.tool_families),
-                execute_tool=lambda name, arguments: self._run_tool(name, arguments, event_handler=event_handler),
-                max_rounds=10 if route.lane == Lane.DEEP else 6,
-                event_handler=event_handler if stream else None,
-            )
-        else:
-            provider_response = provider.complete(
-                system_prompt=system_prompt,
-                messages=messages,
+        try:
+            if route.tool_families:
+                provider_response = provider.run_with_tools(
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    tools=self.tool_registry.get_openai_schemas(route.tool_families),
+                    execute_tool=lambda name, arguments: self._run_tool(name, arguments, event_handler=event_handler),
+                    max_rounds=10 if route.lane == Lane.DEEP else 6,
+                    event_handler=event_handler if stream else None,
+                )
+            else:
+                provider_response = provider.complete(
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    stream=stream,
+                    event_handler=event_handler,
+                )
+        except Exception as exc:
+            return self._error_response(
+                session=session,
+                prompt=prompt,
+                route=route,
+                context_summary=context_summary,
+                selected_tools=selected_tools,
+                selected_skills=selected_skills,
+                provider_name=provider_name,
+                exc=exc,
                 stream=stream,
                 event_handler=event_handler,
             )
@@ -195,7 +246,7 @@ class AgentCore:
             "route": asdict(route),
             "selected_tools": selected_tools,
             "selected_skills": selected_skills,
-            "provider": provider.__class__.__name__,
+            "provider": provider_name,
             "verification": verification,
             "usage": provider_response.usage,
             "tool_events": provider_response.tool_events,

@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from rocky.config.loader import ConfigLoader
+from rocky.config.models import ProviderStyle
 from rocky.util.io import write_text
+from rocky.util.yamlx import dump_yaml
 
 
 def test_config_precedence(tmp_path: Path) -> None:
@@ -20,3 +22,9 @@ def test_config_precedence(tmp_path: Path) -> None:
     write_text(workspace / ".rocky" / "config.local.yaml", "permissions:\n  mode: plan\n")
     config = loader.load({"permissions": {"mode": "bypass"}})
     assert config.permissions.mode == "bypass"
+
+
+def test_dump_yaml_serializes_enum_values() -> None:
+    rendered = dump_yaml({"style": ProviderStyle.OPENAI_CHAT})
+
+    assert "openai_chat" in rendered
