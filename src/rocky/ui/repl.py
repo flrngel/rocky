@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.json import JSON
@@ -44,17 +45,28 @@ class RockyRepl:
         self.console = Console()
         history_path = runtime.workspace.cache_dir / "repl_history.txt"
         history_path.parent.mkdir(parents=True, exist_ok=True)
+        _kb = KeyBindings()
+
+        @_kb.add("enter")
+        def _submit(event):
+            event.current_buffer.validate_and_handle()
+
+        @_kb.add("escape", "enter")
+        def _newline(event):
+            event.current_buffer.insert_text("\n")
+
         self.session = PromptSession(
             history=FileHistory(str(history_path)),
             completer=build_completer(runtime.commands.names),
             multiline=True,
+            key_bindings=_kb,
         )
 
     def ask_permission(self, request: PermissionRequest) -> bool:
         label = f"Allow {request.family}:{request.action}?"
         if request.detail:
             label += f"\n{request.detail}"
-        answer = self.session.prompt(f"{label} [y/N] ")
+        answer = self.session.prompt(f"{label} [y/N] ", multiline=False)
         return answer.strip().lower() in {"y", "yes"}
 
     def print_text(self, text: str) -> None:
