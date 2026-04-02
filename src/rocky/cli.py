@@ -8,6 +8,7 @@ import sys
 
 from rich.console import Console
 
+from rocky import __version__
 from rocky.app import RockyRuntime
 from rocky.config.loader import ConfigLoader
 from rocky.config.wizard import run_config_wizard
@@ -27,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--continue-session", action="store_true", help="Reuse current session history for one-shot tasks")
     parser.add_argument("-y", "--yes", action="store_true", help="Auto-approve permission prompts")
     parser.add_argument("--json", action="store_true", help="Print machine-readable output for one-shot tasks")
+    parser.add_argument("-V", "--version", action="store_true", help="Print Rocky version and exit")
     return parser
 
 
@@ -77,6 +79,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     cwd = args.cwd or Path.cwd()
     console = Console()
+    if args.version:
+        print(f"rocky {__version__}")
+        return 0
     requested_text = " ".join(args.task).strip() if args.task else None
     configure_requested = requested_text in {"configure", "/configure"}
 

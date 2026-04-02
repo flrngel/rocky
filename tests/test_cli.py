@@ -109,6 +109,16 @@ def test_first_launch_noninteractive_writes_default_config(monkeypatch, tmp_path
     assert (tmp_path / "home" / ".config" / "rocky" / "config.yaml").exists()
 
 
+def test_cli_version_prints_and_exits_without_runtime(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("rocky.cli._maybe_run_first_launch_wizard", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("wizard should not run")))
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("runtime should not load")))
+
+    exit_code = main(["--version"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "rocky 0.1.0"
+
+
 def test_cli_verification_output_is_plain_text(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
     monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None: runtime)
