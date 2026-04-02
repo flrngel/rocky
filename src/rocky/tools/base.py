@@ -36,12 +36,16 @@ class ToolContext:
     permissions: PermissionManager
     config: AppConfig
 
-    def resolve_path(self, value: str | Path) -> Path:
-        path = Path(value)
+    def _candidate_path(self, value: str | Path) -> Path:
+        path = Path(value).expanduser()
         if not path.is_absolute():
             path = (self.workspace_root / path).resolve()
         else:
             path = path.resolve()
+        return path
+
+    def resolve_path(self, value: str | Path) -> Path:
+        path = self._candidate_path(value)
         artifacts_root = self.artifacts_dir.resolve()
         if (
             self.workspace_root not in path.parents
@@ -50,6 +54,21 @@ class ToolContext:
         ):
             raise ValueError(f"Path escapes workspace: {path}")
         return path
+
+    def resolve_execution_cwd(
+        self,
+        value: str | Path | None = None,
+        *,
+        fallback_to_workspace: bool = False,
+    ) -> tuple[Path, str | None]:
+        raw_value = value if value not in (None, "") else "."
+        requested = self._candidate_path(raw_value)
+        try:
+            return self.resolve_path(raw_value), None
+        except ValueError:
+            if fallback_to_workspace:
+                return self.workspace_root.resolve(), str(requested)
+            raise
 
     def require(
         self,

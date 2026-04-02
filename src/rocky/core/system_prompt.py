@@ -36,6 +36,9 @@ def build_system_prompt(
             "If the user asks to run or execute a command, or provides a fenced bash/sh/zsh block, call the shell tool first with the exact command. Never echo a command as if it were executed."
         )
         parts.append(
+            "When calling shell, git, or python execution tools, omit `cwd` unless you need a specific workspace subdirectory. Never substitute the home directory for the current workspace."
+        )
+        parts.append(
             "If the user asks about shell history, current shell, current directory, user identity, home directory, or environment facts, inspect them with shell tools first. Prefer dedicated shell inspection/history tools over inventing commands."
         )
         parts.append(

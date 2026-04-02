@@ -20,6 +20,24 @@ def _shell_name() -> str:
     return Path(shell).name if shell else ""
 
 
+def _shell_program() -> str:
+    shell = os.environ.get("SHELL") or "/bin/bash"
+    path = Path(shell)
+    return str(path) if path.exists() else "/bin/bash"
+
+
+def _shell_prefix(shell_program: str) -> str:
+    shell_name = Path(shell_program).name
+    if shell_name == "zsh":
+        return "test -f ~/.zshrc && source ~/.zshrc >/dev/null 2>&1; "
+    if shell_name == "bash":
+        return (
+            "if [ -f ~/.bashrc ]; then source ~/.bashrc >/dev/null 2>&1; "
+            "elif [ -f ~/.bash_profile ]; then source ~/.bash_profile >/dev/null 2>&1; fi; "
+        )
+    return ""
+
+
 def _history_candidates() -> list[Path]:
     home = Path.home()
     candidates: list[Path] = []
@@ -144,20 +162,32 @@ def _capture_version(command_path: Path) -> str | None:
 
 def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     command = str(args['command'])
-    cwd = ctx.resolve_path(args.get('cwd', '.'))
     timeout_s = int(args.get('timeout_s', ctx.config.tools.shell_timeout_s))
     writes = any(marker in f' {command} ' for marker in WRITE_MARKERS)
+    cwd, requested_cwd = ctx.resolve_execution_cwd(
+        args.get('cwd', '.'),
+        fallback_to_workspace=not writes,
+    )
     ctx.require('shell', 'run command', command, writes=writes, risky=True)
+    shell_program = _shell_program()
+    shell_command = f"{_shell_prefix(shell_program)}{command}"
+    metadata: dict[str, Any] = {}
+    if requested_cwd:
+        metadata = {
+            'cwd_fallback': True,
+            'requested_cwd': requested_cwd,
+        }
     try:
-        proc = subprocess.run(['bash', '-lc', command], cwd=str(cwd), capture_output=True, text=True, timeout=timeout_s)
+        proc = subprocess.run([shell_program, '-lc', shell_command], cwd=str(cwd), capture_output=True, text=True, timeout=timeout_s)
         data = {
             'command': command,
             'cwd': str(cwd.relative_to(ctx.workspace_root)),
             'returncode': proc.returncode,
             'stdout': truncate(proc.stdout, ctx.config.tools.max_tool_output_chars),
             'stderr': truncate(proc.stderr, ctx.config.tools.max_tool_output_chars),
+            'shell': shell_program,
         }
-        return ToolResult(proc.returncode == 0, data, f'Command exited with {proc.returncode}')
+        return ToolResult(proc.returncode == 0, data, f'Command exited with {proc.returncode}', metadata)
     except subprocess.TimeoutExpired as exc:
         return ToolResult(False, {
             'command': command,
@@ -165,7 +195,8 @@ def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             'timeout_s': timeout_s,
             'stdout': truncate(exc.stdout or '', ctx.config.tools.max_tool_output_chars),
             'stderr': truncate(exc.stderr or '', ctx.config.tools.max_tool_output_chars),
-        }, f'Command timed out after {timeout_s}s')
+            'shell': shell_program,
+        }, f'Command timed out after {timeout_s}s', metadata)
 
 
 def inspect_shell_environment(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -257,7 +288,7 @@ def tools() -> list[Tool]:
     return [
         Tool(
             'run_shell_command',
-            'Run a shell command inside the workspace',
+            'Run a shell command in the active workspace; omit `cwd` unless you need a workspace subdirectory',
             {'type': 'object', 'properties': {'command': {'type': 'string'}, 'cwd': {'type': 'string'}, 'timeout_s': {'type': 'integer'}}, 'required': ['command']},
             'shell',
             run_shell_command,

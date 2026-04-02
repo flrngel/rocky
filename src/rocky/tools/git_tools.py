@@ -8,14 +8,19 @@ from rocky.util.text import truncate
 
 
 def _git(ctx: ToolContext, args: list[str], cwd: str | None = None) -> ToolResult:
-    path = ctx.resolve_path(cwd or '.')
+    path, requested_cwd = ctx.resolve_execution_cwd(cwd or '.', fallback_to_workspace=True)
     ctx.require('git', 'read git state', ' '.join(args))
     proc = subprocess.run(['git', '-C', str(path), *args], capture_output=True, text=True)
+    metadata = {
+        'cwd_fallback': True,
+        'requested_cwd': requested_cwd,
+    } if requested_cwd else {}
     return ToolResult(proc.returncode == 0, {
+        'cwd': str(path.relative_to(ctx.workspace_root)),
         'returncode': proc.returncode,
         'stdout': truncate(proc.stdout, ctx.config.tools.max_tool_output_chars),
         'stderr': truncate(proc.stderr, ctx.config.tools.max_tool_output_chars),
-    }, f'git {' '.join(args)} -> {proc.returncode}')
+    }, f'git {' '.join(args)} -> {proc.returncode}', metadata)
 
 
 def git_status(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
