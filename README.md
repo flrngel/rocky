@@ -10,6 +10,13 @@ It is designed around five constraints:
 - file-first `.rocky/` state instead of a primary database
 - real cross-task learning through support/query episodes and learned skill publication
 
+## v0.2.0 highlights
+
+- Hermes-inspired harness inventory with five explicit upgrade phases and a `/harness` command
+- execution-root aware behavior, so running Rocky from `pkg/ui` keeps shell commands and new files focused on `pkg/ui` by default
+- fresh-session project handoffs, so recent successful work in the same workspace is loaded into the next system prompt as a continuation scaffold
+- scaffolded phase-4 mini-project and phase-5 workspace-continuity scenarios for later prompt/model tuning
+
 ## TUI choice
 
 Rocky ships today with **prompt_toolkit + Rich** for the interaction layer because that combination gives the best Python-native CLI editing UX, stable history/completion, and rich rendering without forcing a full-screen app for every use case.
@@ -21,7 +28,7 @@ We also document a future-ready path to **Textual** and **OpenTUI** in `docs/TUI
 - interactive REPL (`rocky`)
 - one-shot execution (`rocky "task"`)
 - deterministic slash commands:
-  - `/help`, `/tools`, `/skills`, `/memory`, `/learned`, `/permissions`, `/context`, `/status`, `/sessions`, `/resume`, `/new`, `/config`, `/doctor`, `/why`, `/compact`, `/plan`, `/learn`, `/undo`, `/init`, `/trace`
+  - `/help`, `/tools`, `/skills`, `/harness`, `/memory`, `/learned`, `/permissions`, `/context`, `/status`, `/sessions`, `/resume`, `/new`, `/config`, `/doctor`, `/why`, `/compact`, `/plan`, `/learn`, `/undo`, `/init`, `/trace`
 - workspace discovery and file-first `.rocky/` state
 - global + project + local config precedence
 - configurable providers with **Ollama** default and **OpenAI** compatibility

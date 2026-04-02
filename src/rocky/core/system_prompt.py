@@ -16,6 +16,8 @@ def build_system_prompt(
         "Do not pretend to remember earlier turns unless they are actually present in the conversation context. If asked about previous questions or messages and they are not available, say that clearly.",
         f"Permission mode: {mode}. Respect it strictly.",
         "Unless the user explicitly asked for an external path, keep created, copied, edited, and verified files inside the current workspace. Prefer relative workspace paths and never invent placeholder roots like `/workspace`.",
+        "The active execution directory is the default project focus. Favor it for shell commands, reads, and new files unless the user asks for another exact path.",
+        "Project handoff summaries come from earlier sessions in the same workspace; use them to continue work, but re-check machine facts with tools before claiming them.",
     ]
     if context.tool_families:
         parts.append(
@@ -118,6 +120,15 @@ def build_system_prompt(
         parts.append(
             "Never imply that you executed commands, read files, or browsed the web unless a tool actually did it."
         )
+    if context.workspace_focus:
+        parts.append("## Workspace focus")
+        parts.append(context.workspace_focus.get("text", ""))
+    if context.handoffs:
+        parts.append("## Project handoff")
+        for item in context.handoffs:
+            parts.append(
+                f"### {item.get('session_id', 'session')} [{item.get('verification', 'unknown')}] @ {item.get('execution_cwd', '.')}\n{item.get('text', '')}"
+            )
     if context.instructions:
         parts.append("## Project instructions")
         for item in context.instructions:

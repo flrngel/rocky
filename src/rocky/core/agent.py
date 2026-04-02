@@ -199,6 +199,16 @@ class AgentCore:
         self.last_prompt = prompt
         self.last_answer = text
         self.last_trace = trace
+        if route.lane != Lane.META:
+            self.sessions.record_turn(
+                session,
+                prompt=prompt,
+                answer=text,
+                task_signature=route.task_signature,
+                verification=verification,
+                trace=trace,
+                execution_cwd=self.tool_registry.context.execution_relative,
+            )
         self.learning_manager.record_query(
             task_signature=route.task_signature,
             skills_used=trace.get("selected_skills") or [],
@@ -492,7 +502,12 @@ class AgentCore:
             self.last_context = trace["context"]
             return self._finalize(session, prompt, text, route, verification, {}, trace)
 
-        context = self.context_builder.build(prompt, route.task_signature, route.tool_families)
+        context = self.context_builder.build(
+            prompt,
+            route.task_signature,
+            route.tool_families,
+            current_session_id=session.id,
+        )
         context_summary = context.summary()
         self.last_context = context_summary
         system_prompt = build_system_prompt(

@@ -7,6 +7,7 @@ from pathlib import Path
 @dataclass(slots=True)
 class WorkspacePaths:
     root: Path
+    execution_root: Path
     rocky_dir: Path
     sessions_dir: Path
     memories_dir: Path
@@ -32,6 +33,12 @@ class WorkspacePaths:
             self.root / "ROCKY.md",
             self.root / "CLAUDE.md",
         ]
+
+    @property
+    def execution_relative(self) -> str:
+        if self.execution_root == self.root:
+            return "."
+        return str(self.execution_root.relative_to(self.root))
 
     def ensure_layout(self) -> None:
         for path in [
@@ -62,40 +69,41 @@ def depth(path: Path, root: Path) -> int:
 def discover_workspace(start: Path) -> WorkspacePaths:
     current = start.resolve()
     for candidate in [current, *current.parents]:
-        if (candidate / '.rocky').exists() or (candidate / '.git').exists():
+        if (candidate / ".rocky").exists() or (candidate / ".git").exists():
             root = candidate
             break
     else:
         root = current
-    rocky_dir = root / '.rocky'
+    rocky_dir = root / ".rocky"
     return WorkspacePaths(
         root=root,
+        execution_root=current,
         rocky_dir=rocky_dir,
-        sessions_dir=rocky_dir / 'sessions',
-        memories_dir=rocky_dir / 'memories',
-        skills_dir=rocky_dir / 'skills',
-        skills_bundled_dir=rocky_dir / 'skills' / 'bundled',
-        skills_project_dir=rocky_dir / 'skills' / 'project',
-        skills_learned_dir=rocky_dir / 'skills' / 'learned',
-        episodes_dir=rocky_dir / 'episodes',
-        episodes_support_dir=rocky_dir / 'episodes' / 'support',
-        episodes_query_dir=rocky_dir / 'episodes' / 'query',
-        policies_dir=rocky_dir / 'policies',
-        artifacts_dir=rocky_dir / 'artifacts',
-        traces_dir=rocky_dir / 'traces',
-        eval_dir=rocky_dir / 'eval',
-        cache_dir=rocky_dir / 'cache',
-        config_path=rocky_dir / 'config.yaml',
-        config_local_path=rocky_dir / 'config.local.yaml',
+        sessions_dir=rocky_dir / "sessions",
+        memories_dir=rocky_dir / "memories",
+        skills_dir=rocky_dir / "skills",
+        skills_bundled_dir=rocky_dir / "skills" / "bundled",
+        skills_project_dir=rocky_dir / "skills" / "project",
+        skills_learned_dir=rocky_dir / "skills" / "learned",
+        episodes_dir=rocky_dir / "episodes",
+        episodes_support_dir=rocky_dir / "episodes" / "support",
+        episodes_query_dir=rocky_dir / "episodes" / "query",
+        policies_dir=rocky_dir / "policies",
+        artifacts_dir=rocky_dir / "artifacts",
+        traces_dir=rocky_dir / "traces",
+        eval_dir=rocky_dir / "eval",
+        cache_dir=rocky_dir / "cache",
+        config_path=rocky_dir / "config.yaml",
+        config_local_path=rocky_dir / "config.local.yaml",
     )
 
 
 def global_root() -> Path:
-    return Path.home() / '.config' / 'rocky'
+    return Path.home() / ".config" / "rocky"
 
 
 def ensure_global_layout() -> Path:
     root = global_root()
-    for rel in ['skills', 'memories', 'providers', 'policies', 'caches']:
+    for rel in ["skills", "memories", "providers", "policies", "caches"]:
         (root / rel).mkdir(parents=True, exist_ok=True)
     return root

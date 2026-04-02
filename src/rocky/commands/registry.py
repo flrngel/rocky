@@ -31,6 +31,7 @@ class CommandRegistry:
             "help",
             "tools",
             "skills",
+            "harness",
             "memory",
             "learned",
             "permissions",
@@ -80,6 +81,7 @@ class CommandRegistry:
                 "- `/help` show commands",
                 "- `/tools` list tools",
                 "- `/skills` list skills",
+                "- `/harness` show harness phases and scenario inventory",
                 "- `/memory` list project/global memory notes",
                 "- `/memory show <scope>:<name>` show one memory note",
                 "- `/memory add <name> <text>` add global manual memory",
@@ -116,6 +118,10 @@ class CommandRegistry:
     def cmd_skills(self, args: list[str]) -> CommandResult:
         data = {"skills": self.runtime.skill_inventory()}
         return CommandResult("skills", dump_yaml(data), data)
+
+    def cmd_harness(self, args: list[str]) -> CommandResult:
+        data = self.runtime.harness_inventory()
+        return CommandResult("harness", dump_yaml(data), data)
 
     def cmd_memory(self, args: list[str]) -> CommandResult:
         if not args or args[0] == "list":

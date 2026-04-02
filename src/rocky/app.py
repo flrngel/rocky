@@ -4,6 +4,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from rocky import __version__
 from rocky.commands.registry import CommandRegistry
 from rocky.config.loader import ConfigLoader
 from rocky.core.agent import AgentCore, AgentResponse
@@ -11,6 +12,7 @@ from rocky.core.context import ContextBuilder
 from rocky.core.permissions import PermissionManager
 from rocky.core.router import Lane, Router
 from rocky.core.verifiers import VerifierRegistry
+from rocky.harness import DEFAULT_PHASES, harness_inventory as harness_catalog, scenarios_by_phase
 from rocky.learning.manager import LearningManager
 from rocky.memory.retriever import MemoryRetriever
 from rocky.memory.store import MemoryStore
@@ -81,11 +83,19 @@ class RockyRuntime:
         instruction_candidates = workspace.instruction_candidates + [global_root / "AGENTS.md"]
         context_builder = ContextBuilder(
             workspace.root,
+            workspace.execution_root,
             instruction_candidates,
             skill_retriever,
             memory_retriever,
+            sessions,
         )
-        tool_context = ToolContext(workspace.root, workspace.artifacts_dir, permissions, config)
+        tool_context = ToolContext(
+            workspace.root,
+            workspace.execution_root,
+            workspace.artifacts_dir,
+            permissions,
+            config,
+        )
         tool_registry = ToolRegistry(tool_context)
         provider_registry = ProviderRegistry(config)
         learning_manager = LearningManager(
@@ -133,9 +143,11 @@ class RockyRuntime:
         instruction_candidates = self.workspace.instruction_candidates + [self.global_root / "AGENTS.md"]
         self.context_builder = ContextBuilder(
             self.workspace.root,
+            self.workspace.execution_root,
             instruction_candidates,
             self.skill_retriever,
             self.memory_retriever,
+            self.sessions,
         )
         self.agent.context_builder = self.context_builder
 
@@ -181,6 +193,24 @@ class RockyRuntime:
             return False
         return True
 
+    def harness_inventory(self) -> dict[str, Any]:
+        catalog = harness_catalog()
+        return {
+            "version": __version__,
+            "execution_cwd": self.workspace.execution_relative,
+            "phases": [
+                {
+                    "slug": phase.slug,
+                    "title": phase.title,
+                    "description": phase.description,
+                    "success_signals": list(phase.success_signals),
+                    "scenario_count": len(scenarios_by_phase(phase.slug)),
+                }
+                for phase in DEFAULT_PHASES
+            ],
+            **catalog,
+        }
+
     def meta_answer(self, prompt: str) -> str:
         lowered = prompt.lower()
         if "provider" in lowered or "model" in lowered:
@@ -198,6 +228,8 @@ class RockyRuntime:
             return dump_yaml({"tools": self.tool_registry.list_tools()})
         if "skill" in lowered:
             return dump_yaml({"skills": self.skill_inventory()})
+        if "harness" in lowered or "phase" in lowered:
+            return dump_yaml(self.harness_inventory())
         if "config" in lowered:
             return dump_yaml(self.config_dict())
         if "permission" in lowered:
@@ -223,6 +255,8 @@ class RockyRuntime:
         current = self.sessions.ensure_current()
         return {
             "workspace_root": str(self.workspace.root),
+            "execution_root": str(self.workspace.execution_root),
+            "execution_cwd": self.workspace.execution_relative,
             "session_id": current.id,
             "active_provider": self.config.active_provider,
             "permission_mode": self.config.permissions.mode,
@@ -232,7 +266,17 @@ class RockyRuntime:
         }
 
     def current_context(self) -> dict[str, Any]:
-        return self.agent.last_context or {"instructions": [], "memories": [], "skills": [], "tool_families": []}
+        return self.agent.last_context or {
+            "instructions": [],
+            "memories": [],
+            "skills": [],
+            "tool_families": [],
+            "workspace_focus": {
+                "workspace_root": str(self.workspace.root),
+                "execution_cwd": self.workspace.execution_relative,
+            },
+            "handoffs": [],
+        }
 
     def why(self) -> dict[str, Any]:
         return self.agent.last_trace or {"status": "No task has been run yet."}

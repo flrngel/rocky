@@ -15,26 +15,39 @@ from rocky.util.text import truncate
 WRITE_MARKERS = [' rm ', ' mv ', ' cp ', ' >', '>>', ' touch ', ' mkdir ', ' rmdir ', ' sed -i', ' git add', ' git commit', ' git apply', ' npm install', ' pip install']
 
 
-def _shell_name() -> str:
+def _declared_shell() -> Path | None:
     shell = os.environ.get("SHELL") or ""
-    return Path(shell).name if shell else ""
+    if not shell:
+        return None
+    return Path(shell)
+
+
+def _shell_name() -> str:
+    declared = _declared_shell()
+    return declared.name if declared else ""
 
 
 def _shell_program() -> str:
-    shell = os.environ.get("SHELL") or "/bin/bash"
-    path = Path(shell)
-    return str(path) if path.exists() else "/bin/bash"
+    declared = _declared_shell()
+    if declared is not None and declared.exists():
+        return str(declared)
+    for fallback in ("/bin/bash", "/bin/sh"):
+        if Path(fallback).exists():
+            return fallback
+    return "/bin/sh"
 
 
 def _shell_prefix(shell_program: str) -> str:
-    shell_name = Path(shell_program).name
-    if shell_name == "zsh":
+    preferred = _shell_name() or Path(shell_program).name
+    if preferred == "zsh":
         return "test -f ~/.zshrc && source ~/.zshrc >/dev/null 2>&1; "
-    if shell_name == "bash":
+    if preferred == "bash":
         return (
             "if [ -f ~/.bashrc ]; then source ~/.bashrc >/dev/null 2>&1; "
             "elif [ -f ~/.bash_profile ]; then source ~/.bash_profile >/dev/null 2>&1; fi; "
         )
+    if preferred == "fish":
+        return "test -f ~/.config/fish/config.fish && source ~/.config/fish/config.fish >/dev/null 2>&1; "
     return ""
 
 
@@ -178,7 +191,7 @@ def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             'requested_cwd': requested_cwd,
         }
     try:
-        proc = subprocess.run([shell_program, '-lc', shell_command], cwd=str(cwd), capture_output=True, text=True, timeout=timeout_s)
+        proc = subprocess.run([shell_program, '-c', shell_command], cwd=str(cwd), capture_output=True, text=True, timeout=timeout_s)
         data = {
             'command': command,
             'cwd': str(cwd.relative_to(ctx.workspace_root)),
@@ -202,7 +215,7 @@ def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
 def inspect_shell_environment(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     ctx.require('shell', 'inspect environment', 'shell/runtime facts', risky=True)
     shell = os.environ.get("SHELL") or ""
-    cwd = Path.cwd().resolve()
+    cwd = ctx.execution_root.resolve()
     user = os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
     home = str(Path.home())
     history_file = next((path for path in _history_candidates() if path.exists()), None)

@@ -32,28 +32,59 @@ class ToolResult:
 @dataclass(slots=True)
 class ToolContext:
     workspace_root: Path
+    execution_root: Path
     artifacts_dir: Path
     permissions: PermissionManager
     config: AppConfig
 
-    def _candidate_path(self, value: str | Path) -> Path:
+    def __post_init__(self) -> None:
+        self.workspace_root = self.workspace_root.resolve()
+        self.execution_root = self.execution_root.resolve()
+        self.artifacts_dir = self.artifacts_dir.resolve()
+
+    def _relative_candidates(self, value: str | Path) -> list[Path]:
+        relative = Path(value).expanduser()
+        candidates = [(self.execution_root / relative).resolve()]
+        if self.execution_root != self.workspace_root:
+            candidates.append((self.workspace_root / relative).resolve())
+        seen: set[Path] = set()
+        ordered: list[Path] = []
+        for candidate in candidates:
+            if candidate not in seen:
+                ordered.append(candidate)
+                seen.add(candidate)
+        return ordered
+
+    def _candidate_paths(self, value: str | Path) -> list[Path]:
         path = Path(value).expanduser()
-        if not path.is_absolute():
-            path = (self.workspace_root / path).resolve()
-        else:
-            path = path.resolve()
-        return path
+        if path.is_absolute():
+            return [path.resolve()]
+        return self._relative_candidates(path)
+
+    def _is_allowed(self, path: Path) -> bool:
+        if path == self.workspace_root or self.workspace_root in path.parents:
+            return True
+        return str(path).startswith(str(self.artifacts_dir))
+
+    def _coerce_relative(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.workspace_root))
+        except ValueError:
+            return str(path)
+
+    @property
+    def execution_relative(self) -> str:
+        return self._coerce_relative(self.execution_root)
 
     def resolve_path(self, value: str | Path) -> Path:
-        path = self._candidate_path(value)
-        artifacts_root = self.artifacts_dir.resolve()
-        if (
-            self.workspace_root not in path.parents
-            and path != self.workspace_root
-            and not str(path).startswith(str(artifacts_root))
-        ):
+        allowed = [candidate for candidate in self._candidate_paths(value) if self._is_allowed(candidate)]
+        if not allowed:
+            path = self._candidate_paths(value)[0]
             raise ValueError(f"Path escapes workspace: {path}")
-        return path
+        for candidate in allowed:
+            if candidate.exists():
+                return candidate
+        return allowed[0]
 
     def resolve_execution_cwd(
         self,
@@ -62,12 +93,12 @@ class ToolContext:
         fallback_to_workspace: bool = False,
     ) -> tuple[Path, str | None]:
         raw_value = value if value not in (None, "") else "."
-        requested = self._candidate_path(raw_value)
+        candidate = self._candidate_paths(raw_value)[0]
         try:
             return self.resolve_path(raw_value), None
         except ValueError:
             if fallback_to_workspace:
-                return self.workspace_root.resolve(), str(requested)
+                return self.execution_root, str(candidate)
             raise
 
     def require(
