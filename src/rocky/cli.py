@@ -120,7 +120,9 @@ def main(argv: list[str] | None = None) -> int:
         repl = RockyRepl(runtime)
         return repl.run()
 
-    if text in runtime.commands.names:
+    if args.task and args.task[0] in runtime.commands.names:
+        text = "/" + " ".join(args.task).strip()
+    elif text in runtime.commands.names:
         text = "/" + text
     if text == "/configure" and (args.json or not _interactive_terminal()):
         text = "/config"

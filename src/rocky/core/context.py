@@ -18,7 +18,7 @@ class ContextPackage:
     def summary(self) -> dict:
         return {
             'instructions': self.instructions,
-            'memories': [{'name': m['name'], 'scope': m['scope']} for m in self.memories],
+            'memories': [{'name': m['name'], 'scope': m['scope'], 'kind': m.get('kind')} for m in self.memories],
             'skills': [{'name': s['name'], 'scope': s['scope'], 'generation': s['generation']} for s in self.skills],
             'tool_families': self.tool_families,
         }
@@ -42,10 +42,36 @@ class ContextBuilder:
         for path in self.instruction_candidates:
             if path.exists():
                 instructions.append({'path': str(path), 'text': read_text(path)[:6000]})
-        memories = [
-            {'name': note.name, 'scope': note.scope, 'path': str(note.path), 'text': note.text[:3000]}
-            for note in self.memory_retriever.retrieve(prompt)
-        ]
+        memories: list[dict] = []
+        brief = self.memory_retriever.project_brief()
+        if brief is not None:
+            memories.append(
+                {
+                    'id': brief.id,
+                    'name': brief.name,
+                    'title': brief.title,
+                    'scope': brief.scope,
+                    'kind': brief.kind,
+                    'path': str(brief.path),
+                    'text': brief.text[:3000],
+                }
+            )
+        seen_ids = {item['id'] for item in memories}
+        for note in self.memory_retriever.retrieve(prompt):
+            if note.id in seen_ids:
+                continue
+            memories.append(
+                {
+                    'id': note.id,
+                    'name': note.name,
+                    'title': note.title,
+                    'scope': note.scope,
+                    'kind': note.kind,
+                    'path': str(note.path),
+                    'text': note.text[:3000],
+                }
+            )
+            seen_ids.add(note.id)
         skills = [
             {
                 'name': skill.name,

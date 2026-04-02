@@ -30,7 +30,7 @@ class _FakeConfig:
 
 
 class _FakeCommands:
-    names = ["help", "config", "configure", "setup", "set-up"]
+    names = ["help", "config", "configure", "setup", "set-up", "memory"]
 
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -82,6 +82,18 @@ def test_cli_maps_command_aliases(monkeypatch, capsys) -> None:
 
     assert exit_code == 0
     assert runtime.commands.calls == ["/config"]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["name"] == "config"
+
+
+def test_cli_routes_multiword_memory_commands(monkeypatch, capsys) -> None:
+    runtime = _FakeRuntime()
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None: runtime)
+
+    exit_code = main(["memory", "add", "style", "Prefer terse output.", "--json"])
+
+    assert exit_code == 0
+    assert runtime.commands.calls == ["/memory add style Prefer terse output."]
     payload = json.loads(capsys.readouterr().out)
     assert payload["name"] == "config"
 

@@ -9,7 +9,7 @@ from rocky.config.loader import ConfigLoader
 from rocky.core.agent import AgentCore, AgentResponse
 from rocky.core.context import ContextBuilder
 from rocky.core.permissions import PermissionManager
-from rocky.core.router import Router
+from rocky.core.router import Lane, Router
 from rocky.core.verifiers import VerifierRegistry
 from rocky.learning.manager import LearningManager
 from rocky.memory.retriever import MemoryRetriever
@@ -154,12 +154,32 @@ class RockyRuntime:
         event_handler=None,
         continue_session: bool = True,
     ) -> AgentResponse:
-        return self.agent.run(
+        response = self.agent.run(
             prompt,
             stream=stream,
             event_handler=event_handler,
             continue_session=continue_session,
         )
+        if self._should_capture_project_memory(response):
+            try:
+                result = self.memory_store.capture_project_memory(
+                    prompt=prompt,
+                    answer=response.text,
+                    task_signature=response.route.task_signature,
+                    trace=response.trace,
+                )
+                if result.get("written"):
+                    self.refresh_knowledge()
+            except Exception:
+                pass
+        return response
+
+    def _should_capture_project_memory(self, response: AgentResponse) -> bool:
+        if response.verification.get("status") != "pass":
+            return False
+        if response.route.lane == Lane.META:
+            return False
+        return True
 
     def meta_answer(self, prompt: str) -> str:
         lowered = prompt.lower()
@@ -224,7 +244,47 @@ class RockyRuntime:
         return self.skill_retriever.inventory()
 
     def memory_inventory(self) -> list[dict[str, Any]]:
-        return self.memory_retriever.inventory()
+        return self.memory_store.inventory()
+
+    def memory_list(self) -> dict[str, Any]:
+        rows = self.memory_inventory()
+        return {
+            "project_auto": [row for row in rows if row.get("scope") == "project_auto"],
+            "global_manual": [row for row in rows if row.get("scope") == "global_manual"],
+        }
+
+    def memory_show(self, scope: str, name: str) -> dict[str, Any]:
+        note = self.memory_store.get_note(scope, name)
+        if note is None:
+            return {"ok": False, "reason": f"memory not found: {scope}:{name}"}
+        return {
+            "ok": True,
+            "memory": {
+                **note.as_record(),
+                "text": note.text,
+                "source_task_signature": note.source_task_signature,
+                "evidence_excerpt": note.evidence_excerpt,
+                "fingerprint": note.fingerprint,
+            },
+        }
+
+    def memory_add(self, name: str, text: str) -> dict[str, Any]:
+        result = self.memory_store.add_global_manual(name, text)
+        if result.get("ok"):
+            self.refresh_knowledge()
+        return result
+
+    def memory_set(self, name: str, text: str) -> dict[str, Any]:
+        result = self.memory_store.set_global_manual(name, text)
+        if result.get("ok"):
+            self.refresh_knowledge()
+        return result
+
+    def memory_remove(self, name: str) -> dict[str, Any]:
+        result = self.memory_store.remove_global_manual(name)
+        if result.get("ok"):
+            self.refresh_knowledge()
+        return result
 
     def new_session(self, title: str = "session") -> dict[str, Any]:
         session = self.sessions.create(title=title)

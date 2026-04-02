@@ -80,7 +80,11 @@ class CommandRegistry:
                 "- `/help` show commands",
                 "- `/tools` list tools",
                 "- `/skills` list skills",
-                "- `/memory` list memory notes",
+                "- `/memory` list project/global memory notes",
+                "- `/memory show <scope>:<name>` show one memory note",
+                "- `/memory add <name> <text>` add global manual memory",
+                "- `/memory set <name> <text>` create or replace global manual memory",
+                "- `/memory remove <name>` remove global manual memory",
                 "- `/learned` list learned skills",
                 "- `/permissions` show permission state",
                 "- `/context` show last assembled context",
@@ -114,8 +118,43 @@ class CommandRegistry:
         return CommandResult("skills", dump_yaml(data), data)
 
     def cmd_memory(self, args: list[str]) -> CommandResult:
-        data = {"memory": self.runtime.memory_inventory()}
-        return CommandResult("memory", dump_yaml(data), data)
+        if not args or args[0] == "list":
+            data = {"memory": self.runtime.memory_list()}
+            return CommandResult("memory", dump_yaml(data), data)
+
+        action = args[0]
+        if action == "show":
+            if len(args) < 2 or ":" not in args[1]:
+                text = "Usage: /memory show <scope>:<name>"
+                return CommandResult("memory", text, {"ok": False, "reason": text})
+            scope, name = args[1].split(":", 1)
+            data = self.runtime.memory_show(scope, name)
+            return CommandResult("memory", dump_yaml(data), data)
+
+        if action in {"add", "set", "remove"}:
+            if len(args) < 2:
+                text = f"Usage: /memory {action} <name>" + (" <text>" if action != "remove" else "")
+                return CommandResult("memory", text, {"ok": False, "reason": text})
+            raw_name = args[1]
+            if ":" in raw_name:
+                scope, name = raw_name.split(":", 1)
+                if scope != "global_manual":
+                    text = f"{scope} memory is read-only; only global_manual can be edited via /memory"
+                    return CommandResult("memory", text, {"ok": False, "reason": text})
+            else:
+                name = raw_name
+            if action == "remove":
+                data = self.runtime.memory_remove(name)
+                return CommandResult("memory", dump_yaml(data), data)
+            if len(args) < 3:
+                text = f"Usage: /memory {action} <name> <text>"
+                return CommandResult("memory", text, {"ok": False, "reason": text})
+            text_value = " ".join(args[2:]).strip()
+            data = self.runtime.memory_add(name, text_value) if action == "add" else self.runtime.memory_set(name, text_value)
+            return CommandResult("memory", dump_yaml(data), data)
+
+        text = "Usage: /memory [list|show|add|set|remove]"
+        return CommandResult("memory", text, {"ok": False, "reason": text})
 
     def cmd_learned(self, args: list[str]) -> CommandResult:
         data = {"learned": self.runtime.learning_manager.list_learned()}
