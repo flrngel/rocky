@@ -48,3 +48,26 @@ def test_verifier_requires_tools_for_repo_inspection_prompts() -> None:
 
     assert result.status == "fail"
     assert "inspect the repo with tools" in result.message.lower()
+
+
+def test_verifier_requires_tools_for_runtime_inspection_prompts() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Runtime inspection request",
+        tool_families=["shell"],
+        task_signature="local/runtime_inspection",
+    )
+
+    result = verifier.verify(
+        prompt="what python versions do i have",
+        route=route,
+        task_class=route.task_class,
+        output="Python 3.11.9",
+        tool_events=[],
+    )
+
+    assert result.status == "fail"
+    assert "inspect the local runtime" in result.message.lower()

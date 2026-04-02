@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from rocky.app import RockyRuntime
@@ -108,4 +109,28 @@ def test_isolated_run_refuses_to_invent_previous_turns(tmp_path: Path) -> None:
     response = runtime.run_prompt("what was my previous question?", continue_session=False)
 
     assert "don't have any earlier turn context" in response.text
+    assert provider.calls == []
+
+
+def test_runtime_inspection_prompt_is_answered_deterministically(tmp_path: Path, monkeypatch) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python3 = bin_dir / "python3"
+    python3.write_text("#!/bin/sh\necho Python 3.14.3\n", encoding="utf-8")
+    python3.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _OkProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt("what python versions do i have", continue_session=False)
+
+    assert "python3" in response.text
+    assert "Python 3.14.3" in response.text
+    assert response.trace["provider"] == "deterministic"
     assert provider.calls == []

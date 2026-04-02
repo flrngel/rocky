@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from rocky.app import RockyRuntime
-from rocky.tools.shell import inspect_shell_environment, read_shell_history
+from rocky.tools.shell import inspect_runtime_versions, inspect_shell_environment, read_shell_history
 
 
 def test_inspect_shell_environment_returns_runtime_facts(tmp_path: Path, monkeypatch) -> None:
@@ -43,3 +44,28 @@ def test_read_shell_history_reads_zsh_history_file(tmp_path: Path, monkeypatch) 
     assert result.success is True
     assert result.data["history_file"] == str(history_file)
     assert result.data["entries"] == ["pwd", 'rocky "run echo 1+1"']
+
+
+def test_inspect_runtime_versions_finds_versioned_variants(tmp_path: Path, monkeypatch) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python3 = bin_dir / "python3"
+    python314 = bin_dir / "python3.14"
+    python3.write_text("#!/bin/sh\necho Python 3.14.3\n", encoding="utf-8")
+    python314.write_text("#!/bin/sh\necho Python 3.14.3\n", encoding="utf-8")
+    python3.chmod(0o755)
+    python314.chmod(0o755)
+
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    runtime = RockyRuntime.load_from(tmp_path / "workspace")
+    runtime.permissions.config.mode = "bypass"
+
+    result = inspect_runtime_versions(runtime.tool_registry.context, {"targets": ["python"]})
+
+    assert result.success is True
+    target = result.data["targets"][0]
+    assert target["target"] == "python"
+    assert target["exact_available"] is False
+    commands = [item["command"] for item in target["matches"]]
+    assert commands == ["python3", "python3.14"]

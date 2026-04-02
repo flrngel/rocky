@@ -51,6 +51,14 @@ class VerifierRegistry:
                     "fail",
                     "Expected Rocky to inspect or execute with shell tools, but no tools were used",
                 )
+        if route.task_signature == "local/runtime_inspection":
+            used_tools = any(event.get("type") == "tool_result" for event in tool_events)
+            if not used_tools:
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to inspect the local runtime with tools, but no tools were used",
+                )
         if route.task_class == TaskClass.REPO and any(
             phrase in lowered
             for phrase in (

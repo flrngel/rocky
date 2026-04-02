@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import shutil
 import subprocess
 from typing import Any
 
@@ -67,6 +68,78 @@ def _parse_history_lines(path: Path) -> list[str]:
             continue
         commands.append(stripped)
     return commands
+
+
+def _runtime_name_pattern(target: str) -> re.Pattern[str]:
+    escaped = re.escape(target)
+    if target and target[-1].isdigit():
+        suffix = r"(?:\.\d+)*"
+    else:
+        suffix = r"(?:\d+(?:\.\d+)*)?"
+    return re.compile(rf"^{escaped}{suffix}$")
+
+
+def _path_directories() -> list[Path]:
+    ordered: list[Path] = []
+    seen: set[Path] = set()
+    for chunk in os.environ.get("PATH", "").split(os.pathsep):
+        if not chunk:
+            continue
+        path = Path(chunk).expanduser()
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not resolved.exists() or not resolved.is_dir():
+            continue
+        ordered.append(resolved)
+        seen.add(resolved)
+    return ordered
+
+
+def _command_sort_key(target: str, name: str) -> tuple[int, tuple[int, ...], str]:
+    if name == target:
+        return (0, (), name)
+    suffix = name[len(target):].lstrip(".")
+    numbers = tuple(int(part) for part in suffix.split(".") if part.isdigit())
+    return (1, numbers, name)
+
+
+def _discover_runtime_commands(target: str, max_variants: int = 12) -> list[tuple[str, Path]]:
+    pattern = _runtime_name_pattern(target)
+    candidates: dict[str, Path] = {}
+    if resolved := shutil.which(target):
+        candidates[target] = Path(resolved).resolve()
+    for directory in _path_directories():
+        try:
+            for entry in directory.iterdir():
+                name = entry.name
+                if name in candidates or not pattern.fullmatch(name):
+                    continue
+                if not entry.is_file() or not os.access(entry, os.X_OK):
+                    continue
+                candidates[name] = entry.resolve()
+        except OSError:
+            continue
+    ordered = sorted(candidates.items(), key=lambda item: _command_sort_key(target, item[0]))
+    return ordered[:max_variants]
+
+
+def _capture_version(command_path: Path) -> str | None:
+    for flag in ("--version", "-V"):
+        try:
+            proc = subprocess.run(
+                [str(command_path), flag],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+        except Exception:
+            continue
+        output = (proc.stdout or proc.stderr).strip()
+        if output:
+            return output.splitlines()[0].strip()
+    return None
 
 
 def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -142,6 +215,44 @@ def read_shell_history(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     )
 
 
+def inspect_runtime_versions(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    raw_targets = args.get("targets") or []
+    targets = [str(item).strip() for item in raw_targets if str(item).strip()]
+    max_variants = max(1, min(int(args.get("max_variants", 12)), 20))
+    ctx.require('shell', 'inspect runtime versions', ", ".join(targets) or "runtime inspection", risky=True)
+
+    inspected: list[dict[str, Any]] = []
+    for target in targets:
+        matches = _discover_runtime_commands(target, max_variants=max_variants)
+        exact_path = shutil.which(target)
+        rows = []
+        for name, path in matches:
+            rows.append(
+                {
+                    "command": name,
+                    "path": str(path),
+                    "version": _capture_version(path),
+                    "exact": name == target,
+                }
+            )
+        inspected.append(
+            {
+                "target": target,
+                "exact_available": bool(exact_path),
+                "exact_path": str(Path(exact_path).resolve()) if exact_path else None,
+                "matches": rows,
+            }
+        )
+
+    found = any(item["matches"] for item in inspected)
+    summary_targets = ", ".join(targets) if targets else "runtime targets"
+    return ToolResult(
+        found,
+        {"targets": inspected},
+        f"Inspected local runtime targets: {summary_targets}",
+    )
+
+
 def tools() -> list[Tool]:
     return [
         Tool(
@@ -164,5 +275,19 @@ def tools() -> list[Tool]:
             {'type': 'object', 'properties': {'limit': {'type': 'integer'}}},
             'shell',
             read_shell_history,
+        ),
+        Tool(
+            'inspect_runtime_versions',
+            'Inspect locally installed executable variants and their versions',
+            {
+                'type': 'object',
+                'properties': {
+                    'targets': {'type': 'array', 'items': {'type': 'string'}},
+                    'max_variants': {'type': 'integer'},
+                },
+                'required': ['targets'],
+            },
+            'shell',
+            inspect_runtime_versions,
         ),
     ]

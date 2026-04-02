@@ -52,6 +52,15 @@ class Router:
     }
     META_PREFIXES = ('/help', '/tools', '/skills', '/status', '/config', '/memory', '/permissions')
     COMMAND_VERBS = ('run', 'execute', 'exec', 'launch', 'check', 'inspect')
+    RUNTIME_TARGET_PATTERNS = (
+        re.compile(r"\b(?:what|which)\s+(?P<target>[a-z0-9_.+-]+)\s+versions?\s+do\s+i\s+have\b", re.I),
+        re.compile(r"\b(?:what|which)\s+versions?\s+of\s+(?P<target>[a-z0-9_.+-]+)\s+do\s+i\s+have\b", re.I),
+        re.compile(r"\b(?:what|which)\s+version\s+of\s+(?P<target>[a-z0-9_.+-]+)\b", re.I),
+        re.compile(r"\bdo\s+i\s+have\s+(?P<target>[a-z0-9_.+-]+)\b", re.I),
+        re.compile(r"\bis\s+(?P<target>[a-z0-9_.+-]+)\s+installed\b", re.I),
+        re.compile(r"\bwhere\s+is\s+(?P<target>[a-z0-9_.+-]+)\b", re.I),
+        re.compile(r"\bwhich\s+(?P<target>[a-z0-9_.+-]+)\b", re.I),
+    )
     SHELL_FENCE_RE = re.compile(r"```(?:bash|sh|zsh|shell)?\s*\n(?P<body>.*?)```", re.I | re.S)
     SHELL_TOKEN_RE = re.compile(r"(^|\s)(?:[a-z0-9_./-]+)(?:\s+[-\\w./:=@]+)*(?:\s*(?:&&|\|\||\||;|>|>>)\s*.+)+", re.I | re.M)
     PATH_HINTS = ('.py', '.ts', '.tsx', '.js', '.jsx', '.rb', '.go', '.rs', '.java', '.json', '.yaml', '.yml', '.toml', '.md')
@@ -123,6 +132,23 @@ class Router:
             hint in lowered for hint in self.PATH_HINTS
         )
 
+    def extract_runtime_targets(self, prompt: str) -> list[str]:
+        lowered = prompt.lower().strip()
+        targets: list[str] = []
+        for pattern in self.RUNTIME_TARGET_PATTERNS:
+            for match in pattern.finditer(lowered):
+                target = (match.groupdict().get("target") or "").strip("`'\" ")
+                if not target:
+                    continue
+                if target in {"provider", "model", "tools", "skills", "config", "status"}:
+                    continue
+                if target not in targets:
+                    targets.append(target)
+        return targets
+
+    def _looks_like_runtime_inspection_task(self, prompt: str) -> bool:
+        return bool(self.extract_runtime_targets(prompt))
+
     def _looks_like_meta_request(self, lowered: str) -> bool:
         if lowered in self.META_EXACT:
             return True
@@ -169,6 +195,15 @@ class Router:
         if any(word in lowered for word in ['spreadsheet', 'excel', '.xlsx', '.csv', 'dataframe', 'analyze sheet']):
             lane = Lane.DEEP if len(text) > 120 else Lane.STANDARD
             return RouteDecision(lane, TaskClass.DATA, 'medium', 'Structured data task', ['filesystem', 'data', 'python'], 'data/spreadsheet/analysis')
+        if self._looks_like_runtime_inspection_task(text):
+            return RouteDecision(
+                Lane.STANDARD,
+                TaskClass.REPO,
+                'medium',
+                'Local runtime or installed software inspection request',
+                ['shell'],
+                'local/runtime_inspection',
+            )
         if self._looks_like_shell_task(text, lowered):
             lane = Lane.DEEP if len(text) > 180 else Lane.STANDARD
             return RouteDecision(

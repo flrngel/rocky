@@ -30,6 +30,9 @@ def build_system_prompt(context: ContextPackage, mode: str, user_prompt: str = "
             "If the user asks about shell history, current shell, current directory, user identity, home directory, or environment facts, inspect them with shell tools first. Prefer dedicated shell inspection/history tools over inventing commands."
         )
         parts.append(
+            "If the user asks what software or versions are installed locally, or where a local executable lives, inspect the local runtime with shell tools first. Never claim local versions, paths, or command output from memory."
+        )
+        parts.append(
             "Do not create planning files, setup scripts, or placeholder outputs unless the user explicitly asked for them."
         )
     if not context.tool_families:

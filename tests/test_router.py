@@ -58,3 +58,13 @@ def test_router_detects_provider_question_as_meta() -> None:
 
     assert route.task_class == TaskClass.META
     assert route.task_signature == 'meta/runtime'
+
+
+def test_router_detects_runtime_version_questions() -> None:
+    router = Router()
+
+    route = router.route('what python versions do i have')
+
+    assert route.task_class == TaskClass.REPO
+    assert route.task_signature == 'local/runtime_inspection'
+    assert route.tool_families == ['shell']
