@@ -38,6 +38,7 @@ class EpisodeStore:
             return 0
 
     def set_generation(self, generation: int) -> None:
+        self.generation_file.parent.mkdir(parents=True, exist_ok=True)
         self.generation_file.write_text(
             json.dumps({"current_generation": generation}, ensure_ascii=False, indent=2)
             + "\n",
@@ -52,6 +53,7 @@ class EpisodeStore:
             "created_at": payload.get("created_at") or utc_iso(),
         }
         path = self.support_dir / f"{episode_id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(record, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -66,6 +68,7 @@ class EpisodeStore:
             "created_at": payload.get("created_at") or utc_iso(),
         }
         path = self.query_dir / f"{episode_id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(record, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

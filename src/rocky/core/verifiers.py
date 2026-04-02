@@ -240,6 +240,12 @@ class VerifierRegistry:
                     "Expected Rocky to confirm runtime version or path claims with a shell inspection step after `inspect_runtime_versions`",
                 )
         if route.task_signature == "data/spreadsheet/analysis":
+            if "inspect_spreadsheet" not in result_names:
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to start spreadsheet analysis with `inspect_spreadsheet` on the named CSV/XLSX file",
+                )
             if len(successful_names) < 2:
                 return VerificationResult(
                     "tool_expectation_v1",

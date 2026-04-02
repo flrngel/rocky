@@ -42,7 +42,9 @@ def test_system_prompt_guides_data_and_extraction_tasks() -> None:
         task_signature="extract/general",
     )
 
-    assert "first tool call should usually be `inspect_spreadsheet`" in data_prompt
+    assert "first tool call must be `inspect_spreadsheet`" in data_prompt
+    assert "`inspect_spreadsheet` works for CSV files too" in data_prompt
+    assert "Do not use `run_python` as your first spreadsheet step" in data_prompt
     assert "use that exact path first instead of searching or guessing" in data_prompt
     assert "Do not stop after `inspect_spreadsheet` alone" in data_prompt
     assert "return the requested JSON directly" in extraction_prompt

@@ -209,14 +209,17 @@ class AgentCore:
                 trace=trace,
                 execution_cwd=self.tool_registry.context.execution_relative,
             )
-        self.learning_manager.record_query(
-            task_signature=route.task_signature,
-            skills_used=trace.get("selected_skills") or [],
-            verifier=verification.get("name", "default_v1"),
-            result="success" if verification.get("status") == "pass" else verification.get("status", "warn"),
-            usage=usage,
-            latency_ms=None,
-        )
+        try:
+            self.learning_manager.record_query(
+                task_signature=route.task_signature,
+                skills_used=trace.get("selected_skills") or [],
+                verifier=verification.get("name", "default_v1"),
+                result="success" if verification.get("status") == "pass" else verification.get("status", "warn"),
+                usage=usage,
+                latency_ms=None,
+            )
+        except Exception:
+            pass
         return AgentResponse(text=text, route=route, verification=verification, usage=usage, trace=trace)
 
     def _normalize_output(self, route: RouteDecision, text: str) -> str:

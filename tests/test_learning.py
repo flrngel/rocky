@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from rocky.config.models import LearningConfig
+from rocky.learning.episodes import EpisodeStore
 from rocky.learning.manager import LearningManager
 
 
@@ -26,3 +27,16 @@ def test_learning_manager_publishes_skill(tmp_path: Path) -> None:
     assert Path(result['skill_path']).exists()
     learned = manager.list_learned()
     assert learned
+
+
+def test_episode_store_recreates_query_directory_on_write(tmp_path: Path) -> None:
+    store = EpisodeStore(
+        support_dir=tmp_path / "support",
+        query_dir=tmp_path / "query",
+        generation_file=tmp_path / "learned" / "generation.json",
+    )
+
+    store.query_dir.rmdir()
+    result = store.record_query({"task_signature": "automation/general"})
+
+    assert Path(result["path"]).exists()

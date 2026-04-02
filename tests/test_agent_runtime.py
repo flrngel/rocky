@@ -227,6 +227,11 @@ class _FailingProvider:
         raise RuntimeError("provider offline")
 
 
+class _LearningFailingProvider:
+    def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
+        return ProviderResponse(text="ok")
+
+
 class _FlakyProvider:
     def __init__(self) -> None:
         self.calls = 0
@@ -286,6 +291,24 @@ def test_runtime_retries_transient_provider_failures(tmp_path: Path) -> None:
 
     assert response.text == "ok after retry"
     assert provider.calls == 2
+    assert response.verification["status"] == "pass"
+
+
+def test_runtime_ignores_learning_record_failures(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    registry = _ProviderRegistry(_LearningFailingProvider())
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("learning write failed")
+
+    runtime.learning_manager.record_query = _boom  # type: ignore[assignment]
+    runtime.agent.learning_manager = runtime.learning_manager
+
+    response = runtime.run_prompt("hello")
+
+    assert response.text == "ok"
     assert response.verification["status"] == "pass"
 
 
