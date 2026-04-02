@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 import re
 
 from rocky.core.router import RouteDecision, TaskClass
@@ -77,6 +78,35 @@ class VerifierRegistry:
                 return True
         return False
 
+    def _last_successful_shell_command(self, tool_events: list[dict]) -> str:
+        for event in reversed(tool_events):
+            if event.get("type") != "tool_result" or not event.get("success", True):
+                continue
+            if event.get("name") != "run_shell_command":
+                continue
+            payload = self._tool_payload(event)
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                continue
+            command = str(data.get("command", "")).strip()
+            if command:
+                return command
+        return ""
+
+    def _mentions_shell_command(self, output: str, command: str) -> bool:
+        lowered_output = output.lower()
+        if command.lower() in lowered_output:
+            return True
+        tokens = [token.strip("'\"`()[]{}") for token in command.split()]
+        for token in tokens:
+            if not token or token.startswith("-"):
+                continue
+            if "/" in token or "." in token:
+                basename = PurePosixPath(token).name.lower()
+                if basename and basename in lowered_output:
+                    return True
+        return False
+
     def _recovered_after_tool_failures(self, tool_events: list[dict]) -> bool:
         failures = [
             event
@@ -113,6 +143,9 @@ class VerifierRegistry:
         if result.status != "pass":
             return result
         result = self._structured_output(prompt, output)
+        if result.status != "pass":
+            return result
+        result = self._automation_reporting(prompt, route, output, tool_events)
         if result.status != "pass":
             return result
         result = self._citations(task_class, output, tool_events)
@@ -306,6 +339,37 @@ class VerifierRegistry:
                 f"Tool failures observed: {names}",
             )
         return VerificationResult("tool_failure_v1", "pass", "")
+
+    def _automation_reporting(
+        self,
+        prompt: str,
+        route: RouteDecision,
+        output: str,
+        tool_events: list[dict],
+    ) -> VerificationResult:
+        if route.task_signature != "automation/general":
+            return VerificationResult("automation_reporting_v1", "pass", "")
+        lowered = prompt.lower()
+        if not any(
+            phrase in lowered
+            for phrase in (
+                "exact output",
+                "exact json output",
+                "valid json output",
+                "tell me the exact output",
+            )
+        ):
+            return VerificationResult("automation_reporting_v1", "pass", "")
+        command = self._last_successful_shell_command(tool_events)
+        if not command:
+            return VerificationResult("automation_reporting_v1", "pass", "")
+        if self._mentions_shell_command(output, command):
+            return VerificationResult("automation_reporting_v1", "pass", "")
+        return VerificationResult(
+            "automation_reporting_v1",
+            "fail",
+            "Expected Rocky to mention the exact script or command it verified when reporting the observed automation output",
+        )
 
     def _structured_output(self, prompt: str, output: str) -> VerificationResult:
         lowered = prompt.lower()

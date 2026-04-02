@@ -74,3 +74,22 @@ def test_system_prompt_guides_shell_and_automation_tasks() -> None:
     assert "verify it with `run_shell_command` before answering" in automation_prompt
     assert "Keep the script path inside the workspace" in automation_prompt
     assert "Do not probe the environment or run verification commands before the file exists" in automation_prompt
+    assert "first successful tool call should usually be `write_file`" in automation_prompt
+    assert "do at most one lightweight inspection" in automation_prompt
+    assert "mention the exact script or command you ran and the exact observed output" in automation_prompt
+    assert "at least three successful tool steps" in automation_prompt
+    assert "reread it with `read_file`" in automation_prompt
+    assert "within your first five successful tool calls" in automation_prompt
+
+
+def test_system_prompt_guides_repo_lookup_follow_up_reads() -> None:
+    prompt = build_system_prompt(
+        ContextPackage(instructions=[], memories=[], skills=[], tool_families=["filesystem", "git"]),
+        mode="bypass",
+        user_prompt="in this repo, find where shell history is implemented and tell me the file and function name",
+        task_signature="repo/general",
+    )
+
+    assert "do not stop at search hits alone" in prompt
+    assert "After `grep_files` or `list_files`, read the most likely file" in prompt
+    assert "Repeated search-only loops" in prompt

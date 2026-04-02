@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import shutil
 
+import httpx
+
 from rocky.app import RockyRuntime
 from rocky.core.messages import Message
 from rocky.providers.base import ProviderResponse
@@ -225,6 +227,19 @@ class _FailingProvider:
         raise RuntimeError("provider offline")
 
 
+class _FlakyProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
+        self.calls += 1
+        if self.calls == 1:
+            request = httpx.Request("POST", "http://example.test/chat/completions")
+            response = httpx.Response(500, request=request, json={"error": "temporary"})
+            raise httpx.HTTPStatusError("temporary", request=request, response=response)
+        return ProviderResponse(text="ok after retry")
+
+
 class _ProviderRegistry:
     def __init__(self, provider) -> None:
         self.provider = provider
@@ -258,6 +273,20 @@ def test_runtime_returns_failure_response_when_provider_errors(tmp_path: Path) -
     assert response.verification["status"] == "fail"
     assert "provider offline" in response.text
     assert response.trace["error"]["type"] == "RuntimeError"
+
+
+def test_runtime_retries_transient_provider_failures(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    provider = _FlakyProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt("hello")
+
+    assert response.text == "ok after retry"
+    assert provider.calls == 2
+    assert response.verification["status"] == "pass"
 
 
 def test_isolated_run_does_not_include_previous_session_messages(tmp_path: Path) -> None:

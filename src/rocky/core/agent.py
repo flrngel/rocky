@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+
+import httpx
 
 from rocky.core.context import ContextBuilder
 from rocky.core.messages import Message
@@ -213,6 +216,18 @@ class AgentCore:
                 return candidate
         return text
 
+    def _is_retryable_provider_exception(self, exc: Exception) -> bool:
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code >= 500
+        return isinstance(
+            exc,
+            (
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                httpx.RemoteProtocolError,
+            ),
+        )
+
     def _repair_structured_output(
         self,
         provider,
@@ -309,9 +324,13 @@ class AgentCore:
             )
         elif route.task_signature == "automation/general":
             route_hint = (
-                "Compare the verified command output against the user's requested behavior, sample data, "
-                "and any required JSON shape. If the observed output is wrong or incomplete, edit the files "
-                "and rerun verification until the observed output matches."
+                "Stop probing and move into implementation. If the task is to build, scaffold, or create an "
+                "automation, do at most one lightweight inspection first, then use `write_file` within your next "
+                "successful tool call or two. After the file exists, verify it with `run_shell_command`. Compare "
+                "the verified command output against the user's requested behavior, sample data, and any required "
+                "JSON shape. In the final answer, name the exact script or command you verified and include the "
+                "exact observed output. If the observed output is wrong or incomplete, edit the files and rerun "
+                "verification until the observed output matches."
             )
         return (
             f"Original task:\n{prompt}\n\n"
@@ -514,41 +533,49 @@ class AgentCore:
         selected_skills = [item["name"] for item in context.skills]
         provider_name = provider.__class__.__name__
 
-        try:
-            if route.tool_families:
-                provider_response = provider.run_with_tools(
-                    system_prompt=system_prompt,
-                    messages=messages,
-                    tools=[tool.openai_schema() for tool in selected_tool_objects],
-                    execute_tool=lambda name, arguments: self._run_selected_tool(
-                        selected_tool_names,
-                        name,
-                        arguments,
+        provider_response = None
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                if route.tool_families:
+                    provider_response = provider.run_with_tools(
+                        system_prompt=system_prompt,
+                        messages=messages,
+                        tools=[tool.openai_schema() for tool in selected_tool_objects],
+                        execute_tool=lambda name, arguments: self._run_selected_tool(
+                            selected_tool_names,
+                            name,
+                            arguments,
+                            event_handler=event_handler,
+                        ),
+                        max_rounds=self._tool_loop_rounds(route),
+                        event_handler=event_handler if stream else None,
+                    )
+                else:
+                    provider_response = provider.complete(
+                        system_prompt=system_prompt,
+                        messages=messages,
+                        stream=stream,
                         event_handler=event_handler,
-                    ),
-                    max_rounds=self._tool_loop_rounds(route),
-                    event_handler=event_handler if stream else None,
-                )
-            else:
-                provider_response = provider.complete(
-                    system_prompt=system_prompt,
-                    messages=messages,
+                    )
+                break
+            except Exception as exc:
+                if attempt < attempts - 1 and self._is_retryable_provider_exception(exc):
+                    time.sleep(min(0.5 * (2**attempt), 2.0))
+                    continue
+                return self._error_response(
+                    session=session,
+                    prompt=prompt,
+                    route=route,
+                    context_summary=context_summary,
+                    selected_tools=selected_tools,
+                    selected_skills=selected_skills,
+                    provider_name=provider_name,
+                    exc=exc,
                     stream=stream,
                     event_handler=event_handler,
                 )
-        except Exception as exc:
-            return self._error_response(
-                session=session,
-                prompt=prompt,
-                route=route,
-                context_summary=context_summary,
-                selected_tools=selected_tools,
-                selected_skills=selected_skills,
-                provider_name=provider_name,
-                exc=exc,
-                stream=stream,
-                event_handler=event_handler,
-            )
+        assert provider_response is not None
 
         normalized_text = self._normalize_output(route, provider_response.text)
         normalized_text = self._repair_structured_output(

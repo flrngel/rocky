@@ -74,6 +74,10 @@ def build_system_prompt(
         parts.append(
             "For shell inspection tasks that ask for more than one fact, do not stop after a single inspection. Corroborate with `read_shell_history` or a shell command before answering."
         )
+    if task_signature == "repo/general":
+        parts.append(
+            "For repo lookup tasks that ask where something is implemented or ask for file or function names, do not stop at search hits alone. After `grep_files` or `list_files`, read the most likely file before answering. Repeated search-only loops without a `read_file` follow-up are a failure mode."
+        )
     if task_signature == "data/spreadsheet/analysis":
         parts.append(
             "For CSV, XLSX, or spreadsheet tasks, the first tool call should usually be `inspect_spreadsheet` on the named file, and the next inspection step should be `read_sheet_range` for headers or sample rows. If the user asked for sample rows, comparisons, or multiple sheets, follow `inspect_spreadsheet` with one or more `read_sheet_range` calls. If the user named a specific file, use that exact path first instead of searching or guessing alternate locations. Use `run_python` only after at least one spreadsheet tool call when you need calculations or aggregation, and avoid generic file listing or `read_file` unless you truly need raw lines."
@@ -96,7 +100,19 @@ def build_system_prompt(
             "For automation tasks, write or edit the script first, then verify it with `run_shell_command` before answering. Keep the script path inside the workspace, not in `/tmp` or `/workspace`. Do not probe the environment or run verification commands before the file exists, and do not stop after only describing the file. Never modify or remove internal hidden directories such as `.rocky` or `.git` unless the user explicitly asked for that."
         )
         parts.append(
+            "For create, build, automate, scaffold, or cleanup-script tasks, your first successful tool call should usually be `write_file`. Do not burn multiple exploratory shell steps before creating the automation. If you truly need discovery first, do at most one lightweight inspection, then use `write_file` immediately after. Repeated shell probing before the first write is a failure mode."
+        )
+        parts.append(
             "If the user asks you to build a tiny project or scaffold files in an empty workspace, create every requested file inside the workspace, then run the project or script to verify it before answering. Do not stop after creating only part of the project or after describing what you would do."
+        )
+        parts.append(
+            "When reporting a verified automation or mini-project result, mention the exact script or command you ran and the exact observed output, not just a paraphrase."
+        )
+        parts.append(
+            "Automation work should usually use at least three successful tool steps: create or edit the script with `write_file`, inspect or reread it with `read_file` when you just created it, and then execute it with `run_shell_command` to verify the observed behavior."
+        )
+        parts.append(
+            "For single-script automation tasks, do not keep rewriting or adding extra files before the first verification. Once the main script exists, execute it with `run_shell_command` within your first five successful tool calls unless the user explicitly asked for multiple files before verification."
         )
     if not context.tool_families:
         parts.append(

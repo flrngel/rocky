@@ -362,3 +362,64 @@ def test_verifier_accepts_recovered_automation_after_intermediate_tool_failure()
     )
 
     assert result.status == "pass"
+
+
+def test_verifier_requires_exact_command_mention_for_exact_automation_output() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.AUTOMATION,
+        risk="medium",
+        reasoning="Automation task",
+        tool_families=["filesystem", "shell", "python"],
+        task_signature="automation/general",
+    )
+
+    result = verifier.verify(
+        prompt="build a tiny shell script project and tell me the exact output",
+        route=route,
+        task_class=route.task_class,
+        output="Done. Output is now 360.",
+        tool_events=[
+            {"type": "tool_result", "name": "write_file", "success": True},
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh report.sh", "stdout": "360\\n", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "fail"
+    assert "exact script or command" in result.message.lower()
+
+
+def test_verifier_accepts_exact_command_mention_for_exact_automation_output() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.AUTOMATION,
+        risk="medium",
+        reasoning="Automation task",
+        tool_families=["filesystem", "shell", "python"],
+        task_signature="automation/general",
+    )
+
+    result = verifier.verify(
+        prompt="build a tiny shell script project and tell me the exact output",
+        route=route,
+        task_class=route.task_class,
+        output="Ran `sh report.sh` and it printed `360`.",
+        tool_events=[
+            {"type": "tool_result", "name": "write_file", "success": True},
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh report.sh", "stdout": "360\\n", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "pass"

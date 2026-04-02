@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 
+import httpx
 import pytest
 
 from rocky.app import RockyRuntime
@@ -16,13 +17,7 @@ from test_agentic_contracts import SCENARIOS, Scenario, _prepare_workspace
 LIVE_PROVIDER = "ollama"
 LIVE_BASE_URL = "http://ainbr-research-fast:11434/v1"
 LIVE_MODEL = "qwen3.5:4b"
-
-
-if os.getenv("ROCKY_RUN_LIVE_AGENTIC") != "1":
-    pytest.skip(
-        "set ROCKY_RUN_LIVE_AGENTIC=1 to run live LLM agentic tests",
-        allow_module_level=True,
-    )
+LIVE_SKIP_ENV = "ROCKY_SKIP_LIVE_AGENTIC"
 
 
 def _live_cli_overrides() -> dict[str, object]:
@@ -140,6 +135,24 @@ def _prepare_clean_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("SHELL", "/bin/zsh")
     monkeypatch.setenv("USER", "rockytester")
     return workspace
+
+
+@pytest.fixture(scope="session")
+def live_provider_ready() -> None:
+    if os.getenv(LIVE_SKIP_ENV) == "1":
+        pytest.skip(
+            f"live LLM agentic tests skipped because {LIVE_SKIP_ENV}=1",
+            allow_module_level=False,
+        )
+    models_url = f"{LIVE_BASE_URL.rstrip('/')}/models"
+    try:
+        response = httpx.get(models_url, timeout=15.0)
+        response.raise_for_status()
+    except Exception as exc:
+        pytest.fail(
+            f"live LLM provider preflight failed for {LIVE_PROVIDER} at {LIVE_BASE_URL} "
+            f"with model {LIVE_MODEL}: {exc}"
+        )
 
 
 def _phase1_anchor_tools(scenario: Scenario) -> set[str]:
@@ -301,6 +314,7 @@ def _assert_phase3_behavior(scenario: Scenario, response) -> None:
 def live_run(
     request: pytest.FixtureRequest,
     tmp_path_factory: pytest.TempPathFactory,
+    live_provider_ready: None,
 ):
     scenario: Scenario = request.param
     tmp_path = tmp_path_factory.mktemp(f"live_{scenario.name}")
@@ -338,6 +352,7 @@ def test_live_llm_phase3_multi_step_verification(live_run) -> None:
 def live_phase4_run(
     request: pytest.FixtureRequest,
     tmp_path_factory: pytest.TempPathFactory,
+    live_provider_ready: None,
 ):
     scenario: MiniProjectScenario = request.param
     tmp_path = tmp_path_factory.mktemp(f"live_phase4_{scenario.name}")
@@ -396,6 +411,7 @@ def test_live_llm_phase4_mini_project_outputs(live_phase4_run) -> None:
 def test_live_llm_phase1_cli_date_and_live_price_lookup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    live_provider_ready: None,
 ) -> None:
     workspace = _prepare_clean_workspace(tmp_path, monkeypatch)
     runtime = RockyRuntime.load_from(workspace, cli_overrides=_live_cli_overrides())
