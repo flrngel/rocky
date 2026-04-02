@@ -85,6 +85,26 @@ class Router:
         'lit',
         'show',
         'me',
+        'file',
+        'files',
+        'module',
+        'modules',
+        'class',
+        'classes',
+        'function',
+        'functions',
+        'parser',
+        'path',
+        'paths',
+        'directory',
+        'directories',
+        'repo',
+        'code',
+        'command',
+        'commands',
+        'alias',
+        'aliases',
+        'cli',
     }
     SHELL_FENCE_RE = re.compile(r"```(?:bash|sh|zsh|shell)?\s*\n(?P<body>.*?)```", re.I | re.S)
     SHELL_TOKEN_RE = re.compile(r"(^|\s)(?:[a-z0-9_./-]+)(?:\s+[-\\w./:=@]+)*(?:\s*(?:&&|\|\||\||;|>|>>)\s*.+)+", re.I | re.M)
@@ -181,6 +201,26 @@ class Router:
         return targets
 
     def _looks_like_runtime_inspection_task(self, prompt: str) -> bool:
+        lowered = prompt.lower()
+        if self._looks_like_repo_task(lowered) and any(
+            word in lowered
+            for word in (
+                'repo',
+                'code',
+                'file',
+                'files',
+                'module',
+                'modules',
+                'class',
+                'function',
+                'parser',
+                'implementation',
+                'wizard',
+                'alias',
+                'aliases',
+            )
+        ):
+            return False
         return bool(self.extract_runtime_targets(prompt))
 
     def _looks_like_meta_request(self, lowered: str) -> bool:
