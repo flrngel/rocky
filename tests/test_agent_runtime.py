@@ -11,10 +11,27 @@ from rocky.providers.base import ProviderResponse
 class _OkProvider:
     def __init__(self) -> None:
         self.calls: list[list[Message]] = []
+        self.tool_calls: list[dict] = []
 
     def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
         self.calls.append(messages)
         return ProviderResponse(text="ok")
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        return ProviderResponse(
+            text="runtime inspected",
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "inspect_runtime_versions",
+                    "arguments": {"targets": ["python"]},
+                    "text": "{}",
+                    "success": True,
+                }
+            ],
+        )
 
 
 class _FailingProvider:
@@ -112,7 +129,7 @@ def test_isolated_run_refuses_to_invent_previous_turns(tmp_path: Path) -> None:
     assert provider.calls == []
 
 
-def test_runtime_inspection_prompt_is_answered_deterministically(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_inspection_prompt_uses_tool_capable_provider(tmp_path: Path, monkeypatch) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     python3 = bin_dir / "python3"
@@ -130,7 +147,9 @@ def test_runtime_inspection_prompt_is_answered_deterministically(tmp_path: Path,
 
     response = runtime.run_prompt("what python versions do i have", continue_session=False)
 
-    assert "python3" in response.text
-    assert "Python 3.14.3" in response.text
-    assert response.trace["provider"] == "deterministic"
+    assert response.text == "runtime inspected"
+    assert response.trace["provider"] == "_OkProvider"
     assert provider.calls == []
+    assert len(provider.tool_calls) == 1
+    tool_names = {tool["function"]["name"] for tool in provider.tool_calls[0]["tools"]}
+    assert "inspect_runtime_versions" in tool_names

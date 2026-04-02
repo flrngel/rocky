@@ -13,7 +13,6 @@ from rocky.core.verifiers import VerifierRegistry
 from rocky.learning.manager import LearningManager
 from rocky.providers.registry import ProviderRegistry
 from rocky.session.store import SessionStore
-from rocky.tools.base import ToolResult
 from rocky.tools.registry import ToolRegistry
 from rocky.util.text import safe_json
 from rocky.util.time import utc_iso
@@ -157,45 +156,6 @@ class AgentCore:
             event_handler({"type": "tool_result", "name": name, "text": text, "success": result.success})
         return text
 
-    def _run_tool_result(
-        self,
-        name: str,
-        arguments: dict[str, Any],
-        event_handler: Callable[[dict[str, Any]], None] | None = None,
-    ) -> tuple[Any, str]:
-        if event_handler:
-            event_handler({"type": "tool_call", "name": name, "arguments": arguments})
-        try:
-            result = self.tool_registry.run(name, arguments)
-        except PermissionDenied as exc:
-            result = ToolResult(False, {}, str(exc), {"error": "permission_denied"})
-        except Exception as exc:  # pragma: no cover - defensive runtime catch
-            result = ToolResult(False, {}, f"Tool crashed: {exc}", {"error": "tool_exception"})
-        text = result.as_text(limit=self.tool_registry.context.config.tools.max_tool_output_chars)
-        if event_handler:
-            event_handler({"type": "tool_result", "name": name, "text": text, "success": result.success})
-        return result, text
-
-    def _format_runtime_inspection(self, prompt: str, payload: dict[str, Any]) -> str:
-        lowered = prompt.lower()
-        targets = payload.get("targets") or []
-        lines: list[str] = []
-        for item in targets:
-            target = item.get("target", "runtime")
-            matches = item.get("matches") or []
-            if not matches:
-                lines.append(f"I couldn't find `{target}` on your PATH.")
-                continue
-            lines.append(f"I found these `{target}`-related executables on your PATH:")
-            for match in matches:
-                version = match.get("version") or "version unavailable"
-                lines.append(f"- `{match.get('command')}` -> {version} (`{match.get('path')}`)")
-            if not item.get("exact_available"):
-                lines.append(f"`{target}` itself is not available on PATH.")
-            if "where is" in lowered and len(matches) == 1:
-                lines = [f"`{target}` is at `{matches[0].get('path')}`."]
-        return "\n".join(lines)
-
     def _finalize(
         self,
         session,
@@ -256,45 +216,6 @@ class AgentCore:
         context = self.context_builder.build(prompt, route.task_signature, route.tool_families)
         context_summary = context.summary()
         self.last_context = context_summary
-        if route.task_signature == "local/runtime_inspection":
-            targets = self.router.extract_runtime_targets(prompt)
-            result, tool_text = self._run_tool_result(
-                "inspect_runtime_versions",
-                {"targets": targets},
-                event_handler=event_handler if stream else None,
-            )
-            text = self._format_runtime_inspection(prompt, result.data if isinstance(result.data, dict) else {})
-            verification = {
-                "name": "runtime_inspection_v1",
-                "status": "pass",
-                "message": "Inspected local runtime tools",
-            }
-            tool_events = [
-                {
-                    "type": "tool_call",
-                    "id": "deterministic_runtime_inspection",
-                    "name": "inspect_runtime_versions",
-                    "arguments": {"targets": targets},
-                },
-                {
-                    "type": "tool_result",
-                    "id": "deterministic_runtime_inspection",
-                    "name": "inspect_runtime_versions",
-                    "arguments": {"targets": targets},
-                    "text": tool_text,
-                    "success": result.success,
-                },
-            ]
-            trace = {
-                "route": asdict(route),
-                "selected_tools": ["inspect_runtime_versions"],
-                "selected_skills": [item["name"] for item in context.skills],
-                "provider": "deterministic",
-                "verification": verification,
-                "tool_events": tool_events,
-                "context": context_summary,
-            }
-            return self._finalize(session, prompt, text, route, verification, {}, trace)
         system_prompt = build_system_prompt(context, self.permissions.config.mode, prompt)
         recent_messages = session.recent_messages(limit=12) if continue_session else []
         if not recent_messages and self._wants_prior_turn_context(prompt):

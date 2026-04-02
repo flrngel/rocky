@@ -53,14 +53,39 @@ class Router:
     META_PREFIXES = ('/help', '/tools', '/skills', '/status', '/config', '/memory', '/permissions')
     COMMAND_VERBS = ('run', 'execute', 'exec', 'launch', 'check', 'inspect')
     RUNTIME_TARGET_PATTERNS = (
-        re.compile(r"\b(?:what|which)\s+(?P<target>[a-z0-9_.+-]+)\s+versions?\s+do\s+i\s+have\b", re.I),
-        re.compile(r"\b(?:what|which)\s+versions?\s+of\s+(?P<target>[a-z0-9_.+-]+)\s+do\s+i\s+have\b", re.I),
+        re.compile(r"\b(?:what|which)\s+versions?\s+(?:of\s+)?(?P<target>[a-z0-9_.+-]+)\b", re.I),
         re.compile(r"\b(?:what|which)\s+version\s+of\s+(?P<target>[a-z0-9_.+-]+)\b", re.I),
         re.compile(r"\bdo\s+i\s+have\s+(?P<target>[a-z0-9_.+-]+)\b", re.I),
         re.compile(r"\bis\s+(?P<target>[a-z0-9_.+-]+)\s+installed\b", re.I),
         re.compile(r"\bwhere\s+is\s+(?P<target>[a-z0-9_.+-]+)\b", re.I),
         re.compile(r"\bwhich\s+(?P<target>[a-z0-9_.+-]+)\b", re.I),
     )
+    RUNTIME_TARGET_STOPWORDS = {
+        'what',
+        'which',
+        'are',
+        'is',
+        'the',
+        'my',
+        'system',
+        'machine',
+        'installed',
+        'available',
+        'latest',
+        'current',
+        'in',
+        'on',
+        'this',
+        'do',
+        'i',
+        'have',
+        'of',
+        'list',
+        'it',
+        'lit',
+        'show',
+        'me',
+    }
     SHELL_FENCE_RE = re.compile(r"```(?:bash|sh|zsh|shell)?\s*\n(?P<body>.*?)```", re.I | re.S)
     SHELL_TOKEN_RE = re.compile(r"(^|\s)(?:[a-z0-9_./-]+)(?:\s+[-\\w./:=@]+)*(?:\s*(?:&&|\|\||\||;|>|>>)\s*.+)+", re.I | re.M)
     PATH_HINTS = ('.py', '.ts', '.tsx', '.js', '.jsx', '.rb', '.go', '.rs', '.java', '.json', '.yaml', '.yml', '.toml', '.md')
@@ -144,6 +169,15 @@ class Router:
                     continue
                 if target not in targets:
                     targets.append(target)
+        words = re.findall(r"[a-z0-9_.+-]+", lowered)
+        for index, word in enumerate(words):
+            if word not in {"version", "versions"} or index == 0:
+                continue
+            candidate = words[index - 1]
+            if candidate in self.RUNTIME_TARGET_STOPWORDS:
+                continue
+            if candidate not in targets:
+                targets.append(candidate)
         return targets
 
     def _looks_like_runtime_inspection_task(self, prompt: str) -> bool:

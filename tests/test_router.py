@@ -68,3 +68,13 @@ def test_router_detects_runtime_version_questions() -> None:
     assert route.task_class == TaskClass.REPO
     assert route.task_signature == 'local/runtime_inspection'
     assert route.tool_families == ['shell']
+
+
+def test_router_detects_runtime_version_questions_with_system_wording() -> None:
+    router = Router()
+
+    node_route = router.route('what node versions in my system do i have')
+    ruby_route = router.route('what are ruby versions in my system list it')
+
+    assert node_route.task_signature == 'local/runtime_inspection'
+    assert ruby_route.task_signature == 'local/runtime_inspection'
