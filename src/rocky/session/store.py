@@ -41,10 +41,12 @@ class SessionStore:
         self.save(session)
         if make_current:
             self.current = session
+            self.sessions_dir.mkdir(parents=True, exist_ok=True)
             self.current_session_id_path.write_text(session.id, encoding="utf-8")
         return session
 
     def save(self, session: Session) -> None:
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self._path(session.id).write_text(
             json.dumps(asdict(session), ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -54,6 +56,7 @@ class SessionStore:
         data = json.loads(self._path(session_id).read_text(encoding="utf-8"))
         session = Session(**data)
         self.current = session
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.current_session_id_path.write_text(session.id, encoding="utf-8")
         return session
 

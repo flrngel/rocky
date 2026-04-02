@@ -80,6 +80,22 @@ def safe_json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+def extract_json_candidate(text: str) -> str | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+    candidates = [stripped]
+    fenced = re.findall(r"```(?:json)?\s*(.*?)```", stripped, flags=re.I | re.S)
+    candidates.extend(item.strip() for item in fenced if item.strip())
+    for candidate in candidates:
+        try:
+            json.loads(candidate)
+            return candidate
+        except Exception:
+            continue
+    return None
+
+
 def tokenize_keywords(text: str) -> set[str]:
     tokens: set[str] = set()
     for word in re.findall(r"[a-zA-Z0-9_:+./-]+", text.lower()):

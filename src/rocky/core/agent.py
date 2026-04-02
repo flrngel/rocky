@@ -14,7 +14,7 @@ from rocky.learning.manager import LearningManager
 from rocky.providers.registry import ProviderRegistry
 from rocky.session.store import SessionStore
 from rocky.tools.registry import ToolRegistry
-from rocky.util.text import safe_json
+from rocky.util.text import extract_json_candidate, safe_json
 from rocky.util.time import utc_iso
 
 
@@ -78,6 +78,7 @@ class AgentCore:
 
     def _write_trace(self, trace: dict[str, Any]) -> str:
         trace_path = self._trace_path()
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
         trace_path.write_text(safe_json(trace) + "\n", encoding="utf-8")
         return str(trace_path)
 
@@ -156,6 +157,26 @@ class AgentCore:
             event_handler({"type": "tool_result", "name": name, "text": text, "success": result.success})
         return text
 
+    def _run_selected_tool(
+        self,
+        allowed_names: set[str],
+        name: str,
+        arguments: dict[str, Any],
+        event_handler: Callable[[dict[str, Any]], None] | None = None,
+    ) -> str:
+        if name not in allowed_names:
+            payload = {
+                "success": False,
+                "summary": f"Tool not available for this task: {name}",
+                "data": {},
+                "metadata": {"error": "tool_not_exposed"},
+            }
+            text = safe_json(payload)
+            if event_handler:
+                event_handler({"type": "tool_result", "name": name, "text": text, "success": False})
+            return text
+        return self._run_tool(name, arguments, event_handler=event_handler)
+
     def _finalize(
         self,
         session,
@@ -182,6 +203,70 @@ class AgentCore:
             latency_ms=None,
         )
         return AgentResponse(text=text, route=route, verification=verification, usage=usage, trace=trace)
+
+    def _normalize_output(self, route: RouteDecision, text: str) -> str:
+        if route.task_signature == "extract/general":
+            candidate = extract_json_candidate(text)
+            if candidate:
+                return candidate
+        return text
+
+    def _repair_structured_output(
+        self,
+        provider,
+        system_prompt: str,
+        prompt: str,
+        route: RouteDecision,
+        text: str,
+        tool_events: list[dict[str, Any]],
+        *,
+        stream: bool,
+    ) -> str:
+        if route.task_signature != "extract/general" or stream:
+            return text
+        if extract_json_candidate(text):
+            return text
+        successful_results = [
+            event
+            for event in tool_events
+            if event.get("type") == "tool_result" and event.get("success", True)
+        ]
+        if not successful_results:
+            return text
+        evidence_chunks: list[str] = []
+        for event in successful_results[-4:]:
+            payload = str(event.get("text", "")).strip()
+            if payload:
+                evidence_chunks.append(f"Tool `{event.get('name', 'unknown')}` output:\n{payload[:4000]}")
+        if not evidence_chunks:
+            return text
+        repair_prompt = (
+            f"Original task:\n{prompt}\n\n"
+            f"Assistant draft that must be converted to JSON only:\n{text}\n\n"
+            "Relevant tool outputs:\n"
+            + "\n\n".join(evidence_chunks)
+            + "\n\nReturn the final answer as valid JSON only. Do not add prose or markdown."
+        )
+        try:
+            repair_response = provider.complete(
+                system_prompt=system_prompt + "\n\nReturn valid JSON only with no prose or markdown.",
+                messages=[Message(role="user", content=repair_prompt)],
+                stream=False,
+                event_handler=None,
+            )
+        except Exception:
+            return text
+        candidate = extract_json_candidate(repair_response.text)
+        return candidate or text
+
+    def _tool_loop_rounds(self, route: RouteDecision) -> int:
+        if route.task_signature == "automation/general":
+            return 12
+        if route.lane == Lane.DEEP:
+            return 10
+        if route.task_signature in {"extract/general", "data/spreadsheet/analysis"}:
+            return 8
+        return 8
 
     def run(
         self,
@@ -216,7 +301,12 @@ class AgentCore:
         context = self.context_builder.build(prompt, route.task_signature, route.tool_families)
         context_summary = context.summary()
         self.last_context = context_summary
-        system_prompt = build_system_prompt(context, self.permissions.config.mode, prompt)
+        system_prompt = build_system_prompt(
+            context,
+            self.permissions.config.mode,
+            prompt,
+            route.task_signature,
+        )
         recent_messages = session.recent_messages(limit=12) if continue_session else []
         if not recent_messages and self._wants_prior_turn_context(prompt):
             text = "I don't have any earlier turn context in this run, so I can't tell what your previous question was."
@@ -239,7 +329,13 @@ class AgentCore:
             return self._finalize(session, prompt, text, route, verification, {}, trace)
         messages = [*recent_messages, Message(role="user", content=prompt)]
         provider = self.provider_registry.provider_for_task(needs_tools=bool(route.tool_families))
-        selected_tools = [tool.name for tool in self.tool_registry.select(route.tool_families)]
+        selected_tool_objects = self.tool_registry.select_for_task(
+            route.tool_families,
+            route.task_signature,
+            prompt,
+        )
+        selected_tools = [tool.name for tool in selected_tool_objects]
+        selected_tool_names = set(selected_tools)
         selected_skills = [item["name"] for item in context.skills]
         provider_name = provider.__class__.__name__
 
@@ -248,9 +344,14 @@ class AgentCore:
                 provider_response = provider.run_with_tools(
                     system_prompt=system_prompt,
                     messages=messages,
-                    tools=self.tool_registry.get_openai_schemas(route.tool_families),
-                    execute_tool=lambda name, arguments: self._run_tool(name, arguments, event_handler=event_handler),
-                    max_rounds=10 if route.lane == Lane.DEEP else 6,
+                    tools=[tool.openai_schema() for tool in selected_tool_objects],
+                    execute_tool=lambda name, arguments: self._run_selected_tool(
+                        selected_tool_names,
+                        name,
+                        arguments,
+                        event_handler=event_handler,
+                    ),
+                    max_rounds=self._tool_loop_rounds(route),
                     event_handler=event_handler if stream else None,
                 )
             else:
@@ -274,11 +375,21 @@ class AgentCore:
                 event_handler=event_handler,
             )
 
+        normalized_text = self._normalize_output(route, provider_response.text)
+        normalized_text = self._repair_structured_output(
+            provider,
+            system_prompt,
+            prompt,
+            route,
+            normalized_text,
+            provider_response.tool_events,
+            stream=stream,
+        )
         verification_result = self.verifier_registry.verify(
             prompt=prompt,
             route=route,
             task_class=route.task_class,
-            output=provider_response.text,
+            output=normalized_text,
             tool_events=provider_response.tool_events,
         )
         verification = {
@@ -300,7 +411,7 @@ class AgentCore:
         return self._finalize(
             session=session,
             prompt=prompt,
-            text=provider_response.text,
+            text=normalized_text,
             route=route,
             verification=verification,
             usage=provider_response.usage,

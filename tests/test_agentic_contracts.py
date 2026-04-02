@@ -362,7 +362,7 @@ SCENARIOS: list[Scenario] = [
     ),
     data_task(
         "data_sales_csv",
-        "analyze sales.csv and summarize the headers, sample rows, and revenue total",
+        "analyze data/sales.csv and summarize the headers, sample rows, and revenue total",
         step("inspect_spreadsheet", path="data/sales.csv"),
         step("read_sheet_range", path="data/sales.csv", start_row=1, max_rows=5),
         step(
@@ -378,7 +378,7 @@ SCENARIOS: list[Scenario] = [
     ),
     data_task(
         "data_users_csv",
-        "analyze users.csv and show the profile of the dataset",
+        "analyze data/users.csv and show the profile of the dataset",
         step("inspect_spreadsheet", path="data/users.csv"),
         step("read_sheet_range", path="data/users.csv", start_row=1, max_rows=5),
         step(
@@ -393,14 +393,14 @@ SCENARIOS: list[Scenario] = [
     ),
     data_task(
         "data_metrics_xlsx",
-        "inspect metrics.xlsx and compare the summary and regions sheets",
+        "inspect data/metrics.xlsx and compare the Summary and Regions sheets",
         step("inspect_spreadsheet", path="data/metrics.xlsx"),
         step("read_sheet_range", path="data/metrics.xlsx", sheet="Summary", start_row=1, max_rows=5),
         step("read_sheet_range", path="data/metrics.xlsx", sheet="Regions", start_row=1, max_rows=5),
     ),
     data_task(
         "data_inventory_csv",
-        "analyze inventory.csv and infer the stock profile",
+        "analyze data/inventory.csv and infer the stock profile",
         step("inspect_spreadsheet", path="data/inventory.csv"),
         step("read_sheet_range", path="data/inventory.csv", start_row=1, max_rows=5),
         step(
@@ -416,7 +416,7 @@ SCENARIOS: list[Scenario] = [
     ),
     data_task(
         "data_workbook_summary",
-        "inspect the spreadsheet workbook metrics.xlsx and summarize its sheet names and sample data",
+        "inspect the spreadsheet workbook data/metrics.xlsx and summarize its sheet names and sample data",
         step("inspect_spreadsheet", path="data/metrics.xlsx"),
         step("read_sheet_range", path="data/metrics.xlsx", sheet="Summary", start_row=1, max_rows=4),
         step(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Callable
 
 import httpx
@@ -90,9 +91,25 @@ class OpenAIChatProvider:
             return '"success": false' not in output.lower()
 
     def _post_chat(self, client: httpx.Client, payload: dict[str, Any]) -> dict[str, Any]:
-        response = client.post(f"{self.config.base_url}/chat/completions", json=payload)
-        response.raise_for_status()
-        return response.json()
+        attempts = 6
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                response = client.post(f"{self.config.base_url}/chat/completions", json=payload)
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                last_error = exc
+                if status < 500 or attempt == attempts - 1:
+                    raise
+            except httpx.HTTPError as exc:
+                last_error = exc
+                if attempt == attempts - 1:
+                    raise
+            time.sleep(min(0.5 * (2**attempt), 4.0))
+        assert last_error is not None
+        raise last_error
 
     def _forced_final_response(
         self,
@@ -103,29 +120,40 @@ class OpenAIChatProvider:
         tool_events: list[dict[str, Any]],
         event_handler: Callable[[dict[str, Any]], None] | None = None,
     ) -> ProviderResponse:
-        followup = [
-            *conversation,
-            {
-                "role": "user",
-                "content": (
-                    "Use the tool results already collected and answer the original request now. "
-                    "Do not call any more tools."
-                ),
-            },
+        prompts = [
+            "Use the tool results already collected and answer the original request now. Do not call any more tools.",
+            (
+                "Your previous reply was empty or incomplete. Produce the final answer now using only the tool "
+                "results already in the conversation. Do not call any more tools. If the user requested JSON or "
+                "structured output, return valid JSON directly with no prose or markdown."
+            ),
         ]
-        data = self._post_chat(
-            client,
-            {
-                "model": self.config.model,
-                "messages": followup,
-                "temperature": self.config.temperature,
-                "stream": False,
-            },
-        )
-        raw_rounds.append(data)
-        usage = data.get("usage") or usage
-        message = ((data.get("choices") or [{}])[0]).get("message") or {}
-        text = sanitize_assistant_text(self._extract_content(message)) or "Tool loop ended without a final assistant response."
+        text = ""
+        for prompt in prompts:
+            followup = [
+                *conversation,
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ]
+            data = self._post_chat(
+                client,
+                {
+                    "model": self.config.model,
+                    "messages": followup,
+                    "temperature": 0,
+                    "stream": False,
+                },
+            )
+            raw_rounds.append(data)
+            usage = data.get("usage") or usage
+            message = ((data.get("choices") or [{}])[0]).get("message") or {}
+            text = sanitize_assistant_text(self._extract_content(message))
+            if text:
+                break
+            conversation = followup
+        text = text or "Tool loop ended without a final assistant response."
         if event_handler and text:
             event_handler({"type": "assistant_chunk", "text": text})
         return ProviderResponse(
@@ -244,14 +272,16 @@ class OpenAIChatProvider:
                 tool_calls = message.get("tool_calls") or []
                 if not tool_calls:
                     text = sanitize_assistant_text(self._extract_content(message))
-                    if event_handler and text:
-                        event_handler({"type": "assistant_chunk", "text": text})
-                    return ProviderResponse(
-                        text=text,
-                        usage=usage,
-                        raw={"rounds": raw_rounds},
-                        tool_events=tool_events,
-                    )
+                    if text:
+                        if event_handler:
+                            event_handler({"type": "assistant_chunk", "text": text})
+                        return ProviderResponse(
+                            text=text,
+                            usage=usage,
+                            raw={"rounds": raw_rounds},
+                            tool_events=tool_events,
+                        )
+                    break
                 for call in tool_calls:
                     function = call.get("function") or {}
                     name = str(function.get("name", ""))

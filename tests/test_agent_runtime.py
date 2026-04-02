@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 
 from rocky.app import RockyRuntime
 from rocky.core.messages import Message
@@ -29,6 +30,75 @@ class _OkProvider:
                     "arguments": {"targets": ["python"]},
                     "text": "{}",
                     "success": True,
+                }
+            ],
+        )
+
+
+class _ExtractionProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        return ProviderResponse(
+            text='Done.\n```json\n{"rows": 2, "fields": ["name"]}\n```',
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "read_file",
+                    "arguments": {"path": "data/people.jsonl"},
+                    "text": "{}",
+                    "success": True,
+                }
+            ],
+        )
+
+
+class _RepairingExtractionProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+        self.complete_calls: list[list[Message]] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        return ProviderResponse(
+            text="I found 2 rows and the fields are name and role.",
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "run_python",
+                    "arguments": {"code": "print(...)"},
+                    "text": '{"success": true, "data": {"stdout": "{\\"rows\\": 2, \\"fields\\": [\\"name\\", \\"role\\"]}"}}',
+                    "success": True,
+                }
+            ],
+        )
+
+    def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
+        self.complete_calls.append(messages)
+        return ProviderResponse(text='{"rows": 2, "fields": ["name", "role"]}')
+
+
+class _HiddenToolProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        hidden = execute_tool("write_file", {"path": "oops.txt", "content": "nope"})
+        return ProviderResponse(
+            text="checked hidden tool",
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "write_file",
+                    "arguments": {"path": "oops.txt", "content": "nope"},
+                    "text": hidden,
+                    "success": False,
                 }
             ],
         )
@@ -153,3 +223,97 @@ def test_runtime_inspection_prompt_uses_tool_capable_provider(tmp_path: Path, mo
     assert len(provider.tool_calls) == 1
     tool_names = {tool["function"]["name"] for tool in provider.tool_calls[0]["tools"]}
     assert "inspect_runtime_versions" in tool_names
+
+
+def test_extraction_route_normalizes_json_fence_output(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _ExtractionProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt("normalize the people dataset into json", continue_session=False)
+
+    assert response.text == '{"rows": 2, "fields": ["name"]}'
+    assert response.verification["status"] == "pass"
+
+
+def test_extraction_route_repairs_prose_into_json_with_provider(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _RepairingExtractionProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt("normalize the people dataset into json", continue_session=False)
+
+    assert response.text == '{"rows": 2, "fields": ["name", "role"]}'
+    assert response.verification["status"] == "pass"
+    assert len(provider.complete_calls) == 1
+
+
+def test_automation_route_gets_more_tool_rounds(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _OkProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    runtime.run_prompt("create a repeatable cleanup script and verify it", continue_session=False)
+
+    assert provider.tool_calls[0]["max_rounds"] == 12
+
+
+def test_extraction_route_gets_extended_tool_rounds(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _ExtractionProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    runtime.run_prompt("normalize the people dataset into json", continue_session=False)
+
+    assert provider.tool_calls[0]["max_rounds"] == 8
+
+
+def test_runtime_refuses_unexposed_tools_from_provider(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _HiddenToolProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt("what python versions do i have", continue_session=False)
+
+    assert response.verification["status"] == "fail"
+    tool_result = response.trace["tool_events"][0]
+    assert tool_result["name"] == "write_file"
+    assert "\"tool_not_exposed\"" in tool_result["text"]
+
+
+def test_runtime_recreates_internal_state_dirs_if_deleted_mid_run(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    provider = _OkProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    shutil.rmtree(runtime.sessions.sessions_dir)
+    shutil.rmtree(runtime.agent.traces_dir)
+
+    response = runtime.run_prompt("hello", continue_session=False)
+
+    assert response.text == "ok"
+    assert runtime.sessions.sessions_dir.exists()
+    assert runtime.agent.traces_dir.exists()
+    assert Path(response.trace["trace_path"]).exists()
