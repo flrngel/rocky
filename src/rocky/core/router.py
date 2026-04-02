@@ -114,6 +114,7 @@ class Router:
         'shell history',
         'last history',
         'last command',
+        'latest shell command',
         'command history',
         'what shell am i using',
         'what shell am i',
@@ -125,6 +126,9 @@ class Router:
         'environment variable',
     )
     SHELL_INFO_TOKENS = ('history', 'pwd', 'whoami', '$shell', '$home')
+
+    def _tokens(self, lowered: str) -> set[str]:
+        return set(re.findall(r"[a-z0-9_.+-]+", lowered))
 
     def _looks_like_shell_task(self, text: str, lowered: str) -> bool:
         has_fenced_shell = bool(self.SHELL_FENCE_RE.search(text))
@@ -157,8 +161,6 @@ class Router:
                 'class',
                 'implement',
                 'implemented',
-                'source',
-                'path',
                 'line',
             )
         ):
@@ -173,7 +175,8 @@ class Router:
         )
 
     def _looks_like_repo_task(self, lowered: str) -> bool:
-        return any(word in lowered for word in ['test', 'repo', 'code', 'bug', 'refactor', 'git', 'file', 'directory', 'module']) or any(
+        tokens = self._tokens(lowered)
+        return bool(tokens & {'test', 'repo', 'code', 'bug', 'refactor', 'git', 'file', 'directory', 'module'}) or any(
             hint in lowered for hint in self.PATH_HINTS
         )
 
@@ -223,6 +226,20 @@ class Router:
             return False
         return bool(self.extract_runtime_targets(prompt))
 
+    def _looks_like_research_task(self, lowered: str, prompt: str) -> bool:
+        if self._looks_like_repo_task(lowered):
+            return False
+        if self._looks_like_shell_inspection_task(lowered):
+            return False
+        if self._looks_like_runtime_inspection_task(prompt):
+            return False
+        tokens = self._tokens(lowered)
+        if 'compare sources' in lowered:
+            return True
+        if tokens & {'forecast', 'probability', 'market', 'weather', 'research'}:
+            return True
+        return 'latest' in tokens and bool(tokens & {'news', 'price', 'prices', 'market', 'weather'})
+
     def _looks_like_meta_request(self, lowered: str) -> bool:
         if lowered in self.META_EXACT:
             return True
@@ -269,15 +286,6 @@ class Router:
         if any(word in lowered for word in ['spreadsheet', 'excel', '.xlsx', '.csv', 'dataframe', 'analyze sheet']):
             lane = Lane.DEEP if len(text) > 120 else Lane.STANDARD
             return RouteDecision(lane, TaskClass.DATA, 'medium', 'Structured data task', ['filesystem', 'data', 'python'], 'data/spreadsheet/analysis')
-        if self._looks_like_runtime_inspection_task(text):
-            return RouteDecision(
-                Lane.STANDARD,
-                TaskClass.REPO,
-                'medium',
-                'Local runtime or installed software inspection request',
-                ['shell'],
-                'local/runtime_inspection',
-            )
         if self._looks_like_shell_task(text, lowered):
             lane = Lane.DEEP if len(text) > 180 else Lane.STANDARD
             return RouteDecision(
@@ -287,6 +295,15 @@ class Router:
                 'Explicit shell command or execution request',
                 ['filesystem', 'shell', 'python', 'git'],
                 'repo/shell_execution',
+            )
+        if self._looks_like_runtime_inspection_task(text):
+            return RouteDecision(
+                Lane.STANDARD,
+                TaskClass.REPO,
+                'medium',
+                'Local runtime or installed software inspection request',
+                ['shell'],
+                'local/runtime_inspection',
             )
         if self._looks_like_shell_inspection_task(lowered):
             lane = Lane.DEEP if len(text) > 120 else Lane.STANDARD
@@ -300,7 +317,7 @@ class Router:
             )
         if any(word in lowered for word in ['crawl', 'website', 'browser', 'click', 'scrape', 'site']):
             return RouteDecision(Lane.STANDARD, TaskClass.SITE, 'medium', 'Site/browser task', ['web', 'browser', 'filesystem'], 'site/understanding/general')
-        if any(word in lowered for word in ['compare sources', 'compare', 'forecast', 'probability', 'market', 'weather', 'latest', 'research']):
+        if self._looks_like_research_task(lowered, text):
             return RouteDecision(Lane.STANDARD, TaskClass.RESEARCH, 'medium', 'Research or live-source task', ['web', 'browser'], 'research/live_compare/general')
         if any(word in lowered for word in ['extract', 'normalize', 'classify', 'label', 'schema', 'json']):
             return RouteDecision(Lane.STANDARD, TaskClass.EXTRACTION, 'low', 'Extraction or structured-output task', ['filesystem', 'python', 'data'], 'extract/general')

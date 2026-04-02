@@ -78,3 +78,28 @@ def test_router_detects_runtime_version_questions_with_system_wording() -> None:
 
     assert node_route.task_signature == 'local/runtime_inspection'
     assert ruby_route.task_signature == 'local/runtime_inspection'
+
+
+def test_router_prefers_explicit_commands_over_runtime_inference() -> None:
+    router = Router()
+
+    route = router.route('run python3 --version and which python3, then inspect python3 runtime variants')
+
+    assert route.task_signature == 'repo/shell_execution'
+
+
+def test_router_does_not_treat_latest_shell_command_as_research() -> None:
+    router = Router()
+
+    route = router.route('what environment values do USER HOME SHELL have and what was my latest shell command')
+
+    assert route.task_signature == 'repo/shell_inspection'
+
+
+def test_router_does_not_treat_report_as_repo_keyword() -> None:
+    router = Router()
+
+    route = router.route('build a repeatable sales report script and run it')
+
+    assert route.task_class == TaskClass.AUTOMATION
+    assert route.task_signature == 'automation/general'

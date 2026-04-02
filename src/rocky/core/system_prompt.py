@@ -15,6 +15,9 @@ def build_system_prompt(context: ContextPackage, mode: str, user_prompt: str = "
         parts.append(
             "When relevant tools are exposed, prefer executing the work over describing how you would do it."
         )
+        parts.append(
+            "For multi-step tasks, decompose the request into enough tool calls to gather evidence for every requested claim. After each tool result, decide whether another tool is needed before answering."
+        )
     if any(family in context.tool_families for family in ("filesystem", "git")):
         parts.append(
             "For repo, file, or git questions, inspect the workspace first with file or git tools before answering."
