@@ -103,3 +103,29 @@ def test_router_does_not_treat_report_as_repo_keyword() -> None:
 
     assert route.task_class == TaskClass.AUTOMATION
     assert route.task_signature == 'automation/general'
+
+
+def test_router_prefers_automation_for_empty_workspace_python_project() -> None:
+    router = Router()
+
+    route = router.route(
+        'Build a tiny Python script project in this empty workspace. '
+        'Create exactly these files: input.txt, main.py, and README.md. '
+        'Then run python3 main.py to verify it works.'
+    )
+
+    assert route.task_class == TaskClass.AUTOMATION
+    assert route.task_signature == 'automation/general'
+
+
+def test_router_prefers_automation_for_empty_workspace_csv_project() -> None:
+    router = Router()
+
+    route = router.route(
+        'Build a tiny shell script project in this empty workspace. '
+        'Create exactly these files: sales.csv, report.sh, and README.md. '
+        'Then run sh report.sh to verify it works and tell me the exact output.'
+    )
+
+    assert route.task_class == TaskClass.AUTOMATION
+    assert route.task_signature == 'automation/general'

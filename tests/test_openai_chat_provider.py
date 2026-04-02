@@ -165,6 +165,67 @@ def test_run_with_tools_retries_forced_final_when_first_reply_is_empty() -> None
     assert fake_client.calls[2]["json"]["temperature"] == 0
 
 
+def test_run_with_tools_falls_back_to_tool_summary_when_forced_final_stays_empty() -> None:
+    provider = OpenAIChatProvider(ProviderConfig(name="ollama"))
+    fake_client = _FakeClient(
+        [
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "function": {
+                                        "name": "write_file",
+                                        "arguments": json.dumps({"path": "report.sh", "content": "echo ok"}),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            {
+                "choices": [{"message": {"content": ""}}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+            },
+            {
+                "choices": [{"message": {"content": ""}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 3, "total_tokens": 6},
+            },
+        ]
+    )
+    provider._client = lambda: fake_client  # type: ignore[method-assign]
+
+    response = provider.run_with_tools(
+        system_prompt="You are Rocky.",
+        messages=[Message(role="user", content="create and verify the script")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write file",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        execute_tool=lambda name, arguments: json.dumps(
+            {
+                "success": True,
+                "data": {"path": "report.sh", "command": "sh report.sh", "stdout": "ok\n"},
+            }
+        ),
+        max_rounds=1,
+    )
+
+    assert "Completed the requested file changes: `report.sh`." in response.text
+    assert response.raw["forced_final"] is True
+
+
 def test_run_with_tools_strips_internal_tool_citation_markers() -> None:
     provider = OpenAIChatProvider(ProviderConfig(name="ollama"))
     fake_client = _FakeClient(

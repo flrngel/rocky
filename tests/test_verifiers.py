@@ -223,3 +223,30 @@ def test_verifier_accepts_recovered_automation_shell_retries() -> None:
     )
 
     assert result.status == "pass"
+
+
+def test_verifier_accepts_recovered_automation_after_intermediate_tool_failure() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.AUTOMATION,
+        risk="medium",
+        reasoning="Automation task",
+        tool_families=["filesystem", "shell", "python"],
+        task_signature="automation/general",
+    )
+
+    result = verifier.verify(
+        prompt="build a tiny shell script project in this empty workspace and tell me the exact output",
+        route=route,
+        task_class=route.task_class,
+        output="Done. `sh report.sh` printed `360`.",
+        tool_events=[
+            {"type": "tool_result", "name": "write_file", "success": True},
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+            {"type": "tool_result", "name": "write_file", "success": False},
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+        ],
+    )
+
+    assert result.status == "pass"

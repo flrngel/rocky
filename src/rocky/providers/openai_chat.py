@@ -111,6 +111,54 @@ class OpenAIChatProvider:
         assert last_error is not None
         raise last_error
 
+    def _tool_summary_fallback(self, tool_events: list[dict[str, Any]]) -> str:
+        successful_results = [
+            event
+            for event in tool_events
+            if event.get("type") == "tool_result" and event.get("success", True)
+        ]
+        if not successful_results:
+            return ""
+
+        created_paths: list[str] = []
+        for event in successful_results:
+            if event.get("name") != "write_file":
+                continue
+            try:
+                payload = json.loads(str(event.get("text", "")))
+            except Exception:
+                continue
+            data = payload.get("data") or {}
+            path = str(data.get("path", "")).strip()
+            if path and path not in created_paths:
+                created_paths.append(path)
+
+        last = successful_results[-1]
+        try:
+            payload = json.loads(str(last.get("text", "")))
+        except Exception:
+            payload = {}
+        data = payload.get("data") if isinstance(payload, dict) else {}
+        lines: list[str] = []
+        if created_paths:
+            joined = ", ".join(f"`{path}`" for path in created_paths[:5])
+            lines.append(f"Completed the requested file changes: {joined}.")
+        if last.get("name") == "run_shell_command" and isinstance(data, dict):
+            command = str(data.get("command", "")).strip()
+            stdout = str(data.get("stdout", "")).strip()
+            stderr = str(data.get("stderr", "")).strip()
+            if command:
+                lines.append(f"Verified with `{command}`.")
+            if stdout:
+                lines.append(f"Output:\n```text\n{stdout[:2000]}\n```")
+            elif stderr:
+                lines.append(f"Command stderr:\n```text\n{stderr[:2000]}\n```")
+        elif last.get("name") == "read_file" and isinstance(data, dict):
+            path = str(data.get("path", "")).strip()
+            if path:
+                lines.append(f"Verified the resulting file `{path}`.")
+        return "\n\n".join(lines).strip()
+
     def _forced_final_response(
         self,
         client: httpx.Client,
@@ -153,7 +201,7 @@ class OpenAIChatProvider:
             if text:
                 break
             conversation = followup
-        text = text or "Tool loop ended without a final assistant response."
+        text = text or self._tool_summary_fallback(tool_events) or "Tool loop ended without a final assistant response."
         if event_handler and text:
             event_handler({"type": "assistant_chunk", "text": text})
         return ProviderResponse(

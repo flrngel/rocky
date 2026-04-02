@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
+from pathlib import Path
+import subprocess
 
 import pytest
 
 from rocky.app import RockyRuntime
+from rocky.core.router import TaskClass
 from test_agentic_contracts import SCENARIOS, Scenario, _prepare_workspace
 
 
@@ -36,6 +40,68 @@ def _live_cli_overrides() -> dict[str, object]:
     }
 
 
+@dataclass(frozen=True)
+class MiniProjectScenario:
+    name: str
+    prompt: str
+    expected_files: tuple[str, ...]
+    verify_command: tuple[str, ...]
+    expected_output: object
+    output_kind: str = "text"
+    response_snippets: tuple[str, ...] = ()
+
+
+PHASE4_MINI_PROJECTS: tuple[MiniProjectScenario, ...] = (
+    MiniProjectScenario(
+        name="python_wordcount_cli",
+        prompt=(
+            "Build a tiny Python script project in this empty workspace. "
+            "Create exactly these files: "
+            "`input.txt` with exactly two lines `rocky builds tools` and `tools build trust`, "
+            "`main.py` that reads `input.txt` and prints valid JSON with keys `line_count` and `word_count`, "
+            "and `README.md` with one short usage example. "
+            "Then run `python3 main.py` to verify it works and tell me the exact JSON output."
+        ),
+        expected_files=("input.txt", "main.py", "README.md"),
+        verify_command=("python3", "main.py"),
+        expected_output={"line_count": 2, "word_count": 6},
+        output_kind="json",
+        response_snippets=("line_count", "word_count", "6"),
+    ),
+    MiniProjectScenario(
+        name="shell_sales_report",
+        prompt=(
+            "Build a tiny shell script project in this empty workspace. "
+            "Create exactly these files: "
+            "`sales.csv` with header `month,revenue` and rows `jan,100`, `feb,120`, and `mar,140`, "
+            "`report.sh` that prints only the total revenue from `sales.csv`, "
+            "and `README.md` with one short usage example. "
+            "Then run `sh report.sh` to verify it works and tell me the exact output."
+        ),
+        expected_files=("sales.csv", "report.sh", "README.md"),
+        verify_command=("sh", "report.sh"),
+        expected_output="360",
+        response_snippets=("360", "report.sh"),
+    ),
+    MiniProjectScenario(
+        name="python_email_extract",
+        prompt=(
+            "Build a tiny Python script project in this empty workspace. "
+            "Create exactly these files: "
+            "`notes.txt` with exactly two lines containing `ada@example.com` and `bob@example.org`, "
+            "`extract.py` that reads `notes.txt` and prints valid JSON with a single key `emails` whose value is a sorted array, "
+            "and `README.md` with one short usage example. "
+            "Then run `python3 extract.py` to verify it works and tell me the exact JSON output."
+        ),
+        expected_files=("notes.txt", "extract.py", "README.md"),
+        verify_command=("python3", "extract.py"),
+        expected_output={"emails": ["ada@example.com", "bob@example.org"]},
+        output_kind="json",
+        response_snippets=("ada@example.com", "bob@example.org", "emails"),
+    ),
+)
+
+
 def _tool_result_events(response, *, successes_only: bool = False) -> list[dict]:
     events = [
         event
@@ -61,6 +127,19 @@ def _strip_fences(text: str) -> str:
     if lines and lines[-1].startswith("```"):
         lines = lines[:-1]
     return "\n".join(lines).strip()
+
+
+def _prepare_clean_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.setenv("USER", "rockytester")
+    return workspace
 
 
 def _phase1_anchor_tools(scenario: Scenario) -> set[str]:
@@ -249,3 +328,66 @@ def test_live_llm_phase2_step2_3_verification(live_run) -> None:
 def test_live_llm_phase3_multi_step_verification(live_run) -> None:
     scenario, response = live_run
     _assert_phase3_behavior(scenario, response)
+
+
+@pytest.fixture(
+    scope="session",
+    params=PHASE4_MINI_PROJECTS,
+    ids=[scenario.name for scenario in PHASE4_MINI_PROJECTS],
+)
+def live_phase4_run(
+    request: pytest.FixtureRequest,
+    tmp_path_factory: pytest.TempPathFactory,
+):
+    scenario: MiniProjectScenario = request.param
+    tmp_path = tmp_path_factory.mktemp(f"live_phase4_{scenario.name}")
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        workspace = _prepare_clean_workspace(tmp_path, monkeypatch)
+        runtime = RockyRuntime.load_from(workspace, cli_overrides=_live_cli_overrides())
+        runtime.permissions.config.mode = "bypass"
+        response = runtime.run_prompt(scenario.prompt, continue_session=False)
+        return scenario, response, workspace
+    finally:
+        monkeypatch.undo()
+
+
+def test_live_llm_phase4_mini_project_agentic_verification(live_phase4_run) -> None:
+    scenario, response, workspace = live_phase4_run
+    trace_path = response.trace.get("trace_path", "unknown-trace")
+    successful_names = _tool_result_names(response, successes_only=True)
+
+    assert response.route.task_class == TaskClass.AUTOMATION, trace_path
+    assert response.route.task_signature == "automation/general", trace_path
+    assert response.trace["provider"] == "OpenAIChatProvider", trace_path
+    assert response.verification["status"] == "pass", trace_path
+    assert "Provider request failed:" not in response.text, trace_path
+    assert "Tool loop ended without a final assistant response." not in response.text, trace_path
+    assert len(successful_names) >= 3, trace_path
+    assert "write_file" in successful_names, trace_path
+    assert "run_shell_command" in successful_names, trace_path
+
+    for relative_path in scenario.expected_files:
+        assert (workspace / relative_path).is_file(), f"missing {relative_path}; trace={trace_path}"
+
+
+def test_live_llm_phase4_mini_project_outputs(live_phase4_run) -> None:
+    scenario, response, workspace = live_phase4_run
+    trace_path = response.trace.get("trace_path", "unknown-trace")
+
+    result = subprocess.run(
+        list(scenario.verify_command),
+        cwd=str(workspace),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    stdout = result.stdout.strip()
+
+    if scenario.output_kind == "json":
+        assert json.loads(stdout) == scenario.expected_output, trace_path
+    else:
+        assert stdout == scenario.expected_output, trace_path
+
+    for snippet in scenario.response_snippets:
+        assert snippet in response.text, f"missing snippet {snippet!r}; trace={trace_path}"

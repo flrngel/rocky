@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -9,7 +10,7 @@ from rocky.core.messages import Message
 from rocky.core.permissions import PermissionDenied
 from rocky.core.router import Lane, RouteDecision, Router
 from rocky.core.system_prompt import build_system_prompt
-from rocky.core.verifiers import VerifierRegistry
+from rocky.core.verifiers import VerificationResult, VerifierRegistry
 from rocky.learning.manager import LearningManager
 from rocky.providers.base import ProviderResponse
 from rocky.providers.registry import ProviderRegistry
@@ -296,12 +297,101 @@ class AgentCore:
                 "Start with `inspect_runtime_versions`, then confirm paths or versions with a shell inspection step "
                 "before answering."
             )
+        elif route.task_signature == "automation/general":
+            route_hint = (
+                "Compare the verified command output against the user's requested behavior, sample data, "
+                "and any required JSON shape. If the observed output is wrong or incomplete, edit the files "
+                "and rerun verification until the observed output matches."
+            )
         return (
             f"Original task:\n{prompt}\n\n"
             f"Your previous attempt did not pass verification:\n{verification_message}\n\n"
             f"{route_hint}\n"
             "Continue the task now, use more tools if needed, and return the corrected final answer."
         )
+
+    def _should_judge_automation_output(
+        self,
+        route: RouteDecision,
+        prompt: str,
+        tool_events: list[dict[str, Any]],
+        *,
+        stream: bool,
+    ) -> bool:
+        if stream or route.task_signature != "automation/general":
+            return False
+        lowered = prompt.lower()
+        if not any(
+            phrase in lowered
+            for phrase in (
+                "exact output",
+                "exact json output",
+                "valid json output",
+                "prints valid json",
+            )
+        ):
+            return False
+        return any(
+            event.get("type") == "tool_result"
+            and event.get("name") == "run_shell_command"
+            and event.get("success", True)
+            for event in tool_events
+        )
+
+    def _judge_automation_output(
+        self,
+        provider,
+        prompt: str,
+        tool_events: list[dict[str, Any]],
+    ) -> VerificationResult:
+        shell_results = [
+            event
+            for event in tool_events
+            if event.get("type") == "tool_result"
+            and event.get("name") == "run_shell_command"
+            and event.get("success", True)
+        ]
+        if not shell_results:
+            return VerificationResult("automation_output_judge_v1", "pass", "")
+        evidence = "\n\n".join(
+            f"Shell result {index}:\n{event.get('text', '')}"
+            for index, event in enumerate(shell_results[-2:], start=1)
+        )
+        judge_prompt = (
+            f"Original task:\n{prompt}\n\n"
+            "Observed successful shell verification output(s):\n"
+            f"{evidence}\n\n"
+            "Decide whether the observed output satisfies the task exactly. "
+            "Use any explicit sample data, requested calculations, and required JSON shape from the task. "
+            "Return JSON only in the form "
+            '{"status":"pass"|"fail","reason":"short reason"}'
+            ". Mark it fail when the observed output clearly contradicts the task."
+        )
+        try:
+            response = provider.complete(
+                system_prompt="You verify whether a built local project's observed output satisfies the user's task exactly. Return JSON only.",
+                messages=[Message(role="user", content=judge_prompt)],
+                stream=False,
+                event_handler=None,
+            )
+        except Exception:
+            return VerificationResult("automation_output_judge_v1", "pass", "")
+        candidate = extract_json_candidate(response.text)
+        if not candidate:
+            return VerificationResult("automation_output_judge_v1", "pass", "")
+        try:
+            payload = json.loads(candidate)
+        except Exception:
+            return VerificationResult("automation_output_judge_v1", "pass", "")
+        status = str(payload.get("status", "pass")).lower()
+        reason = str(payload.get("reason", "")).strip()
+        if status == "fail":
+            return VerificationResult(
+                "automation_output_judge_v1",
+                "fail",
+                reason or "Observed automation output did not satisfy the task exactly",
+            )
+        return VerificationResult("automation_output_judge_v1", "pass", reason)
 
     def _retry_after_verification_failure(
         self,
@@ -467,6 +557,17 @@ class AgentCore:
             output=normalized_text,
             tool_events=provider_response.tool_events,
         )
+        if verification_result.status == "pass" and self._should_judge_automation_output(
+            route,
+            prompt,
+            provider_response.tool_events,
+            stream=stream,
+        ):
+            verification_result = self._judge_automation_output(
+                provider,
+                prompt,
+                provider_response.tool_events,
+            )
         if route.tool_families and verification_result.status == "fail":
             for _ in range(2):
                 retry_response = self._retry_after_verification_failure(
@@ -507,6 +608,17 @@ class AgentCore:
                     output=normalized_text,
                     tool_events=provider_response.tool_events,
                 )
+                if verification_result.status == "pass" and self._should_judge_automation_output(
+                    route,
+                    prompt,
+                    provider_response.tool_events,
+                    stream=stream,
+                ):
+                    verification_result = self._judge_automation_output(
+                        provider,
+                        prompt,
+                        provider_response.tool_events,
+                    )
                 if verification_result.status != "fail":
                     break
         verification = {

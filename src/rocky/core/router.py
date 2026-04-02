@@ -126,6 +126,36 @@ class Router:
         'environment variable',
     )
     SHELL_INFO_TOKENS = ('history', 'pwd', 'whoami', '$shell', '$home')
+    BUILD_VERBS = ('build', 'create', 'write', 'make', 'scaffold', 'bootstrap', 'generate')
+    BUILD_TARGET_HINTS = (
+        'mini project',
+        'small project',
+        'tiny project',
+        'script project',
+        'cli project',
+        'empty workspace',
+        'empty directory',
+        'from scratch',
+        'create exactly these files',
+        'create these files',
+        'write these files',
+    )
+    BUILD_ARTIFACT_HINTS = (
+        '.py',
+        '.sh',
+        '.md',
+        '.txt',
+        '.json',
+        '.jsonl',
+        '.csv',
+        'readme',
+        'script',
+        'project',
+        'cli',
+        'app',
+        'tool',
+        'utility',
+    )
 
     def _tokens(self, lowered: str) -> set[str]:
         return set(re.findall(r"[a-z0-9_.+-]+", lowered))
@@ -226,6 +256,27 @@ class Router:
             return False
         return bool(self.extract_runtime_targets(prompt))
 
+    def _looks_like_build_automation_task(self, lowered: str) -> bool:
+        has_build_verb = any(
+            re.search(rf"\b{re.escape(verb)}\b", lowered)
+            for verb in self.BUILD_VERBS
+        )
+        if not has_build_verb:
+            return False
+        if not any(hint in lowered for hint in self.BUILD_TARGET_HINTS):
+            return False
+        return any(hint in lowered for hint in self.BUILD_ARTIFACT_HINTS) or any(
+            phrase in lowered
+            for phrase in (
+                'then run',
+                'verify it works',
+                'verify it',
+                'run it',
+                'exact output',
+                'usage example',
+            )
+        )
+
     def _looks_like_research_task(self, lowered: str, prompt: str) -> bool:
         if self._looks_like_repo_task(lowered):
             return False
@@ -282,6 +333,16 @@ class Router:
                 reasoning='Deterministic runtime/meta question',
                 tool_families=[],
                 task_signature='meta/runtime',
+            )
+        if self._looks_like_build_automation_task(lowered):
+            lane = Lane.DEEP if len(text) > 180 else Lane.STANDARD
+            return RouteDecision(
+                lane,
+                TaskClass.AUTOMATION,
+                'medium',
+                'Workspace build or scaffold request that should create files and verify them',
+                ['filesystem', 'shell', 'python'],
+                'automation/general',
             )
         if any(word in lowered for word in ['spreadsheet', 'excel', '.xlsx', '.csv', 'dataframe', 'analyze sheet']):
             lane = Lane.DEEP if len(text) > 120 else Lane.STANDARD

@@ -186,17 +186,26 @@ class VerifierRegistry:
             for event in tool_events
             if event.get("type") == "tool_result" and not event.get("success", True)
         ]
-        if (
-            failures
-            and route.task_signature == "automation/general"
-            and all(item.get("name") == "run_shell_command" for item in failures)
-        ):
+        if failures and route.task_signature == "automation/general":
             successful_names = {
                 event.get("name")
                 for event in tool_events
                 if event.get("type") == "tool_result" and event.get("success", True)
             }
-            if "run_shell_command" in successful_names and "write_file" in successful_names:
+            last_failure_index = max(
+                index
+                for index, event in enumerate(tool_events)
+                if event.get("type") == "tool_result" and not event.get("success", True)
+            )
+            successful_names_after_failure = {
+                event.get("name")
+                for event in tool_events[last_failure_index + 1 :]
+                if event.get("type") == "tool_result" and event.get("success", True)
+            }
+            if (
+                "run_shell_command" in successful_names_after_failure
+                and successful_names & {"write_file", "run_shell_command"}
+            ):
                 return VerificationResult(
                     "tool_failure_v1",
                     "pass",

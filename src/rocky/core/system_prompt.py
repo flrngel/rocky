@@ -83,6 +83,9 @@ def build_system_prompt(
         parts.append(
             "For automation tasks, write or edit the script first, then verify it with `run_shell_command` before answering. Keep the script path inside the workspace, not in `/tmp` or `/workspace`. Do not probe the environment or run verification commands before the file exists, and do not stop after only describing the file. Never modify or remove internal hidden directories such as `.rocky` or `.git` unless the user explicitly asked for that."
         )
+        parts.append(
+            "If the user asks you to build a tiny project or scaffold files in an empty workspace, create every requested file inside the workspace, then run the project or script to verify it before answering. Do not stop after creating only part of the project or after describing what you would do."
+        )
     if not context.tool_families:
         parts.append(
             "Never imply that you executed commands, read files, or browsed the web unless a tool actually did it."

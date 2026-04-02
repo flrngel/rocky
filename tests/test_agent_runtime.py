@@ -153,6 +153,73 @@ class _RepairingToolExpectationProvider:
         )
 
 
+class _AutomationOutputRepairProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+        self.complete_calls: list[list[Message]] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        if len(self.tool_calls) == 1:
+            return ProviderResponse(
+                text="Done. Created the files and `sh report.sh` printed `220`.",
+                raw={"rounds": ["initial"]},
+                tool_events=[
+                    {
+                        "type": "tool_result",
+                        "name": "write_file",
+                        "arguments": {"path": "sales.csv"},
+                        "text": "{}",
+                        "success": True,
+                    },
+                    {
+                        "type": "tool_result",
+                        "name": "write_file",
+                        "arguments": {"path": "report.sh"},
+                        "text": "{}",
+                        "success": True,
+                    },
+                    {
+                        "type": "tool_result",
+                        "name": "run_shell_command",
+                        "arguments": {"command": "sh report.sh"},
+                        "text": '{"success": true, "data": {"stdout": "220\\n", "stderr": "", "returncode": 0}}',
+                        "success": True,
+                    },
+                ],
+            )
+        return ProviderResponse(
+            text="Done. Created the files and `sh report.sh` printed `360`.",
+            raw={"rounds": ["retry"]},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "write_file",
+                    "arguments": {"path": "report.sh"},
+                    "text": "{}",
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "sh report.sh"},
+                    "text": '{"success": true, "data": {"stdout": "360\\n", "stderr": "", "returncode": 0}}',
+                    "success": True,
+                },
+            ],
+        )
+
+    def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
+        self.complete_calls.append(messages)
+        if len(self.complete_calls) == 1:
+            return ProviderResponse(
+                text='{"status":"fail","reason":"The observed total should be 360, not 220."}'
+            )
+        return ProviderResponse(
+            text='{"status":"pass","reason":"The observed total matches the requested output."}'
+        )
+
+
 class _FailingProvider:
     def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
         raise RuntimeError("provider offline")
@@ -388,3 +455,27 @@ def test_runtime_retries_tool_loop_after_verification_failure(tmp_path: Path) ->
     retried_messages = provider.tool_calls[1]["messages"]
     assert retried_messages[-1].role == "user"
     assert "did not pass verification" in str(retried_messages[-1].content)
+
+
+def test_runtime_retries_automation_when_judged_output_is_wrong(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _AutomationOutputRepairProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt(
+        "Build a tiny shell script project in this empty workspace. "
+        "Create exactly these files: sales.csv, report.sh, and README.md. "
+        "Then run sh report.sh to verify it works and tell me the exact output.",
+        continue_session=False,
+    )
+
+    assert response.verification["status"] == "pass"
+    assert len(provider.tool_calls) == 2
+    assert len(provider.complete_calls) == 2
+    retried_messages = provider.tool_calls[1]["messages"]
+    assert retried_messages[-1].role == "user"
+    assert "360" in str(retried_messages[-1].content)
