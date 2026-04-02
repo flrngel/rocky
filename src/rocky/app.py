@@ -163,6 +163,17 @@ class RockyRuntime:
 
     def meta_answer(self, prompt: str) -> str:
         lowered = prompt.lower()
+        if "provider" in lowered or "model" in lowered:
+            provider_name = self.config.active_provider
+            provider = self.config.provider(provider_name)
+            return dump_yaml(
+                {
+                    "active_provider": provider_name,
+                    "model": provider.model,
+                    "base_url": provider.base_url,
+                    "style": provider.style,
+                }
+            )
         if "tool" in lowered:
             return dump_yaml({"tools": self.tool_registry.list_tools()})
         if "skill" in lowered:

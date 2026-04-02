@@ -4,6 +4,7 @@ import json
 
 from rocky.config.models import ProviderConfig
 from rocky.core.messages import Message
+from rocky.providers.base import sanitize_assistant_text
 from rocky.providers.openai_chat import OpenAIChatProvider
 
 
@@ -92,3 +93,36 @@ def test_run_with_tools_forces_final_answer_after_tool_loop() -> None:
     assert response.raw["forced_final"] is True
     assert "tools" in fake_client.calls[0]["json"]
     assert "tools" not in fake_client.calls[1]["json"]
+
+
+def test_run_with_tools_strips_internal_tool_citation_markers() -> None:
+    provider = OpenAIChatProvider(ProviderConfig(name="ollama"))
+    fake_client = _FakeClient(
+        [
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Implemented in `src/rocky/tools/shell.py`【grep_files†data[0].line】",
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        ]
+    )
+    provider._client = lambda: fake_client  # type: ignore[method-assign]
+
+    response = provider.run_with_tools(
+        system_prompt="You are Rocky.",
+        messages=[Message(role="user", content="where is this implemented?")],
+        tools=[],
+        execute_tool=lambda name, arguments: "",
+        max_rounds=1,
+    )
+
+    assert response.text == "Implemented in `src/rocky/tools/shell.py`"
+
+
+def test_sanitize_assistant_text_can_preserve_stream_chunk_spacing() -> None:
+    assert sanitize_assistant_text(" Hello ", strip=False) == " Hello "

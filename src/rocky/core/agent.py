@@ -57,6 +57,21 @@ class AgentCore:
         self.last_trace: dict[str, Any] | None = None
         self.last_context: dict[str, Any] | None = None
 
+    def _wants_prior_turn_context(self, prompt: str) -> bool:
+        lowered = prompt.lower()
+        return any(
+            phrase in lowered
+            for phrase in (
+                "previous question",
+                "previous message",
+                "previous prompt",
+                "what did i just ask",
+                "what was my last question",
+                "what did you just say",
+                "what was my earlier question",
+            )
+        )
+
     def _trace_path(self) -> Path:
         stamp = utc_iso().replace(":", "").replace("-", "")
         return self.traces_dir / f"trace_{stamp}.json"
@@ -203,6 +218,25 @@ class AgentCore:
         self.last_context = context_summary
         system_prompt = build_system_prompt(context, self.permissions.config.mode, prompt)
         recent_messages = session.recent_messages(limit=12) if continue_session else []
+        if not recent_messages and self._wants_prior_turn_context(prompt):
+            text = "I don't have any earlier turn context in this run, so I can't tell what your previous question was."
+            if stream and event_handler:
+                event_handler({"type": "assistant_chunk", "text": text})
+            verification = {
+                "name": "context_boundary_v1",
+                "status": "pass",
+                "message": "Answered from the available conversation boundary",
+            }
+            trace = {
+                "route": asdict(route),
+                "selected_tools": [],
+                "selected_skills": [],
+                "provider": "deterministic",
+                "verification": verification,
+                "tool_events": [],
+                "context": context_summary,
+            }
+            return self._finalize(session, prompt, text, route, verification, {}, trace)
         messages = [*recent_messages, Message(role="user", content=prompt)]
         provider = self.provider_registry.provider_for_task(needs_tools=bool(route.tool_families))
         selected_tools = [tool.name for tool in self.tool_registry.select(route.tool_families)]

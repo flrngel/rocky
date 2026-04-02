@@ -30,3 +30,31 @@ def test_router_detects_shell_inspection_requests() -> None:
     assert route.task_class == TaskClass.REPO
     assert route.task_signature == 'repo/shell_inspection'
     assert route.tool_families == ['shell', 'filesystem']
+
+
+def test_router_prefers_repo_route_for_git_status_question() -> None:
+    router = Router()
+
+    route = router.route('in this repo, show current git status and last commit message')
+
+    assert route.task_class == TaskClass.REPO
+    assert route.task_signature == 'repo/general'
+    assert 'git' in route.tool_families
+
+
+def test_router_prefers_repo_route_for_shell_history_code_lookup() -> None:
+    router = Router()
+
+    route = router.route('find where shell history is implemented in this repo and tell me the file and function name')
+
+    assert route.task_class == TaskClass.REPO
+    assert route.task_signature == 'repo/general'
+
+
+def test_router_detects_provider_question_as_meta() -> None:
+    router = Router()
+
+    route = router.route('what provider am i using right now?')
+
+    assert route.task_class == TaskClass.META
+    assert route.task_signature == 'meta/runtime'

@@ -22,7 +22,7 @@ class VerifierRegistry:
         output: str,
         tool_events: list[dict],
     ) -> VerificationResult:
-        result = self._expected_tool_use(route, tool_events)
+        result = self._expected_tool_use(route, prompt, tool_events)
         if result.status != "pass":
             return result
         result = self._tool_failure(tool_events)
@@ -39,8 +39,10 @@ class VerifierRegistry:
     def _expected_tool_use(
         self,
         route: RouteDecision,
+        prompt: str,
         tool_events: list[dict],
     ) -> VerificationResult:
+        lowered = prompt.lower()
         if route.task_signature.startswith("repo/shell") and "shell" in route.tool_families:
             used_tools = any(event.get("type") == "tool_result" for event in tool_events)
             if not used_tools:
@@ -48,6 +50,25 @@ class VerifierRegistry:
                     "tool_expectation_v1",
                     "fail",
                     "Expected Rocky to inspect or execute with shell tools, but no tools were used",
+                )
+        if route.task_class == TaskClass.REPO and any(
+            phrase in lowered
+            for phrase in (
+                'in this repo',
+                'current git status',
+                'last commit',
+                'what files are modified',
+                'find where',
+                'function name',
+                'implemented',
+            )
+        ):
+            used_tools = any(event.get("type") == "tool_result" for event in tool_events)
+            if not used_tools:
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to inspect the repo with tools, but no tools were used",
                 )
         return VerificationResult("tool_expectation_v1", "pass", "")
 

@@ -16,3 +16,6 @@ def test_runtime_meta_and_init(tmp_path: Path, monkeypatch) -> None:
     assert status['workspace_root'] == str(workspace)
     text = runtime.meta_answer('what tools do you have?')
     assert 'tools:' in text
+    provider_text = runtime.meta_answer('what provider am i using right now?')
+    assert 'active_provider:' in provider_text
+    assert 'model:' in provider_text

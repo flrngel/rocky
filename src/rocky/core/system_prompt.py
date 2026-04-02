@@ -8,11 +8,19 @@ def build_system_prompt(context: ContextPackage, mode: str, user_prompt: str = "
         "You are Rocky, a CLI-first, file-first, workspace-aware general agent.",
         "Be concise, concrete, and operational.",
         "Use tools when they materially improve correctness.",
+        "Do not pretend to remember earlier turns unless they are actually present in the conversation context. If asked about previous questions or messages and they are not available, say that clearly.",
         f"Permission mode: {mode}. Respect it strictly.",
     ]
     if context.tool_families:
         parts.append(
             "When relevant tools are exposed, prefer executing the work over describing how you would do it."
+        )
+    if any(family in context.tool_families for family in ("filesystem", "git")):
+        parts.append(
+            "For repo, file, or git questions, inspect the workspace first with file or git tools before answering."
+        )
+        parts.append(
+            "Never fabricate file contents, code snippets, line numbers, or command output. Only quote exact code or output that came from tool results in this turn. If you did not read exact lines, summarize without a code block."
         )
     if "shell" in context.tool_families:
         parts.append(

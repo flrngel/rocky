@@ -91,3 +91,21 @@ def test_session_run_can_still_include_previous_messages(tmp_path: Path) -> None
     runtime.run_prompt("new task", continue_session=True)
 
     assert [message.content for message in provider.calls[0]] == ["old task", "old answer", "new task"]
+
+
+def test_isolated_run_refuses_to_invent_previous_turns(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    current = runtime.sessions.ensure_current()
+    current.append("user", "old task")
+    current.append("assistant", "old answer")
+    runtime.sessions.save(current)
+
+    provider = _OkProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt("what was my previous question?", continue_session=False)
+
+    assert "don't have any earlier turn context" in response.text
+    assert provider.calls == []

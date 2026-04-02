@@ -35,10 +35,22 @@ class RouteDecision:
 
 
 class Router:
-    META_TRIGGERS = [
-        'what tools', 'what skills', 'show config', 'status', 'help', 'permissions', 'memory', 'sessions',
-        '/help', '/tools', '/skills', '/status', '/config', '/memory', '/permissions',
-    ]
+    META_EXACT = {
+        'status',
+        'help',
+        'permissions',
+        'memory',
+        'sessions',
+        'show config',
+        'show permissions',
+        'show memory',
+        'show sessions',
+        'what tools',
+        'what tools do you have',
+        'what skills',
+        'what skills do you have',
+    }
+    META_PREFIXES = ('/help', '/tools', '/skills', '/status', '/config', '/memory', '/permissions')
     COMMAND_VERBS = ('run', 'execute', 'exec', 'launch', 'check', 'inspect')
     SHELL_FENCE_RE = re.compile(r"```(?:bash|sh|zsh|shell)?\s*\n(?P<body>.*?)```", re.I | re.S)
     SHELL_TOKEN_RE = re.compile(r"(^|\s)(?:[a-z0-9_./-]+)(?:\s+[-\\w./:=@]+)*(?:\s*(?:&&|\|\||\||;|>|>>)\s*.+)+", re.I | re.M)
@@ -79,6 +91,24 @@ class Router:
         return has_fenced_shell or has_shell_tokens or asks_to_run or starts_with_verb
 
     def _looks_like_shell_inspection_task(self, lowered: str) -> bool:
+        if self._looks_like_repo_task(lowered) and any(
+            word in lowered
+            for word in (
+                'repo',
+                'code',
+                'codebase',
+                'file',
+                'function',
+                'module',
+                'class',
+                'implement',
+                'implemented',
+                'source',
+                'path',
+                'line',
+            )
+        ):
+            return False
         if any(phrase in lowered for phrase in self.SHELL_INFO_PHRASES):
             return True
         if any(token in lowered for token in self.SHELL_INFO_TOKENS):
@@ -93,12 +123,41 @@ class Router:
             hint in lowered for hint in self.PATH_HINTS
         )
 
+    def _looks_like_meta_request(self, lowered: str) -> bool:
+        if lowered in self.META_EXACT:
+            return True
+        if any(lowered.startswith(prefix) for prefix in self.META_PREFIXES):
+            return True
+        if self._looks_like_repo_task(lowered):
+            return False
+        return any(
+            phrase in lowered
+            for phrase in (
+                'what tools',
+                'what skills',
+                'show config',
+                'what provider',
+                'which provider',
+                'active provider',
+                'what model',
+                'which model',
+                'active model',
+                'provider am i using',
+                'model am i using',
+                'show permissions',
+                'show memory',
+                'show sessions',
+                'permission mode',
+                'session id',
+            )
+        )
+
     def route(self, prompt: str) -> RouteDecision:
         text = prompt.strip()
         lowered = text.lower()
         if not text:
             return RouteDecision(Lane.META, TaskClass.META, 'low', 'Empty prompt', [], 'meta/empty')
-        if any(trigger in lowered for trigger in self.META_TRIGGERS):
+        if self._looks_like_meta_request(lowered):
             return RouteDecision(
                 lane=Lane.META,
                 task_class=TaskClass.META,

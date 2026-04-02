@@ -6,7 +6,7 @@ import httpx
 
 from rocky.config.models import ProviderConfig
 from rocky.core.messages import Message
-from rocky.providers.base import ProviderResponse
+from rocky.providers.base import ProviderResponse, sanitize_assistant_text
 
 
 class OpenAIResponsesProvider:
@@ -57,6 +57,7 @@ class OpenAIResponsesProvider:
                     if content.get("type") in {"output_text", "text"}:
                         parts.append(content.get("text", ""))
             text = "".join(parts)
+        text = sanitize_assistant_text(text)
         if stream and event_handler and text:
             event_handler({"type": "assistant_chunk", "text": text})
         return ProviderResponse(text=text, usage=data.get("usage") or {}, raw=data)

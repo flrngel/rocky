@@ -7,7 +7,7 @@ import httpx
 
 from rocky.config.models import ProviderConfig
 from rocky.core.messages import Message
-from rocky.providers.base import ProviderResponse
+from rocky.providers.base import ProviderResponse, sanitize_assistant_text
 
 
 class OpenAIChatProvider:
@@ -125,7 +125,7 @@ class OpenAIChatProvider:
         raw_rounds.append(data)
         usage = data.get("usage") or usage
         message = ((data.get("choices") or [{}])[0]).get("message") or {}
-        text = self._extract_content(message).strip() or "Tool loop ended without a final assistant response."
+        text = sanitize_assistant_text(self._extract_content(message)) or "Tool loop ended without a final assistant response."
         if event_handler and text:
             event_handler({"type": "assistant_chunk", "text": text})
         return ProviderResponse(
@@ -161,7 +161,7 @@ class OpenAIChatProvider:
             response.raise_for_status()
             data = response.json()
         message = ((data.get("choices") or [{}])[0]).get("message") or {}
-        text = self._extract_content(message)
+        text = sanitize_assistant_text(self._extract_content(message))
         if stream and event_handler and text:
             event_handler({"type": "assistant_chunk", "text": text})
         return ProviderResponse(text=text, usage=data.get("usage") or {}, raw=data)
@@ -192,14 +192,17 @@ class OpenAIChatProvider:
                         usage = event["usage"]
                     delta = ((event.get("choices") or [{}])[0].get("delta") or {}).get("content")
                     if isinstance(delta, str) and delta:
-                        full_text += delta
-                        event_handler({"type": "assistant_chunk", "text": delta})
+                        text = sanitize_assistant_text(delta, strip=False)
+                        full_text += text
+                        if text:
+                            event_handler({"type": "assistant_chunk", "text": text})
                     elif isinstance(delta, list):
                         text = "".join(
                             str(item.get("text", ""))
                             for item in delta
                             if isinstance(item, dict)
                         )
+                        text = sanitize_assistant_text(text, strip=False)
                         if text:
                             full_text += text
                             event_handler({"type": "assistant_chunk", "text": text})
@@ -240,7 +243,7 @@ class OpenAIChatProvider:
                 conversation.append(assistant_record)
                 tool_calls = message.get("tool_calls") or []
                 if not tool_calls:
-                    text = self._extract_content(message)
+                    text = sanitize_assistant_text(self._extract_content(message))
                     if event_handler and text:
                         event_handler({"type": "assistant_chunk", "text": text})
                     return ProviderResponse(
