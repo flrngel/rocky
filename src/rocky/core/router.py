@@ -166,6 +166,10 @@ class Router:
         asks_to_run = any(phrase in lowered for phrase in (
             'run command',
             'execute command',
+            'use command',
+            'use a command',
+            'use shell command',
+            'use a shell command',
             'run this',
             'execute this',
             'run the following',

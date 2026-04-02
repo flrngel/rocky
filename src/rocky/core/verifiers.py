@@ -77,6 +77,27 @@ class VerifierRegistry:
                 return True
         return False
 
+    def _recovered_after_tool_failures(self, tool_events: list[dict]) -> bool:
+        failures = [
+            event
+            for event in tool_events
+            if event.get("type") == "tool_result" and not event.get("success", True)
+        ]
+        if not failures:
+            return False
+        last_failure_index = max(
+            index
+            for index, event in enumerate(tool_events)
+            if event.get("type") == "tool_result" and not event.get("success", True)
+        )
+        failed_names = {str(event.get("name", "")) for event in failures if event.get("name")}
+        successful_names_after_failure = {
+            str(event.get("name", ""))
+            for event in tool_events[last_failure_index + 1 :]
+            if event.get("type") == "tool_result" and event.get("success", True)
+        }
+        return bool(failed_names) and failed_names.issubset(successful_names_after_failure)
+
     def verify(
         self,
         prompt: str,
@@ -254,9 +275,11 @@ class VerifierRegistry:
             for event in tool_events
             if event.get("type") == "tool_result" and not event.get("success", True)
         ]
+        if failures and self._recovered_after_tool_failures(tool_events):
+            return VerificationResult("tool_failure_v1", "pass", "")
         if failures and route.task_signature == "automation/general":
             successful_names = {
-                event.get("name")
+                str(event.get("name", ""))
                 for event in tool_events
                 if event.get("type") == "tool_result" and event.get("success", True)
             }
@@ -266,7 +289,7 @@ class VerifierRegistry:
                 if event.get("type") == "tool_result" and not event.get("success", True)
             )
             successful_names_after_failure = {
-                event.get("name")
+                str(event.get("name", ""))
                 for event in tool_events[last_failure_index + 1 :]
                 if event.get("type") == "tool_result" and event.get("success", True)
             }
@@ -274,11 +297,7 @@ class VerifierRegistry:
                 "run_shell_command" in successful_names_after_failure
                 and successful_names & {"write_file", "run_shell_command"}
             ):
-                return VerificationResult(
-                    "tool_failure_v1",
-                    "pass",
-                    "Automation recovered after shell verification retries",
-                )
+                return VerificationResult("tool_failure_v1", "pass", "")
         if failures:
             names = ", ".join(sorted({item.get("name", "unknown") for item in failures}))
             return VerificationResult(

@@ -98,6 +98,16 @@ def test_router_treats_use_cli_current_fact_prompt_as_shell_execution() -> None:
     assert 'shell' in route.tool_families
 
 
+def test_router_treats_use_command_current_fact_prompt_as_shell_execution() -> None:
+    router = Router()
+
+    route = router.route("use command to get exact date. and then check the nike stock's price of today")
+
+    assert route.task_class == TaskClass.REPO
+    assert route.task_signature == 'repo/shell_execution'
+    assert 'shell' in route.tool_families
+
+
 def test_router_does_not_treat_latest_shell_command_as_research() -> None:
     router = Router()
 

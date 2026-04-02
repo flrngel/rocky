@@ -195,6 +195,47 @@ def test_verifier_accepts_successful_live_price_lookup_for_current_price_prompt(
     assert result.status == "pass"
 
 
+def test_verifier_accepts_recovered_live_price_lookup_after_retry() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Shell execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="use command to get exact date. and then check the nike stock's price of today",
+        route=route,
+        task_class=route.task_class,
+        output="Date is 2026-04-02 and Nike closed at 44.56 on 2026-04-01.",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "2026-04-02\\n", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": False,
+                "text": '{"success": false, "data": {"stdout": "", "stderr": "jq: parse error: Invalid numeric literal"}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "NKE.US,20260401,220023,46.555,46.83,44.56,44.63,114225664,\\n", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "pass"
+
+
 def test_verifier_requires_runtime_inspection_tool() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(
