@@ -282,6 +282,16 @@ class AgentCore:
                 "Do the execution first, then use separate follow-up inspection steps "
                 "to verify or summarize the result instead of bundling everything into one tool call."
             )
+            lowered = prompt.lower()
+            if any(term in lowered for term in ("price", "stock", "quote")) and any(
+                term in lowered for term in ("today", "current", "latest")
+            ):
+                route_hint = (
+                    "Use shell commands to retrieve the exact current facts now. Interpret a company-name "
+                    "price request as the company's stock quote unless the user explicitly asked for a product price. "
+                    "If a live quote lookup fails, is rate-limited, or returns non-parseable output, retry with "
+                    "a different CLI-accessible machine-readable source such as a plain CSV quote endpoint before answering."
+                )
         elif route.task_signature == "data/spreadsheet/analysis":
             route_hint = (
                 "Use more than one spreadsheet-analysis step. After `inspect_spreadsheet`, "

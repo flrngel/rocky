@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import re
 
 from rocky.core.router import RouteDecision, TaskClass
 from rocky.util.text import extract_json_candidate
@@ -21,6 +22,60 @@ class VerifierRegistry:
             for event in tool_events
             if event.get("type") == "tool_result" and event.get("success", True)
         ]
+
+    def _tool_payload(self, event: dict) -> dict:
+        try:
+            payload = json.loads(str(event.get("text", "")))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _shell_output_text(self, event: dict) -> str:
+        payload = self._tool_payload(event)
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return ""
+        stdout = str(data.get("stdout", "")).strip()
+        stderr = str(data.get("stderr", "")).strip()
+        return "\n".join(part for part in (stdout, stderr) if part)
+
+    def _is_current_price_prompt(self, prompt: str) -> bool:
+        lowered = prompt.lower()
+        return any(term in lowered for term in ("price", "stock", "quote")) and any(
+            term in lowered for term in ("today", "current", "latest")
+        )
+
+    def _has_successful_price_lookup(self, tool_events: list[dict]) -> bool:
+        price_line = re.compile(r"^\s*\$?\d+(?:\.\d+)?\s*$")
+        csv_quote = re.compile(r"\b[A-Z]{1,6}(?:\.[A-Z]{1,4})?,\d{8},\d{6},[-+]?\d+(?:\.\d+)?", re.I)
+        for event in tool_events:
+            if event.get("type") != "tool_result" or not event.get("success", True):
+                continue
+            if event.get("name") != "run_shell_command":
+                continue
+            text = self._shell_output_text(event)
+            if not text:
+                continue
+            if price_line.search(text) or csv_quote.search(text):
+                return True
+        return False
+
+    def _has_live_lookup_failure_marker(self, tool_events: list[dict]) -> bool:
+        markers = (
+            "too many requests",
+            "429",
+            "rate limit",
+            "jsondecodeerror",
+            "parse error",
+            "invalid numeric literal",
+        )
+        for event in tool_events:
+            if event.get("type") != "tool_result" or event.get("name") != "run_shell_command":
+                continue
+            text = self._shell_output_text(event).lower()
+            if any(marker in text for marker in markers):
+                return True
+        return False
 
     def verify(
         self,
@@ -81,6 +136,19 @@ class VerifierRegistry:
                     "fail",
                     "Expected Rocky to execute the command first and then use at least one follow-up tool step to inspect or verify the result",
                 )
+            if self._is_current_price_prompt(prompt):
+                if not self._has_successful_price_lookup(tool_events):
+                    if self._has_live_lookup_failure_marker(tool_events):
+                        return VerificationResult(
+                            "tool_expectation_v1",
+                            "fail",
+                            "Expected Rocky to retry the current price lookup with another live CLI source after the first source failed or was rate-limited",
+                        )
+                    return VerificationResult(
+                        "tool_expectation_v1",
+                        "fail",
+                        "Expected Rocky to retrieve the requested current price with a shell command before answering",
+                    )
         if route.task_signature.startswith("repo/shell") and "shell" in route.tool_families:
             if not used_tools:
                 return VerificationResult(

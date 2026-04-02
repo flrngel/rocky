@@ -124,6 +124,77 @@ def test_verifier_requires_follow_up_step_for_multi_step_shell_execution() -> No
     assert "follow-up tool step" in result.message.lower()
 
 
+def test_verifier_requires_successful_live_price_lookup_for_current_price_prompt() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Shell execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="what's the date today? use cli to get exact date and check the nike price of today",
+        route=route,
+        task_class=route.task_class,
+        output="Date is 2026-04-02.",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "2026-04-02\\n", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "Edge: Too Many Requests", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "fail"
+    assert "retry the current price lookup" in result.message.lower()
+
+
+def test_verifier_accepts_successful_live_price_lookup_for_current_price_prompt() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Shell execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="what's the date today? use cli to get exact date and check the nike price of today",
+        route=route,
+        task_class=route.task_class,
+        output="Date is 2026-04-02 and Nike is 44.63.",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "2026-04-02\\n", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "NKE.US,20260401,220023,46.555,46.83,44.56,44.63,114225664,\\n", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "pass"
+
+
 def test_verifier_requires_runtime_inspection_tool() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(

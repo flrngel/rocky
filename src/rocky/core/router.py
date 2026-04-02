@@ -174,6 +174,14 @@ class Router:
             'execute this bash',
             'run this shell',
             'execute this shell',
+            'use cli',
+            'use the cli',
+            'use command line',
+            'use the command line',
+            'use terminal',
+            'use the terminal',
+            'via cli',
+            'via terminal',
         ))
         starts_with_verb = lowered.startswith(self.COMMAND_VERBS)
         return has_fenced_shell or has_shell_tokens or asks_to_run or starts_with_verb

@@ -391,3 +391,29 @@ def test_live_llm_phase4_mini_project_outputs(live_phase4_run) -> None:
 
     for snippet in scenario.response_snippets:
         assert snippet in response.text, f"missing snippet {snippet!r}; trace={trace_path}"
+
+
+def test_live_llm_phase1_cli_date_and_live_price_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _prepare_clean_workspace(tmp_path, monkeypatch)
+    runtime = RockyRuntime.load_from(workspace, cli_overrides=_live_cli_overrides())
+    runtime.permissions.config.mode = "bypass"
+
+    response = runtime.run_prompt(
+        "what's the date today? use cli to get exact date and check the nike price of today",
+        continue_session=False,
+    )
+
+    trace_path = response.trace.get("trace_path", "unknown-trace")
+    successful_names = _tool_result_names(response, successes_only=True)
+
+    assert response.route.task_class == TaskClass.REPO, trace_path
+    assert response.route.task_signature == "repo/shell_execution", trace_path
+    assert response.trace["provider"] == "OpenAIChatProvider", trace_path
+    assert response.verification["status"] == "pass", trace_path
+    assert "run_shell_command" in successful_names, trace_path
+    assert "Provider request failed:" not in response.text, trace_path
+    assert "Tool loop ended without a final assistant response." not in response.text, trace_path
+    assert "Nike" in response.text or "NKE" in response.text, trace_path

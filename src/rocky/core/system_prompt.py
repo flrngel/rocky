@@ -36,6 +36,9 @@ def build_system_prompt(
             "If the user asks to run or execute a command, or provides a fenced bash/sh/zsh block, call the shell tool first with the exact command. Never echo a command as if it were executed."
         )
         parts.append(
+            "If the user explicitly asks you to use the CLI, terminal, command line, or shell to get an exact current fact, use `run_shell_command` rather than answering from model knowledge."
+        )
+        parts.append(
             "When calling shell, git, or python execution tools, omit `cwd` unless you need a specific workspace subdirectory. Never substitute the home directory for the current workspace."
         )
         parts.append(
@@ -57,6 +60,15 @@ def build_system_prompt(
         )
         parts.append(
             "If the user asks you to execute something and then inspect, read, stat, count, or verify the result, do not collapse that into one tool call. Execute first, then use one or more separate follow-up tool calls to inspect or verify the result before answering."
+        )
+        parts.append(
+            "If the user wants exact current values such as today's date, time, or a current live price, do not answer from memory. Use shell commands to retrieve the observed values now, and if the task asks for more than one current fact, gather each requested fact before answering."
+        )
+        parts.append(
+            "If a live quote or current-price lookup fails, is rate-limited, or returns non-parseable output, try another CLI-accessible public source instead of stopping after the first source."
+        )
+        parts.append(
+            "When the user asks for a company's price today or current price and does not mention a product, interpret that as the company's stock price rather than retail product prices. Prefer machine-readable quote sources over scraping search-result HTML. A plain CSV quote endpoint such as `https://stooq.com/q/l/?s=<ticker>.us&i=d` is acceptable for U.S. equities."
         )
     if task_signature == "repo/shell_inspection":
         parts.append(

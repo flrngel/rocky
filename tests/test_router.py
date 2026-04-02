@@ -88,6 +88,16 @@ def test_router_prefers_explicit_commands_over_runtime_inference() -> None:
     assert route.task_signature == 'repo/shell_execution'
 
 
+def test_router_treats_use_cli_current_fact_prompt_as_shell_execution() -> None:
+    router = Router()
+
+    route = router.route("what's the date today? use cli to get exact date and check the nike price of today")
+
+    assert route.task_class == TaskClass.REPO
+    assert route.task_signature == 'repo/shell_execution'
+    assert 'shell' in route.tool_families
+
+
 def test_router_does_not_treat_latest_shell_command_as_research() -> None:
     router = Router()
 
