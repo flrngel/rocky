@@ -180,10 +180,10 @@ SCENARIOS: list[Scenario] = [
     ),
     shell_inspection(
         "inspect_user_home_shell",
-        "who am i, what is my home directory, and what shell am i using",
+        "who am i, what is my home directory, what shell am i using, and what was my latest shell command",
         step("inspect_shell_environment"),
+        step("read_shell_history", limit=1),
         step("run_shell_command", command="whoami", timeout_s=5),
-        step("run_shell_command", command="printf '%s\\n' \"$HOME\"", timeout_s=5),
     ),
     shell_inspection(
         "inspect_history_and_shell_name",
@@ -208,9 +208,9 @@ SCENARIOS: list[Scenario] = [
     ),
     shell_inspection(
         "inspect_history_source_and_home",
-        "what shell history source is in use, what is my home directory, and what shell am i in",
+        "what shell history source is in use, what is my home directory, what shell am i in, and what are my last two shell commands",
         step("inspect_shell_environment"),
-        step("read_shell_history", limit=5),
+        step("read_shell_history", limit=2),
         step("run_shell_command", command="printf '%s:%s\\n' \"$HOME\" \"$SHELL\"", timeout_s=5),
     ),
     shell_inspection(
@@ -222,56 +222,56 @@ SCENARIOS: list[Scenario] = [
     ),
     runtime_inspection(
         "runtime_python_versions",
-        "what python versions do i have",
+        "what python versions do i have, what command paths do they use, and confirm one with a shell command",
         step("inspect_runtime_versions", targets=["python"], max_variants=10),
         step("run_shell_command", command="which -a python python3 python3.13 python3.14 2>/dev/null || true", timeout_s=5),
         step("run_shell_command", command="python3 --version", timeout_s=5),
     ),
     runtime_inspection(
         "runtime_python_versions_system",
-        "what python versions in my system do i have",
+        "what python versions in my system do i have, what command paths do they use, and confirm one with a shell command",
         step("inspect_runtime_versions", targets=["python"], max_variants=10),
         step("run_shell_command", command="which -a python python3 python3.13 python3.14 2>/dev/null || true", timeout_s=5),
         step("run_shell_command", command="python3.13 --version", timeout_s=5),
     ),
     runtime_inspection(
         "runtime_node_versions",
-        "what node versions do i have",
+        "what node versions do i have, what command paths do they use, and confirm one with a shell command",
         step("inspect_runtime_versions", targets=["node"], max_variants=10),
         step("run_shell_command", command="which -a node node18 node22 2>/dev/null || true", timeout_s=5),
         step("run_shell_command", command="node --version", timeout_s=5),
     ),
     runtime_inspection(
         "runtime_node_versions_system",
-        "what node versions in my system do i have",
+        "what node versions in my system do i have, what command paths do they use, and confirm one with a shell command",
         step("inspect_runtime_versions", targets=["node"], max_variants=10),
         step("run_shell_command", command="which -a node node18 node22 2>/dev/null || true", timeout_s=5),
         step("run_shell_command", command="node18 --version", timeout_s=5),
     ),
     runtime_inspection(
         "runtime_ruby_versions",
-        "what ruby versions do i have",
+        "what ruby versions do i have, what command paths do they use, and confirm one with a shell command",
         step("inspect_runtime_versions", targets=["ruby"], max_variants=10),
         step("run_shell_command", command="which -a ruby ruby3.2 2>/dev/null || true", timeout_s=5),
         step("run_shell_command", command="ruby --version", timeout_s=5),
     ),
     runtime_inspection(
         "runtime_ruby_versions_system",
-        "what are ruby versions in my system list it",
+        "what ruby versions are in my system, what command paths do they use, and confirm one with a shell command",
         step("inspect_runtime_versions", targets=["ruby"], max_variants=10),
         step("run_shell_command", command="which -a ruby ruby3.2 2>/dev/null || true", timeout_s=5),
         step("run_shell_command", command="ruby3.2 --version", timeout_s=5),
     ),
     runtime_inspection(
         "runtime_where_python3",
-        "where is python3 on this machine",
+        "where is python3 on this machine, what command path does it use, and confirm it with a shell command",
         step("inspect_runtime_versions", targets=["python3"], max_variants=10),
         step("run_shell_command", command="which -a python3 2>/dev/null || true", timeout_s=5),
         step("run_shell_command", command="python3 --version", timeout_s=5),
     ),
     runtime_inspection(
         "runtime_bun_installed",
-        "is bun installed here",
+        "is bun installed here, what command path does it use, and confirm it with a shell command",
         step("inspect_runtime_versions", targets=["bun"], max_variants=10),
         step("run_shell_command", command="which -a bun 2>/dev/null || true", timeout_s=5),
         step("run_shell_command", command="bun --version", timeout_s=5),
@@ -285,10 +285,10 @@ SCENARIOS: list[Scenario] = [
     ),
     repo_general(
         "repo_modified_files_branch",
-        "in this repo, what files are modified, what branch is active, and what diff is pending",
+        "in this repo, what files are modified, what branch is active, and what does the README diff show",
         step("git_status"),
         step("run_shell_command", command="git branch --show-current", timeout_s=5),
-        step("git_diff"),
+        step("git_diff", path="README.md"),
     ),
     repo_general(
         "repo_cli_parser",
@@ -378,7 +378,7 @@ SCENARIOS: list[Scenario] = [
     ),
     data_task(
         "data_users_csv",
-        "analyze data/users.csv and show the profile of the dataset",
+        "analyze data/users.csv and summarize the headers, sample rows, row count, and email list",
         step("inspect_spreadsheet", path="data/users.csv"),
         step("read_sheet_range", path="data/users.csv", start_row=1, max_rows=5),
         step(
@@ -393,14 +393,14 @@ SCENARIOS: list[Scenario] = [
     ),
     data_task(
         "data_metrics_xlsx",
-        "inspect data/metrics.xlsx and compare the Summary and Regions sheets",
+        "inspect data/metrics.xlsx, compare the Summary and Regions sample rows, and count the sheets",
         step("inspect_spreadsheet", path="data/metrics.xlsx"),
         step("read_sheet_range", path="data/metrics.xlsx", sheet="Summary", start_row=1, max_rows=5),
         step("read_sheet_range", path="data/metrics.xlsx", sheet="Regions", start_row=1, max_rows=5),
     ),
     data_task(
         "data_inventory_csv",
-        "analyze data/inventory.csv and infer the stock profile",
+        "analyze data/inventory.csv and summarize the headers, sample rows, and total stock",
         step("inspect_spreadsheet", path="data/inventory.csv"),
         step("read_sheet_range", path="data/inventory.csv", start_row=1, max_rows=5),
         step(
@@ -416,7 +416,7 @@ SCENARIOS: list[Scenario] = [
     ),
     data_task(
         "data_workbook_summary",
-        "inspect the spreadsheet workbook data/metrics.xlsx and summarize its sheet names and sample data",
+        "inspect the spreadsheet workbook data/metrics.xlsx, summarize its sheet names, show sample data from Summary, and count the sheets",
         step("inspect_spreadsheet", path="data/metrics.xlsx"),
         step("read_sheet_range", path="data/metrics.xlsx", sheet="Summary", start_row=1, max_rows=4),
         step(

@@ -99,6 +99,31 @@ def test_verifier_requires_shell_tool_for_shell_execution() -> None:
     assert "run_shell_command" in result.message
 
 
+def test_verifier_requires_follow_up_step_for_multi_step_shell_execution() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Shell execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="run a command that creates note.txt, then read it and stat it",
+        route=route,
+        task_class=route.task_class,
+        output="Created note.txt.",
+        tool_events=[
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+        ],
+    )
+
+    assert result.status == "fail"
+    assert "follow-up tool step" in result.message.lower()
+
+
 def test_verifier_requires_runtime_inspection_tool() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(
@@ -147,6 +172,31 @@ def test_verifier_requires_execution_for_verifying_automation() -> None:
 
     assert result.status == "fail"
     assert "verify the automation" in result.message.lower()
+
+
+def test_verifier_requires_multiple_steps_for_spreadsheet_analysis() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.DATA,
+        risk="medium",
+        reasoning="Spreadsheet analysis task",
+        tool_families=["filesystem", "data", "python"],
+        task_signature="data/spreadsheet/analysis",
+    )
+
+    result = verifier.verify(
+        prompt="inspect data/metrics.xlsx, compare the Summary and Regions sample rows, and count the sheets",
+        route=route,
+        task_class=route.task_class,
+        output="Two sheets.",
+        tool_events=[
+            {"type": "tool_result", "name": "inspect_spreadsheet", "success": True},
+        ],
+    )
+
+    assert result.status == "fail"
+    assert "two spreadsheet-analysis steps" in result.message.lower()
 
 
 def test_verifier_accepts_recovered_automation_shell_retries() -> None:

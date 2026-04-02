@@ -15,6 +15,13 @@ class VerificationResult:
 
 
 class VerifierRegistry:
+    def _successful_tool_names(self, tool_events: list[dict]) -> list[str]:
+        return [
+            str(event.get("name", ""))
+            for event in tool_events
+            if event.get("type") == "tool_result" and event.get("success", True)
+        ]
+
     def verify(
         self,
         prompt: str,
@@ -44,11 +51,8 @@ class VerifierRegistry:
         tool_events: list[dict],
     ) -> VerificationResult:
         lowered = prompt.lower()
-        result_names = {
-            event.get("name")
-            for event in tool_events
-            if event.get("type") == "tool_result"
-        }
+        successful_names = self._successful_tool_names(tool_events)
+        result_names = set(successful_names)
         used_tools = bool(result_names)
         if route.task_signature == "repo/shell_execution":
             if "run_shell_command" not in result_names:
@@ -56,6 +60,26 @@ class VerifierRegistry:
                     "tool_expectation_v1",
                     "fail",
                     "Expected Rocky to execute the request with the shell tool, but `run_shell_command` was not used",
+                )
+            needs_follow_up = any(
+                phrase in lowered
+                for phrase in (
+                    " then ",
+                    " and then ",
+                    " after ",
+                    " verify ",
+                    " confirm ",
+                    " inspect ",
+                    " read ",
+                    " stat ",
+                    " count ",
+                )
+            )
+            if needs_follow_up and len(successful_names) < 2:
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to execute the command first and then use at least one follow-up tool step to inspect or verify the result",
                 )
         if route.task_signature.startswith("repo/shell") and "shell" in route.tool_families:
             if not used_tools:
@@ -77,6 +101,56 @@ class VerifierRegistry:
                     "fail",
                     "Expected Rocky to inspect the local runtime with `inspect_runtime_versions`",
                 )
+            if any(
+                phrase in lowered
+                for phrase in (
+                    "command path",
+                    "command paths",
+                    "where they live",
+                    "confirm one with a shell command",
+                    "which executable",
+                    "which executables",
+                )
+            ) and not (result_names & {"run_shell_command", "inspect_shell_environment"}):
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to confirm runtime version or path claims with a shell inspection step after `inspect_runtime_versions`",
+                )
+        if route.task_signature == "data/spreadsheet/analysis":
+            if len(successful_names) < 2:
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to use at least two spreadsheet-analysis steps before answering",
+                )
+            needs_follow_up_range = any(
+                phrase in lowered
+                for phrase in (
+                    "sample",
+                    "samples",
+                    "header",
+                    "headers",
+                    "compare",
+                    "sheet",
+                    "sheets",
+                    "row count",
+                    "total",
+                    "sum",
+                )
+            )
+            if needs_follow_up_range and not (result_names & {"read_sheet_range", "run_python"}):
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to follow spreadsheet inspection with `read_sheet_range` or `run_python` for the requested detail",
+                )
+        if route.task_signature == "extract/general" and len(successful_names) < 2:
+            return VerificationResult(
+                "tool_expectation_v1",
+                "fail",
+                "Expected Rocky to use at least two extraction steps before answering",
+            )
         if route.task_signature == "automation/general" and any(
             word in lowered for word in ("verify", "execute", "run")
         ):

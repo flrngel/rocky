@@ -104,6 +104,55 @@ class _HiddenToolProvider:
         )
 
 
+class _RepairingToolExpectationProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        if len(self.tool_calls) == 1:
+            return ProviderResponse(
+                text="Created note.txt.",
+                raw={"rounds": ["initial"]},
+                tool_events=[
+                    {
+                        "type": "tool_result",
+                        "name": "run_shell_command",
+                        "arguments": {"command": "printf 'hello\\n' > note.txt"},
+                        "text": "{}",
+                        "success": True,
+                    }
+                ],
+            )
+        return ProviderResponse(
+            text="Created note.txt, read it, and confirmed the file exists.",
+            raw={"rounds": ["retry"]},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "printf 'hello\\n' > note.txt"},
+                    "text": "{}",
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "read_file",
+                    "arguments": {"path": "note.txt"},
+                    "text": "{}",
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "stat_path",
+                    "arguments": {"path": "note.txt"},
+                    "text": "{}",
+                    "success": True,
+                },
+            ],
+        )
+
+
 class _FailingProvider:
     def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
         raise RuntimeError("provider offline")
@@ -253,7 +302,8 @@ def test_extraction_route_repairs_prose_into_json_with_provider(tmp_path: Path) 
 
     assert response.text == '{"rows": 2, "fields": ["name", "role"]}'
     assert response.verification["status"] == "pass"
-    assert len(provider.complete_calls) == 1
+    assert len(provider.tool_calls) == 2
+    assert len(provider.complete_calls) == 2
 
 
 def test_automation_route_gets_more_tool_rounds(tmp_path: Path) -> None:
@@ -317,3 +367,24 @@ def test_runtime_recreates_internal_state_dirs_if_deleted_mid_run(tmp_path: Path
     assert runtime.sessions.sessions_dir.exists()
     assert runtime.agent.traces_dir.exists()
     assert Path(response.trace["trace_path"]).exists()
+
+
+def test_runtime_retries_tool_loop_after_verification_failure(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _RepairingToolExpectationProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt(
+        "run a command that creates note.txt, then read it and stat it",
+        continue_session=False,
+    )
+
+    assert response.verification["status"] == "pass"
+    assert len(provider.tool_calls) == 2
+    retried_messages = provider.tool_calls[1]["messages"]
+    assert retried_messages[-1].role == "user"
+    assert "did not pass verification" in str(retried_messages[-1].content)

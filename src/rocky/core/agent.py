@@ -11,6 +11,7 @@ from rocky.core.router import Lane, RouteDecision, Router
 from rocky.core.system_prompt import build_system_prompt
 from rocky.core.verifiers import VerifierRegistry
 from rocky.learning.manager import LearningManager
+from rocky.providers.base import ProviderResponse
 from rocky.providers.registry import ProviderRegistry
 from rocky.session.store import SessionStore
 from rocky.tools.registry import ToolRegistry
@@ -268,6 +269,80 @@ class AgentCore:
             return 8
         return 8
 
+    def _verification_repair_prompt(
+        self,
+        prompt: str,
+        route: RouteDecision,
+        verification_message: str,
+    ) -> str:
+        route_hint = "Use more tools if needed before answering."
+        if route.task_signature == "repo/shell_execution":
+            route_hint = (
+                "Do the execution first, then use separate follow-up inspection steps "
+                "to verify or summarize the result instead of bundling everything into one tool call."
+            )
+        elif route.task_signature == "data/spreadsheet/analysis":
+            route_hint = (
+                "Use more than one spreadsheet-analysis step. After `inspect_spreadsheet`, "
+                "follow up with `read_sheet_range` or `run_python` before answering."
+            )
+        elif route.task_signature == "extract/general":
+            route_hint = (
+                "Use at least two extraction steps: inspect or discover the source, then parse or classify it, "
+                "and return the final JSON only."
+            )
+        elif route.task_signature == "local/runtime_inspection":
+            route_hint = (
+                "Start with `inspect_runtime_versions`, then confirm paths or versions with a shell inspection step "
+                "before answering."
+            )
+        return (
+            f"Original task:\n{prompt}\n\n"
+            f"Your previous attempt did not pass verification:\n{verification_message}\n\n"
+            f"{route_hint}\n"
+            "Continue the task now, use more tools if needed, and return the corrected final answer."
+        )
+
+    def _retry_after_verification_failure(
+        self,
+        provider,
+        system_prompt: str,
+        messages: list[Message],
+        route: RouteDecision,
+        selected_tool_objects: list[Any],
+        selected_tool_names: set[str],
+        verification_message: str,
+        normalized_text: str,
+        *,
+        stream: bool,
+        event_handler: Callable[[dict[str, Any]], None] | None = None,
+    ):
+        retry_messages = [
+            *messages,
+            Message(role="assistant", content=normalized_text),
+            Message(
+                role="user",
+                content=self._verification_repair_prompt(
+                    messages[-1].content if messages else "",
+                    route,
+                    verification_message,
+                ),
+            ),
+        ]
+        return provider.run_with_tools(
+            system_prompt=system_prompt,
+            messages=retry_messages,
+            tools=[tool.openai_schema() for tool in selected_tool_objects],
+            execute_tool=lambda name, arguments: self._run_selected_tool(
+                selected_tool_names,
+                name,
+                arguments,
+                event_handler=event_handler,
+            ),
+            max_rounds=self._tool_loop_rounds(route),
+            event_handler=event_handler if stream else None,
+        )
+
     def run(
         self,
         prompt: str,
@@ -392,6 +467,48 @@ class AgentCore:
             output=normalized_text,
             tool_events=provider_response.tool_events,
         )
+        if route.tool_families and verification_result.status == "fail":
+            for _ in range(2):
+                retry_response = self._retry_after_verification_failure(
+                    provider,
+                    system_prompt,
+                    messages,
+                    route,
+                    selected_tool_objects,
+                    selected_tool_names,
+                    verification_result.message,
+                    normalized_text,
+                    stream=stream,
+                    event_handler=event_handler,
+                )
+                provider_response = ProviderResponse(
+                    text=retry_response.text,
+                    usage=retry_response.usage or provider_response.usage,
+                    raw={
+                        "initial": provider_response.raw,
+                        "retry": retry_response.raw,
+                    },
+                    tool_events=[*provider_response.tool_events, *retry_response.tool_events],
+                )
+                normalized_text = self._normalize_output(route, provider_response.text)
+                normalized_text = self._repair_structured_output(
+                    provider,
+                    system_prompt,
+                    prompt,
+                    route,
+                    normalized_text,
+                    provider_response.tool_events,
+                    stream=stream,
+                )
+                verification_result = self.verifier_registry.verify(
+                    prompt=prompt,
+                    route=route,
+                    task_class=route.task_class,
+                    output=normalized_text,
+                    tool_events=provider_response.tool_events,
+                )
+                if verification_result.status != "fail":
+                    break
         verification = {
             "name": verification_result.name,
             "status": verification_result.status,

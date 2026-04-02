@@ -44,9 +44,12 @@ def test_system_prompt_guides_data_and_extraction_tasks() -> None:
 
     assert "first tool call should usually be `inspect_spreadsheet`" in data_prompt
     assert "use that exact path first instead of searching or guessing" in data_prompt
+    assert "Do not stop after `inspect_spreadsheet` alone" in data_prompt
     assert "return the requested JSON directly" in extraction_prompt
     assert "Do not write output files unless the user explicitly asked" in extraction_prompt
     assert "prefer `run_python` to read and parse the source directly" in extraction_prompt
+    assert "use `glob_paths` first and then `stat_path` or `read_file`" in extraction_prompt
+    assert "Use at least two steps for extraction work" in extraction_prompt
     assert "line prefixes" in extraction_prompt
     assert "Never create or mention output files" in extraction_prompt
 
@@ -67,6 +70,7 @@ def test_system_prompt_guides_shell_and_automation_tasks() -> None:
 
     assert "the first tool call should be `run_shell_command`" in shell_prompt
     assert "keep them inside the workspace instead of using `/tmp`" in shell_prompt
+    assert "do not collapse that into one tool call" in shell_prompt
     assert "verify it with `run_shell_command` before answering" in automation_prompt
     assert "Keep the script path inside the workspace" in automation_prompt
     assert "Do not probe the environment or run verification commands before the file exists" in automation_prompt

@@ -55,6 +55,9 @@ def build_system_prompt(
         parts.append(
             "For shell-execution tasks, the first tool call should be `run_shell_command`. If the user asked to create, copy, move, delete, or count something by command, do it through the shell command rather than filesystem mutation tools. When file operations are part of the task, keep them inside the workspace instead of using `/tmp` or invented absolute paths."
         )
+        parts.append(
+            "If the user asks you to execute something and then inspect, read, stat, count, or verify the result, do not collapse that into one tool call. Execute first, then use one or more separate follow-up tool calls to inspect or verify the result before answering."
+        )
     if task_signature == "repo/shell_inspection":
         parts.append(
             "For shell inspection tasks that ask for more than one fact, do not stop after a single inspection. Corroborate with `read_shell_history` or a shell command before answering."
@@ -63,12 +66,18 @@ def build_system_prompt(
         parts.append(
             "For CSV, XLSX, or spreadsheet tasks, the first tool call should usually be `inspect_spreadsheet` on the named file, and the next inspection step should be `read_sheet_range` for headers or sample rows. If the user asked for sample rows, comparisons, or multiple sheets, follow `inspect_spreadsheet` with one or more `read_sheet_range` calls. If the user named a specific file, use that exact path first instead of searching or guessing alternate locations. Use `run_python` only after at least one spreadsheet tool call when you need calculations or aggregation, and avoid generic file listing or `read_file` unless you truly need raw lines."
         )
+        parts.append(
+            "Do not stop after `inspect_spreadsheet` alone when the user asked for sample rows, comparisons, totals, row counts, or workbook details. Use at least one more spreadsheet-analysis step before answering."
+        )
     if task_signature == "extract/general":
         parts.append(
             "For extraction, classification, normalization, or schema tasks, return the requested JSON directly in the final answer with no prose or markdown wrapper. Do not write output files unless the user explicitly asked for a file."
         )
         parts.append(
-            "For text, JSON, JSONL, or log extraction, prefer `run_python` to read and parse the source directly, and use `read_file` only for quick inspection. If a file path is not explicit, locate it first; otherwise parse the named file directly. `read_file` is formatted for humans and may include line prefixes, so do not treat those prefixes as part of the raw file content. Never create or mention output files unless the user explicitly asked for a file. Only use spreadsheet tools when the source is actually CSV or XLSX."
+            "For text, JSON, JSONL, or log extraction, prefer `run_python` to read and parse the source directly, and use `read_file` only for quick inspection. If a file path is not explicit, use `glob_paths` first and then `stat_path` or `read_file` before parsing; otherwise inspect the named file directly before parsing. `read_file` is formatted for humans and may include line prefixes, so do not treat those prefixes as part of the raw file content. Never create or mention output files unless the user explicitly asked for a file. Only use spreadsheet tools when the source is actually CSV or XLSX."
+        )
+        parts.append(
+            "Use at least two steps for extraction work: first inspect or locate the source, then parse, classify, or normalize it before returning the final JSON."
         )
     if task_signature == "automation/general":
         parts.append(
