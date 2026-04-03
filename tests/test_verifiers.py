@@ -349,6 +349,47 @@ def test_shell_execution_verifier_requires_follow_up_for_response_exploration() 
     assert "non-shell follow-up tool step" in result.message
 
 
+def test_shell_execution_verifier_requires_early_follow_up_for_response_exploration() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="Execute `x.sh` and explore the response to decide which candidates should merge.",
+        route=route,
+        task_class=route.task_class,
+        output="I eventually decided which candidates should merge.",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh x.sh", "stdout": "{\\"products\\": []}", "stderr": ""}}',
+            },
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+            {
+                "type": "tool_result",
+                "name": "run_python",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "{\\"products\\": []}", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "fail"
+    assert "first five successful tool results" in result.message
+
+
 def test_shell_execution_verifier_requires_successful_referenced_script_execution() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(
@@ -594,6 +635,49 @@ def test_verifier_accepts_recovered_shell_execution_after_structured_follow_up_f
             {"type": "tool_result", "name": "run_python", "success": False},
             {"type": "tool_result", "name": "write_file", "success": True, "arguments": {"path": "merge_decisions.json"}},
             {"type": "tool_result", "name": "read_file", "success": True, "arguments": {"path": "merge_decisions.json"}},
+        ],
+    )
+
+    assert result.status == "pass"
+
+
+def test_verifier_accepts_recovered_shell_execution_after_retry_window_follow_up() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="Execute `x.sh` and explore the response to decide which candidates should merge.",
+        route=route,
+        task_class=route.task_class,
+        output="Recovered after retry and decided from the live response.",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh x.sh", "stdout": "{\\"products\\": []}", "stderr": ""}}',
+            },
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+            {"type": "tool_result", "name": "read_file", "success": True, "arguments": {"path": "x.sh"}},
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh x.sh", "stdout": "{\\"products\\": []}", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_python",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "{\\"products\\": []}", "stderr": ""}}',
+            },
         ],
     )
 

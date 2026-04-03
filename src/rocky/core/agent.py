@@ -347,7 +347,9 @@ class AgentCore:
                     "rerun it through an interpreter such as `sh x.sh` or `python3 tool.py`. If the live response "
                     "returns an auth, permission, network, or other error payload, report that you cannot make the "
                     "requested decision from live evidence instead of using previous traces or memories as a "
-                    "substitute. Do not stop after only printing or paraphrasing the raw command output."
+                    "substitute. Do not stop after only printing or paraphrasing the raw command output. Do not stay "
+                    "in shell-only loops; make the non-shell follow-up parsing or file-inspection step within your "
+                    "next few successful tool calls."
                 )
             lowered = prompt.lower()
             if any(term in lowered for term in ("price", "stock", "quote")) and any(

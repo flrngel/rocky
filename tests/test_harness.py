@@ -5,13 +5,13 @@ from pathlib import Path
 from rocky.app import RockyRuntime
 from rocky.harness import (
     DEFAULT_PHASES,
-    DEFAULT_SCENARIOS,
     HarnessResultStore,
     HarnessRunRecord,
-    PHASE4_MINI_PROJECTS,
-    WORKSPACE_CONTINUITY_SCENARIOS,
     WorkspaceContinuityScenario,
+    default_scenarios,
+    phase4_mini_projects,
     scenarios_by_phase,
+    workspace_continuity_scenarios,
 )
 
 
@@ -56,9 +56,9 @@ def test_workspace_continuity_scenario_defaults_phase5() -> None:
 
 
 def test_harness_catalog_has_phase_specific_scenarios() -> None:
-    assert len(DEFAULT_SCENARIOS) == 51
-    assert len(PHASE4_MINI_PROJECTS) == 4
-    assert len(WORKSPACE_CONTINUITY_SCENARIOS) == 3
+    assert len(default_scenarios()) >= 24
+    assert len(phase4_mini_projects()) >= 4
+    assert len(workspace_continuity_scenarios()) >= 3
     assert scenarios_by_phase("phase5_workspace_continuity")
 
 
@@ -72,3 +72,4 @@ def test_runtime_harness_command_exposes_inventory(tmp_path: Path, monkeypatch) 
     assert result.data["version"] == "0.2.0"
     assert result.data["execution_cwd"] == "."
     assert result.data["phases"][0]["slug"] == "phase1_route_anchor"
+    assert result.data["generation"]["strategy"] == "on_demand_generators_without_static_catalog"

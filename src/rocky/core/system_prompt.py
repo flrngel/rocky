@@ -73,6 +73,9 @@ def build_system_prompt(
             "If the executed command returns structured text such as JSON, CSV, or line-oriented records and the user asks you to explore, analyze, classify, or decide from that response, use a follow-up parsing step such as `run_python` or a targeted file read before answering. Do not rely on a single raw shell output blob for downstream decisions."
         )
         parts.append(
+            "For response-analysis shell tasks, do not stay in shell-only loops. After the first successful execution, move into a non-shell follow-up such as `run_python`, `read_file`, `write_file`, or `stat_path` within your next few successful tool calls."
+        )
+        parts.append(
             "For response-analysis tasks, the current command output from this turn is the source of truth. Do not substitute previous traces, memories, or handoff summaries for missing live response data."
         )
         parts.append(

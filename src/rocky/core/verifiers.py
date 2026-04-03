@@ -203,11 +203,9 @@ class VerifierRegistry:
             or "/.git/" in normalized
         )
 
-    def _has_response_analysis_follow_up(self, prompt: str, tool_events: list[dict]) -> bool:
+    def _response_analysis_follow_up_in_events(self, prompt: str, events: list[dict]) -> bool:
         script_names = self._referenced_script_names(prompt)
-        for event in tool_events:
-            if event.get("type") != "tool_result" or not event.get("success", True):
-                continue
+        for event in events:
             name = str(event.get("name", ""))
             if name == "run_shell_command":
                 continue
@@ -225,6 +223,53 @@ class VerifierRegistry:
                     continue
                 return True
         return False
+
+    def _has_response_analysis_follow_up(
+        self,
+        prompt: str,
+        tool_events: list[dict],
+        *,
+        within_successful_results: int | None = None,
+    ) -> bool:
+        successful_events = [
+            event
+            for event in tool_events
+            if event.get("type") == "tool_result" and event.get("success", True)
+        ]
+        if within_successful_results is not None:
+            successful_events = successful_events[:within_successful_results]
+        return self._response_analysis_follow_up_in_events(prompt, successful_events)
+
+    def _has_response_analysis_follow_up_after_last_execution(
+        self,
+        prompt: str,
+        tool_events: list[dict],
+        *,
+        window: int = 5,
+    ) -> bool:
+        successful_events = [
+            event
+            for event in tool_events
+            if event.get("type") == "tool_result" and event.get("success", True)
+        ]
+        if not successful_events:
+            return False
+        anchor_event = None
+        script_events = self._script_execution_events(prompt, tool_events)
+        if script_events:
+            anchor_event = script_events[-1]
+        else:
+            shell_events = self._successful_shell_events(tool_events)
+            if shell_events:
+                anchor_event = shell_events[-1]
+        if anchor_event is None:
+            return False
+        try:
+            anchor_index = successful_events.index(anchor_event)
+        except ValueError:
+            return False
+        follow_up_events = successful_events[anchor_index + 1 : anchor_index + 1 + window]
+        return self._response_analysis_follow_up_in_events(prompt, follow_up_events)
 
     def _latest_script_execution_error(self, prompt: str, tool_events: list[dict]) -> str:
         for event in reversed(self._script_execution_events(prompt, tool_events)):
@@ -355,11 +400,19 @@ class VerifierRegistry:
                 phrase in lowered
                 for phrase in self.RESPONSE_ANALYSIS_PHRASES
             )
-            if needs_structured_response_follow_up and not self._has_response_analysis_follow_up(prompt, tool_events):
+            if needs_structured_response_follow_up and not self._has_response_analysis_follow_up(
+                prompt,
+                tool_events,
+                within_successful_results=5,
+            ) and not self._has_response_analysis_follow_up_after_last_execution(
+                prompt,
+                tool_events,
+                window=5,
+            ):
                 return VerificationResult(
                     "tool_expectation_v1",
                     "fail",
-                    "Expected Rocky to execute the command and then use a non-shell follow-up tool step on the observed response or a produced result file before deciding",
+                    "Expected Rocky to execute the command and then use a non-shell follow-up tool step within the first five successful tool results, or within five successful steps after the final execution retry, on the observed response or a produced result file before deciding",
                 )
             if self._is_current_price_prompt(prompt):
                 if not self._has_successful_price_lookup(tool_events):

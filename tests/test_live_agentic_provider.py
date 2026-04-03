@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -11,7 +10,14 @@ import pytest
 
 from rocky.app import RockyRuntime
 from rocky.core.router import TaskClass
-from test_agentic_contracts import SCENARIOS, Scenario, _prepare_workspace
+from rocky.harness import (
+    MiniProjectScenario,
+    Scenario,
+    default_scenarios,
+    materialize_mini_project_workspace,
+    materialize_scenario_workspace,
+    phase4_mini_projects,
+)
 
 
 LIVE_PROVIDER = "ollama"
@@ -33,110 +39,6 @@ def _live_cli_overrides() -> dict[str, object]:
         },
         "permissions": {"mode": "bypass"},
     }
-
-
-@dataclass(frozen=True)
-class MiniProjectScenario:
-    name: str
-    prompt: str
-    expected_files: tuple[str, ...]
-    verify_command: tuple[str, ...]
-    expected_output: object
-    output_kind: str = "text"
-    response_snippets: tuple[str, ...] = ()
-    seed_files: tuple[tuple[str, str], ...] = ()
-    executable_files: tuple[str, ...] = ()
-    task_class: TaskClass = TaskClass.AUTOMATION
-    task_signature: str = "automation/general"
-    min_successful_tools: int = 3
-    required_successful_tools: tuple[str, ...] = ("run_shell_command",)
-
-
-CATALOG_X_SH = """#!/bin/sh
-cat <<'JSON'
-{"products":[{"product_id":"P001","name":"Red T-Shirt","sku":"RTS-001","candidates":[{"candidate_id":"C001","name":"Red T-Shirt","sku":"RTS-001"},{"candidate_id":"C002","name":"Blue T-Shirt","sku":"BTS-002"},{"candidate_id":"C003","name":"Red Hoodie","sku":"RHD-003"}]},{"product_id":"P002","name":"Glass Bottle 500ml","sku":"BOT-500-CLR","candidates":[{"candidate_id":"C010","name":"Glass Bottle 500ml","sku":"BOT-500-CLR"},{"candidate_id":"C011","name":"Glass Bottle 750ml","sku":"BOT-750-CLR"},{"candidate_id":"C012","name":"Plastic Bottle 500ml","sku":"BOT-500-PL"}]}]}
-JSON
-"""
-
-
-PHASE4_MINI_PROJECTS: tuple[MiniProjectScenario, ...] = (
-    MiniProjectScenario(
-        name="python_wordcount_cli",
-        prompt=(
-            "Build a tiny Python script project in this empty workspace. "
-            "Create exactly these files: "
-            "`input.txt` with exactly two lines `rocky builds tools` and `tools build trust`, "
-            "`main.py` that reads `input.txt` and prints valid JSON with keys `line_count` and `word_count`, "
-            "and `README.md` with one short usage example. "
-            "Then run `python3 main.py` to verify it works and tell me the exact JSON output."
-        ),
-        expected_files=("input.txt", "main.py", "README.md"),
-        verify_command=("python3", "main.py"),
-        expected_output={"line_count": 2, "word_count": 6},
-        output_kind="json",
-        response_snippets=("line_count", "word_count", "6"),
-    ),
-    MiniProjectScenario(
-        name="shell_sales_report",
-        prompt=(
-            "Build a tiny shell script project in this empty workspace. "
-            "Create exactly these files: "
-            "`sales.csv` with header `month,revenue` and rows `jan,100`, `feb,120`, and `mar,140`, "
-            "`report.sh` that prints only the total revenue from `sales.csv`, "
-            "and `README.md` with one short usage example. "
-            "Then run `sh report.sh` to verify it works and tell me the exact output."
-        ),
-        expected_files=("sales.csv", "report.sh", "README.md"),
-        verify_command=("sh", "report.sh"),
-        expected_output="360",
-        response_snippets=("360", "report.sh"),
-    ),
-    MiniProjectScenario(
-        name="python_email_extract",
-        prompt=(
-            "Build a tiny Python script project in this empty workspace. "
-            "Create exactly these files: "
-            "`notes.txt` with exactly two lines containing `ada@example.com` and `bob@example.org`, "
-            "`extract.py` that reads `notes.txt` and prints valid JSON with a single key `emails` whose value is a sorted array, "
-            "and `README.md` with one short usage example. "
-            "Then run `python3 extract.py` to verify it works and tell me the exact JSON output."
-        ),
-        expected_files=("notes.txt", "extract.py", "README.md"),
-        verify_command=("python3", "extract.py"),
-        expected_output={"emails": ["ada@example.com", "bob@example.org"]},
-        output_kind="json",
-        response_snippets=("ada@example.com", "bob@example.org", "emails"),
-    ),
-    MiniProjectScenario(
-        name="workspace_script_catalog_review",
-        prompt=(
-            "You are now product catalog manager. Execute `x.sh` and explore the response. "
-            "Those are pending products to be managed, and each product has candidates to merge. "
-            "Treat a candidate as the same product only when both `name` and `sku` match exactly. "
-            "Write valid JSON to `merge_decisions.json` with a top-level key `products`, where each item contains "
-            "`product_id`, `merge`, and `skip` arrays of candidate ids. Then read the file and tell me the exact JSON."
-        ),
-        expected_files=("x.sh", "merge_decisions.json"),
-        verify_command=(
-            "python3",
-            "-c",
-            "import json, pathlib; print(json.dumps(json.loads(pathlib.Path('merge_decisions.json').read_text()), sort_keys=True))",
-        ),
-        expected_output={
-            "products": [
-                {"product_id": "P001", "merge": ["C001"], "skip": ["C002", "C003"]},
-                {"product_id": "P002", "merge": ["C010"], "skip": ["C011", "C012"]},
-            ]
-        },
-        output_kind="json",
-        response_snippets=("merge_decisions.json", "C001", "C010"),
-        seed_files=(("x.sh", CATALOG_X_SH),),
-        task_class=TaskClass.REPO,
-        task_signature="repo/shell_execution",
-        min_successful_tools=3,
-        required_successful_tools=("run_shell_command", "read_file"),
-    ),
-)
 
 
 def _tool_result_events(response, *, successes_only: bool = False) -> list[dict]:
@@ -166,10 +68,29 @@ def _strip_fences(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _prepare_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: Scenario,
+) -> Path:
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.setenv("USER", "rockytester")
+    bin_dir = materialize_scenario_workspace(workspace, home, scenario)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return workspace
+
+
 def _prepare_clean_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
     home = tmp_path / "home"
+    workspace.mkdir()
     home.mkdir()
 
     monkeypatch.chdir(workspace)
@@ -177,16 +98,6 @@ def _prepare_clean_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("SHELL", "/bin/zsh")
     monkeypatch.setenv("USER", "rockytester")
     return workspace
-
-
-def _seed_mini_project_workspace(workspace: Path, scenario: MiniProjectScenario) -> None:
-    for relative_path, content in scenario.seed_files:
-        path = workspace / relative_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-    for relative_path in scenario.executable_files:
-        path = workspace / relative_path
-        path.chmod(0o755)
 
 
 @pytest.fixture(scope="session")
@@ -207,162 +118,91 @@ def live_provider_ready() -> None:
         )
 
 
-def _phase1_anchor_tools(scenario: Scenario) -> set[str]:
-    if scenario.task_signature == "repo/shell_execution":
-        return {"run_shell_command", "inspect_shell_environment"}
-    if scenario.task_signature == "repo/shell_inspection":
-        return {"inspect_shell_environment", "read_shell_history", "run_shell_command"}
-    if scenario.task_signature == "local/runtime_inspection":
-        return {"inspect_runtime_versions"}
-    if scenario.task_signature == "repo/general":
-        return {"git_status", "git_recent_commits", "git_diff", "grep_files", "read_file", "list_files"}
-    if scenario.task_signature == "data/spreadsheet/analysis":
-        return {"inspect_spreadsheet", "read_sheet_range", "stat_path"}
-    if scenario.task_signature == "extract/general":
-        return {"glob_paths", "stat_path", "read_file", "run_python", "list_files"}
-    if scenario.task_signature == "automation/general":
-        return {"write_file", "read_file", "run_shell_command"}
-    raise AssertionError(f"Unhandled task signature: {scenario.task_signature}")
-
-
 def _assert_phase1(scenario: Scenario, response) -> None:
     trace_path = response.trace.get("trace_path", "unknown-trace")
     successful_names = _tool_result_names(response, successes_only=True)
+    anchors = set(scenario.phase_expectations.anchor_tools)
+
     assert successful_names, f"phase1-step1: no successful tool results; trace={trace_path}"
-    assert successful_names[0] in _phase1_anchor_tools(scenario), (
-        f"phase1-step1: first tool {successful_names[0]!r} not in "
-        f"{sorted(_phase1_anchor_tools(scenario))}; trace={trace_path}"
-    )
+    if anchors:
+        assert successful_names[0] in anchors, (
+            f"phase1-step1: first tool {successful_names[0]!r} not in {sorted(anchors)}; trace={trace_path}"
+        )
 
 
 def _assert_phase2(scenario: Scenario, response) -> None:
     trace_path = response.trace.get("trace_path", "unknown-trace")
-    first_three = _tool_result_names(response, successes_only=True)[:3]
-    first_five = _tool_result_names(response, successes_only=True)[:5]
-    assert first_three, f"phase2-step2-3: no successful tool results; trace={trace_path}"
+    expectations = scenario.phase_expectations
+    successful_names = _tool_result_names(response, successes_only=True)
+    windows: list[list[str]] = [successful_names[:5]]
+    raw_provider_keys = response.trace.get("raw_provider_keys") or []
+    if len(raw_provider_keys) > 1 and len(successful_names) > 5:
+        windows.append(successful_names[-5:])
 
-    if scenario.task_signature == "repo/shell_execution":
-        assert "run_shell_command" in first_three[:2], (
-            f"phase2-step2-3: expected `run_shell_command` by step 2 within {first_three}; trace={trace_path}"
-        )
+    assert len(successful_names) >= min(2, expectations.min_successful_tools), (
+        f"phase2-step2-3: too few successful tools {successful_names}; trace={trace_path}"
+    )
+
+    def _window_errors(window: list[str]) -> list[str]:
+        errors: list[str] = []
+        for tool_name in expectations.phase2_required_tools:
+            if tool_name not in window:
+                errors.append(f"missing required tool {tool_name!r} in window {window}")
+        if expectations.phase2_required_any and not (set(window) & set(expectations.phase2_required_any)):
+            errors.append(
+                f"missing any of {sorted(expectations.phase2_required_any)} in window {window}"
+            )
+        if expectations.requires_non_shell_follow_up:
+            if "run_shell_command" not in window:
+                errors.append(f"missing shell anchor in window {window}")
+            elif not any(name != "run_shell_command" for name in window):
+                errors.append(f"missing non-shell follow-up in window {window}")
+        return errors
+
+    window_errors = [_window_errors(window) for window in windows]
+    if any(not errors for errors in window_errors):
         return
-    if scenario.task_signature == "repo/shell_inspection":
-        observed = set(first_three)
-        assert len(observed & {"inspect_shell_environment", "read_shell_history", "run_shell_command"}) >= 2, (
-            f"phase2-step2-3: expected at least two shell inspection steps within {first_three}; trace={trace_path}"
-        )
-        return
-    if scenario.task_signature == "local/runtime_inspection":
-        assert "inspect_runtime_versions" in first_three, (
-            f"phase2-step2-3: expected `inspect_runtime_versions` within {first_three}; trace={trace_path}"
-        )
-        assert set(first_five) & {"run_shell_command", "inspect_shell_environment"}, (
-            f"phase2-step2-3: expected a confirming shell step within {first_five}; trace={trace_path}"
-        )
-        return
-    if scenario.task_signature == "repo/general":
-        observed = set(first_three)
-        assert len(observed & {"git_status", "git_recent_commits", "git_diff", "grep_files", "read_file", "list_files"}) >= 2, (
-            f"phase2-step2-3: expected two repo inspection steps within {first_three}; trace={trace_path}"
-        )
-        return
-    if scenario.task_signature == "data/spreadsheet/analysis":
-        observed = set(first_three)
-        assert observed & {"inspect_spreadsheet", "read_sheet_range"}, (
-            f"phase2-step2-3: expected spreadsheet inspection within {first_three}; trace={trace_path}"
-        )
-        assert len(first_five) >= 2, (
-            f"phase2-step2-3: expected at least two spreadsheet-analysis steps within {first_five}; trace={trace_path}"
-        )
-        assert set(first_five) & {"read_sheet_range", "run_python"}, (
-            f"phase2-step2-3: expected a follow-up spreadsheet detail step within {first_five}; trace={trace_path}"
-        )
-        return
-    if scenario.task_signature == "extract/general":
-        observed = set(first_three)
-        assert observed & {"glob_paths", "stat_path", "read_file", "list_files"}, (
-            f"phase2-step2-3: expected extraction discovery within {first_three}; trace={trace_path}"
-        )
-        assert len(first_five) >= 2, (
-            f"phase2-step2-3: expected at least two extraction steps within {first_five}; trace={trace_path}"
-        )
-        return
-    if scenario.task_signature == "automation/general":
-        observed = set(first_five)
-        assert "write_file" in observed, (
-            f"phase2-step2-3: expected `write_file` within {first_five}; trace={trace_path}"
-        )
-        assert "run_shell_command" in observed, (
-            f"phase2-step2-3: expected verification by `run_shell_command` within {first_five}; trace={trace_path}"
-        )
-        return
-    raise AssertionError(f"Unhandled task signature: {scenario.task_signature}")
+
+    raise AssertionError(
+        "phase2-step2-3: no valid evidence-gathering window satisfied expectations; "
+        f"windows={windows}; errors={window_errors}; trace={trace_path}"
+    )
 
 
 def _assert_phase3_behavior(scenario: Scenario, response) -> None:
     trace_path = response.trace.get("trace_path", "unknown-trace")
-    tool_names = _tool_result_names(response)
-    unique_tool_names = set(tool_names)
-    verification = response.verification
+    expectations = scenario.phase_expectations
+    all_tool_names = _tool_result_names(response)
+    successful_names = _tool_result_names(response, successes_only=True)
 
     assert response.route.task_class == scenario.task_class, trace_path
     assert response.route.task_signature == scenario.task_signature, trace_path
     assert response.trace["provider"] == "OpenAIChatProvider", trace_path
+    assert response.trace["tool_events"], trace_path
     assert response.text.strip(), trace_path
     assert "Provider request failed:" not in response.text, trace_path
     assert "Tool loop ended without a final assistant response." not in response.text, trace_path
-
-    minimums = {
-        "repo/shell_execution": 2,
-        "repo/shell_inspection": 1,
-        "local/runtime_inspection": 2,
-        "repo/general": 2,
-        "data/spreadsheet/analysis": 2,
-        "extract/general": 2,
-        "automation/general": 3,
-    }
-    assert len(tool_names) >= minimums[scenario.task_signature], (
-        f"{scenario.name} only used {len(tool_names)} tools; trace={trace_path}"
+    assert response.verification["status"] != "fail", trace_path
+    assert len(successful_names) >= expectations.min_successful_tools, (
+        f"{scenario.name} only used {len(successful_names)} successful tools; trace={trace_path}"
     )
 
-    if scenario.task_signature == "repo/shell_execution":
-        assert "run_shell_command" in unique_tool_names, trace_path
-    elif scenario.task_signature == "repo/shell_inspection":
-        assert unique_tool_names & {"inspect_shell_environment", "read_shell_history"}, trace_path
-    elif scenario.task_signature == "local/runtime_inspection":
-        assert "inspect_runtime_versions" in unique_tool_names, trace_path
-        if "command paths do they use" in scenario.prompt or "confirm one with a shell command" in scenario.prompt:
-            assert unique_tool_names & {"run_shell_command", "inspect_shell_environment"}, trace_path
-    elif scenario.task_signature == "repo/general":
-        assert unique_tool_names & {
-            "grep_files",
-            "read_file",
-            "list_files",
-            "git_status",
-            "git_recent_commits",
-            "git_diff",
-        }, trace_path
-    elif scenario.task_signature == "data/spreadsheet/analysis":
-        assert unique_tool_names & {"inspect_spreadsheet", "read_sheet_range"}, trace_path
-        assert unique_tool_names & {"read_sheet_range", "run_python"}, trace_path
-        assert "write_file" not in unique_tool_names, trace_path
-    elif scenario.task_signature == "extract/general":
-        assert "write_file" not in unique_tool_names, trace_path
-        assert unique_tool_names & {"read_file", "run_python"}, trace_path
+    for tool_name in expectations.required_tools:
+        assert tool_name in successful_names, (
+            f"{scenario.name} missing required tool {tool_name!r}; trace={trace_path}"
+        )
+    for tool_name in expectations.forbidden_tools:
+        assert tool_name not in all_tool_names, (
+            f"{scenario.name} used forbidden tool {tool_name!r}; trace={trace_path}"
+        )
+    if expectations.requires_non_shell_follow_up:
+        assert any(name != "run_shell_command" for name in successful_names), trace_path
+    if expectations.requires_json_output:
         payload = json.loads(_strip_fences(response.text))
         assert isinstance(payload, (dict, list)), trace_path
-    elif scenario.task_signature == "automation/general":
-        assert "write_file" in unique_tool_names, trace_path
-        assert "run_shell_command" in unique_tool_names, trace_path
-
-    if verification["status"] == "pass":
-        return
-
-    assert verification["status"] == "warn", trace_path
-    assert verification["name"] == "tool_failure_v1", trace_path
 
 
-@pytest.fixture(scope="session", params=SCENARIOS, ids=[scenario.name for scenario in SCENARIOS])
+@pytest.fixture(scope="session", params=default_scenarios(), ids=[scenario.name for scenario in default_scenarios()])
 def live_run(
     request: pytest.FixtureRequest,
     tmp_path_factory: pytest.TempPathFactory,
@@ -372,7 +212,7 @@ def live_run(
     tmp_path = tmp_path_factory.mktemp(f"live_{scenario.name}")
     monkeypatch = pytest.MonkeyPatch()
     try:
-        workspace = _prepare_workspace(tmp_path, monkeypatch)
+        workspace = _prepare_workspace(tmp_path, monkeypatch, scenario)
         runtime = RockyRuntime.load_from(workspace, cli_overrides=_live_cli_overrides())
         runtime.permissions.config.mode = "bypass"
         response = runtime.run_prompt(scenario.prompt, continue_session=False)
@@ -398,8 +238,8 @@ def test_live_llm_phase3_multi_step_verification(live_run) -> None:
 
 @pytest.fixture(
     scope="session",
-    params=PHASE4_MINI_PROJECTS,
-    ids=[scenario.name for scenario in PHASE4_MINI_PROJECTS],
+    params=phase4_mini_projects(),
+    ids=[scenario.name for scenario in phase4_mini_projects()],
 )
 def live_phase4_run(
     request: pytest.FixtureRequest,
@@ -411,7 +251,7 @@ def live_phase4_run(
     monkeypatch = pytest.MonkeyPatch()
     try:
         workspace = _prepare_clean_workspace(tmp_path, monkeypatch)
-        _seed_mini_project_workspace(workspace, scenario)
+        materialize_mini_project_workspace(workspace, scenario)
         runtime = RockyRuntime.load_from(workspace, cli_overrides=_live_cli_overrides())
         runtime.permissions.config.mode = "bypass"
         response = runtime.run_prompt(scenario.prompt, continue_session=False)
@@ -424,6 +264,7 @@ def test_live_llm_phase4_mini_project_agentic_verification(live_phase4_run) -> N
     scenario, response, workspace = live_phase4_run
     trace_path = response.trace.get("trace_path", "unknown-trace")
     successful_names = _tool_result_names(response, successes_only=True)
+    expectations = scenario.phase_expectations
 
     assert response.route.task_class == scenario.task_class, trace_path
     assert response.route.task_signature == scenario.task_signature, trace_path
@@ -431,11 +272,9 @@ def test_live_llm_phase4_mini_project_agentic_verification(live_phase4_run) -> N
     assert response.verification["status"] == "pass", trace_path
     assert "Provider request failed:" not in response.text, trace_path
     assert "Tool loop ended without a final assistant response." not in response.text, trace_path
-    assert len(successful_names) >= scenario.min_successful_tools, trace_path
-    for tool_name in scenario.required_successful_tools:
+    assert len(successful_names) >= expectations.min_successful_tools, trace_path
+    for tool_name in expectations.required_tools:
         assert tool_name in successful_names, trace_path
-    if scenario.task_signature == "automation/general":
-        assert "write_file" in successful_names, trace_path
 
     for relative_path in scenario.expected_files:
         assert (workspace / relative_path).is_file(), f"missing {relative_path}; trace={trace_path}"

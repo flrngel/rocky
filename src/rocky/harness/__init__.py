@@ -1,32 +1,33 @@
-from rocky.harness.models import HarnessPhase, MiniProjectScenario, Scenario, ToolStep, WorkspaceContinuityScenario
+from rocky.harness.models import HarnessPhase, MiniProjectScenario, PhaseExpectations, Scenario, ToolStep, WorkspaceContinuityScenario
 from rocky.harness.phases import DEFAULT_PHASES, PHASES_BY_SLUG, phase_titles
 from rocky.harness.results import HarnessResultStore, HarnessRunRecord
 from rocky.harness.scenarios import (
-    DEFAULT_SCENARIOS,
-    PHASE4_MINI_PROJECTS,
-    SCENARIOS,
-    WORKSPACE_CONTINUITY_SCENARIOS,
+    default_scenarios,
     harness_inventory,
+    materialize_mini_project_workspace,
+    materialize_scenario_workspace,
+    phase4_mini_projects,
     scenarios_by_phase,
-    step,
+    workspace_continuity_scenarios,
 )
 
 __all__ = [
     "DEFAULT_PHASES",
-    "DEFAULT_SCENARIOS",
     "HarnessPhase",
     "HarnessResultStore",
     "HarnessRunRecord",
     "MiniProjectScenario",
-    "PHASE4_MINI_PROJECTS",
     "PHASES_BY_SLUG",
-    "SCENARIOS",
+    "PhaseExpectations",
     "Scenario",
     "ToolStep",
-    "WORKSPACE_CONTINUITY_SCENARIOS",
     "WorkspaceContinuityScenario",
+    "default_scenarios",
     "harness_inventory",
+    "materialize_mini_project_workspace",
+    "materialize_scenario_workspace",
+    "phase4_mini_projects",
     "phase_titles",
     "scenarios_by_phase",
-    "step",
+    "workspace_continuity_scenarios",
 ]
