@@ -23,16 +23,19 @@ class SkillRetriever:
             name_tokens = tokenize_keywords(skill.name)
             description_tokens = tokenize_keywords(skill.description)
             trigger_tokens = set().union(*(tokenize_keywords(trigger) for trigger in skill.triggers))
+            keyword_tokens = set().union(*(tokenize_keywords(keyword) for keyword in skill.retrieval_keywords))
             token_matches = (
                 (query_words & name_tokens)
                 | (query_words & description_tokens)
                 | (query_words & trigger_tokens)
+                | (query_words & keyword_tokens)
             )
             strong_token_matches = token_matches - WEAK_MATCH_TOKENS
             token_overlap = (
                 len(query_words & name_tokens) * 3
                 + len(query_words & description_tokens)
                 + len(query_words & trigger_tokens) * 2
+                + len(query_words & keyword_tokens) * 2
             )
             score += token_overlap
             if trigger_match:
@@ -42,7 +45,13 @@ class SkillRetriever:
             task_signature_score += sum(5 for sig in skill.task_signatures if sig == task_signature)
             score += task_signature_score
             if skill.scope == 'project':
-                score += 1
+                score += 2
+            if skill.origin == 'learned':
+                score += 3
+                if task_signature_score:
+                    score += 4
+            if skill.generation:
+                score += min(skill.generation, 3)
             if not trigger_match and not task_signature_score and not strong_token_matches:
                 continue
             if score < 2 and not trigger_match:

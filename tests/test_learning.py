@@ -28,6 +28,11 @@ def test_learning_manager_publishes_skill(tmp_path: Path) -> None:
     learned = manager.list_learned()
     assert learned
 
+    skill_text = Path(result["skill_path"]).read_text(encoding="utf-8")
+    assert "include bottle size and distillery" in skill_text
+    assert "Operational guidance" in skill_text
+    assert "Workspace hints" in skill_text
+
 
 def test_episode_store_recreates_query_directory_on_write(tmp_path: Path) -> None:
     store = EpisodeStore(

@@ -166,6 +166,20 @@ class Router:
         has_fenced_shell = bool(self.SHELL_FENCE_RE.search(text))
         has_shell_tokens = bool(self.SHELL_TOKEN_RE.search(text))
         has_inline_command = self._looks_like_inline_command_reference(text)
+        mentions_existing_script = any(
+            phrase in lowered
+            for phrase in (
+                'existing script',
+                'workspace script',
+                'existing workspace script',
+                'rerun the script',
+                're-run the script',
+                'rerun the existing script',
+                're-run the existing script',
+                'rerun the existing workspace script',
+                're-run the existing workspace script',
+            )
+        )
         asks_to_run = any(phrase in lowered for phrase in (
             'run command',
             'execute command',
@@ -192,6 +206,8 @@ class Router:
         ))
         mentions_run_verb = bool(re.search(r"\b(?:run|execute|exec|launch|check)\b", lowered))
         starts_with_verb = lowered.startswith(self.COMMAND_VERBS)
+        if mentions_run_verb and (has_inline_command or mentions_existing_script):
+            return True
         return has_fenced_shell or has_shell_tokens or asks_to_run or starts_with_verb or (
             mentions_run_verb and has_inline_command
         )

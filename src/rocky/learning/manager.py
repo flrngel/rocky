@@ -100,6 +100,7 @@ class LearningManager:
             support["id"],
             prompt,
             answer,
+            trace,
             scope,
         )
         path = draft.path

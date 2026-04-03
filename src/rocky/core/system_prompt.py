@@ -18,6 +18,7 @@ def build_system_prompt(
         "Unless the user explicitly asked for an external path, keep created, copied, edited, and verified files inside the current workspace. Prefer relative workspace paths and never invent placeholder roots like `/workspace`.",
         "The active execution directory is the default project focus. Favor it for shell commands, reads, and new files unless the user asks for another exact path.",
         "Project handoff summaries come from earlier sessions in the same workspace; use them to continue work, but re-check machine facts with tools before claiming them.",
+        "If the user asks to continue, resume, pick up, or keep working in this workspace, start from any retrieved handoff or learned skill before doing broad exploration. Treat those paths and constraints as the default working context until live tool results prove otherwise.",
     ]
     if context.tool_families:
         parts.append(
@@ -162,10 +163,15 @@ def build_system_prompt(
         for item in context.memories:
             parts.append(f"### {item['name']} ({item['scope']})\n{item['text']}")
     if context.skills:
+        if any(item.get("origin") == "learned" or int(item.get("generation", 0) or 0) > 0 for item in context.skills):
+            parts.append(
+                "Retrieved learned skills are corrections from earlier feedback in this workspace. "
+                "When a learned skill applies, follow it before generic heuristics."
+            )
         parts.append("## Retrieved skills")
         for item in context.skills:
             parts.append(
-                f"### {item['name']} [{item['scope']} gen={item['generation']}]\n{item['text']}"
+                f"### {item['name']} [{item['scope']} origin={item.get('origin', 'manual')} gen={item['generation']}]\n{item['text']}"
             )
     if context.tool_families:
         parts.append("## Tool exposure")

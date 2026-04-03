@@ -34,6 +34,14 @@ class Skill:
         return [str(item) for item in (retrieval.get('triggers') or [])]
 
     @property
+    def retrieval_keywords(self) -> list[str]:
+        retrieval = self.metadata.get('retrieval') or {}
+        keywords = [str(item) for item in (retrieval.get('keywords') or [])]
+        keywords.extend(str(item) for item in (self.metadata.get('paths') or []))
+        keywords.extend(str(item) for item in (self.metadata.get('tools') or []))
+        return keywords
+
+    @property
     def generation(self) -> int:
         try:
             return int(self.metadata.get('generation', 0))

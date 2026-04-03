@@ -26,7 +26,7 @@ class ContextPackage:
                 for m in self.memories
             ],
             "skills": [
-                {"name": s["name"], "scope": s["scope"], "generation": s["generation"]}
+                {"name": s["name"], "scope": s["scope"], "generation": s["generation"], "origin": s.get("origin")}
                 for s in self.skills
             ],
             "tool_families": self.tool_families,
@@ -120,6 +120,7 @@ class ContextBuilder:
             {
                 "name": skill.name,
                 "scope": skill.scope,
+                "origin": skill.origin,
                 "generation": skill.generation,
                 "path": str(skill.path),
                 "description": skill.description,

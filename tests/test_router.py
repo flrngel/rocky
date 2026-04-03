@@ -122,6 +122,20 @@ def test_router_treats_inline_workspace_script_execution_as_shell_execution() ->
     assert 'shell' in route.tool_families
 
 
+def test_router_treats_existing_workspace_script_resume_as_shell_execution() -> None:
+    router = Router()
+
+    route = router.route(
+        "continue the catalog review work in this project. "
+        "Re-run the existing workspace script, write the final exact JSON merge decisions to `phase5_merge_decisions.json`, "
+        "then read that file back and tell me the exact JSON."
+    )
+
+    assert route.task_class == TaskClass.REPO
+    assert route.task_signature == 'repo/shell_execution'
+    assert 'shell' in route.tool_families
+
+
 def test_router_does_not_treat_latest_shell_command_as_research() -> None:
     router = Router()
 

@@ -31,8 +31,8 @@ DEFAULT_PHASES: tuple[HarnessPhase, ...] = (
     HarnessPhase(
         slug="phase5_workspace_continuity",
         title="Phase 5 — Workspace continuity and handoff",
-        description="Carry project intent, paths, and recent successful work into a fresh session without pretending to remember unavailable chat turns.",
-        success_signals=("execution_directory_focus", "recent_workspace_handoff", "project_memory_loaded"),
+        description="Carry project intent, learned corrections, paths, and recent successful work into a fresh session without pretending to remember unavailable chat turns.",
+        success_signals=("execution_directory_focus", "recent_workspace_handoff", "project_memory_loaded", "learned_correction_loaded"),
     ),
 )
 

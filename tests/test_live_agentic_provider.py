@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,16 @@ LIVE_PROVIDER = "ollama"
 LIVE_BASE_URL = "http://ainbr-research-fast:11434/v1"
 LIVE_MODEL = "qwen3.5:4b"
 LIVE_SKIP_ENV = "ROCKY_SKIP_LIVE_AGENTIC"
+
+
+@dataclass(frozen=True)
+class Phase5LearningCase:
+    name: str
+    seed_scenario: MiniProjectScenario
+    follow_up_prompt: str
+    feedback: str
+    expected_task_signature: str
+    expected_output_path: str | None = None
 
 
 def _live_cli_overrides() -> dict[str, object]:
@@ -98,6 +109,116 @@ def _prepare_clean_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("SHELL", "/bin/zsh")
     monkeypatch.setenv("USER", "rockytester")
     return workspace
+
+
+def _phase5_catalog_case(project: MiniProjectScenario) -> Phase5LearningCase:
+    script_name = str(project.oracle["script_name"])
+    output_path = f"phase5_{Path(str(project.oracle['output_file'])).name}"
+    return Phase5LearningCase(
+        name=f"learned_resume_{project.oracle['family']}",
+        seed_scenario=project,
+        follow_up_prompt=(
+            "continue the catalog review work in this project. "
+            f"Re-run the existing workspace script, write the final exact JSON merge decisions to `{output_path}`, "
+            "then read that file back and tell me the exact JSON."
+        ),
+        feedback=(
+            f"When continuing catalog-review work in this workspace, keep `{script_name}` in focus. "
+            "Execute the existing workspace script first. "
+            "If it returns structured data, parse it with `run_python` before making merge decisions. "
+            "When the user asks for a result file, write the exact JSON there and reread it before answering."
+        ),
+        expected_task_signature="repo/shell_execution",
+        expected_output_path=output_path,
+    )
+
+
+def _phase5_report_case(project: MiniProjectScenario) -> Phase5LearningCase:
+    report_script = str(project.verify_command[1])
+    sales_file = str(project.oracle["sales_file"])
+    return Phase5LearningCase(
+        name=f"learned_resume_{project.oracle['family']}",
+        seed_scenario=project,
+        follow_up_prompt=(
+            "continue the reporting helper work in this project. "
+            "Re-read the existing script if needed, then tell me the exact verified output."
+        ),
+        feedback=(
+            f"When continuing report-helper work in this workspace, keep `{report_script}` and `{sales_file}` in view. "
+            "Use the existing project files, reread the script before verifying it, then run the exact command and name the exact observed output in the final answer."
+        ),
+        expected_task_signature="automation/general",
+    )
+
+
+def _phase5_learning_cases() -> tuple[Phase5LearningCase, ...]:
+    cases: list[Phase5LearningCase] = []
+    for project in phase4_mini_projects():
+        family = str(project.oracle.get("family") or "")
+        if family == "catalog_review":
+            cases.append(_phase5_catalog_case(project))
+        elif family == "sales_report":
+            cases.append(_phase5_report_case(project))
+    return tuple(cases)
+
+
+def _prepare_phase5_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: Phase5LearningCase,
+) -> Path:
+    workspace = _prepare_clean_workspace(tmp_path, monkeypatch)
+    materialize_mini_project_workspace(workspace, case.seed_scenario)
+    return workspace
+
+
+def _runtime_for_workspace(workspace: Path) -> RockyRuntime:
+    runtime = RockyRuntime.load_from(workspace, cli_overrides=_live_cli_overrides())
+    runtime.permissions.config.mode = "bypass"
+    return runtime
+
+
+def _publish_learning(runtime: RockyRuntime, feedback: str) -> dict:
+    result = runtime.commands.handle(f"/learn {feedback}").data
+    assert result and result.get("published") is True
+    return result
+
+
+def _phase5_expected_json(case: Phase5LearningCase) -> object:
+    return case.seed_scenario.expected_output
+
+
+def _phase5_expected_text(case: Phase5LearningCase, workspace: Path) -> str:
+    family = str(case.seed_scenario.oracle.get("family") or "")
+    if family == "sales_report":
+        result = subprocess.run(
+            ["sh", str(case.seed_scenario.verify_command[1])],
+            cwd=str(workspace),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+    raise AssertionError(f"no text expectation handler for phase5 family {family}")
+
+
+def _assert_phase5_output(case: Phase5LearningCase, response, workspace: Path) -> None:
+    trace_path = response.trace.get("trace_path", "unknown-trace")
+    family = str(case.seed_scenario.oracle.get("family") or "")
+    if family == "catalog_review":
+        assert case.expected_output_path is not None, trace_path
+        output_file = workspace / case.expected_output_path
+        assert output_file.is_file(), trace_path
+        assert json.loads(output_file.read_text(encoding="utf-8")) == _phase5_expected_json(case), trace_path
+        assert case.expected_output_path in response.text, trace_path
+        return
+    if family == "sales_report":
+        script_name = str(case.seed_scenario.verify_command[1])
+        expected_output = _phase5_expected_text(case, workspace)
+        assert expected_output in response.text, trace_path
+        assert script_name in response.text, trace_path
+        return
+    raise AssertionError(f"unexpected phase5 family {family}")
 
 
 @pytest.fixture(scope="session")
@@ -327,3 +448,64 @@ def test_live_llm_phase1_cli_date_and_live_price_lookup(
     assert "Provider request failed:" not in response.text, trace_path
     assert "Tool loop ended without a final assistant response." not in response.text, trace_path
     assert "Nike" in response.text or "NKE" in response.text, trace_path
+
+
+def _run_phase5_training_loop(
+    workspace: Path,
+    case: Phase5LearningCase,
+    *,
+    max_rounds: int = 3,
+):
+    seed_runtime = _runtime_for_workspace(workspace)
+    seed_response = seed_runtime.run_prompt(case.seed_scenario.prompt, continue_session=False)
+
+    baseline_runtime = _runtime_for_workspace(workspace)
+    baseline_response = baseline_runtime.run_prompt(case.follow_up_prompt, continue_session=False)
+    learn_result = _publish_learning(seed_runtime, case.feedback)
+
+    last_response = baseline_response
+    for round_index in range(max_rounds):
+        runtime = _runtime_for_workspace(workspace)
+        response = runtime.run_prompt(case.follow_up_prompt, continue_session=False)
+        last_response = response
+        if response.verification["status"] == "pass" and learn_result["skill_id"] in response.trace["selected_skills"]:
+            return seed_response, baseline_response, learn_result, response, runtime
+        if (
+            round_index < max_rounds - 1
+            and response.route.task_signature == case.expected_task_signature
+        ):
+            learn_result = _publish_learning(runtime, case.feedback)
+    raise AssertionError(
+        f"phase5 training loop did not converge for {case.name}; "
+        f"seed_verification={seed_response.verification}; "
+        f"baseline_verification={baseline_response.verification}; "
+        f"last_verification={last_response.verification}; "
+        f"selected_skills={last_response.trace.get('selected_skills')}"
+    )
+
+
+@pytest.mark.parametrize("case", _phase5_learning_cases(), ids=[case.name for case in _phase5_learning_cases()])
+def test_live_llm_phase5_learning_and_workspace_continuity(
+    case: Phase5LearningCase,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    live_provider_ready: None,
+) -> None:
+    workspace = _prepare_phase5_workspace(tmp_path, monkeypatch, case)
+    seed_response, baseline_response, learn_result, response, runtime = _run_phase5_training_loop(workspace, case)
+    trace_path = response.trace.get("trace_path", "unknown-trace")
+    context = runtime.current_context()
+
+    assert seed_response.verification["status"] == "pass", trace_path
+    assert baseline_response.trace["context"]["handoffs"], trace_path
+    assert not any(
+        skill.get("origin") == "learned"
+        for skill in baseline_response.trace["context"]["skills"]
+    ), trace_path
+    assert response.route.task_signature == case.expected_task_signature, trace_path
+    assert response.verification["status"] == "pass", trace_path
+    assert response.trace["provider"] == "OpenAIChatProvider", trace_path
+    assert learn_result["skill_id"] in response.trace["selected_skills"], trace_path
+    assert context["handoffs"], trace_path
+    assert any(skill.get("origin") == "learned" for skill in context["skills"]), trace_path
+    _assert_phase5_output(case, response, workspace)
