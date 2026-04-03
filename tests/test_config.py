@@ -24,6 +24,17 @@ def test_config_precedence(tmp_path: Path) -> None:
     assert config.permissions.mode == "bypass"
 
 
+def test_config_defaults_enable_thinking_for_providers(tmp_path: Path) -> None:
+    global_root = tmp_path / "global"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    config = ConfigLoader(global_root, workspace).load()
+
+    assert config.providers["ollama"].thinking is True
+    assert config.providers["openai"].thinking is True
+
+
 def test_dump_yaml_serializes_enum_values() -> None:
     rendered = dump_yaml({"style": ProviderStyle.OPENAI_CHAT})
 

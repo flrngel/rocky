@@ -19,6 +19,7 @@ class ProviderConfig:
     api_key_env: str | None = 'OLLAMA_API_KEY'
     api_key: str | None = None
     model: str = 'llama3.2'
+    thinking: bool = True
     temperature: float = 0.2
     timeout_s: int = 120
     store: bool = False
@@ -75,6 +76,7 @@ class AppConfig:
                     base_url='http://localhost:11434/v1',
                     api_key_env='OLLAMA_API_KEY',
                     model='llama3.2',
+                    thinking=True,
                     store=False,
                 ),
                 'openai': ProviderConfig(
@@ -83,6 +85,7 @@ class AppConfig:
                     base_url='https://api.openai.com/v1',
                     api_key_env='OPENAI_API_KEY',
                     model='gpt-5.2',
+                    thinking=True,
                     store=False,
                 ),
             },

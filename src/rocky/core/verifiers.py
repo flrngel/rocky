@@ -294,6 +294,13 @@ class VerifierRegistry:
                     "fail",
                     "Expected Rocky to verify the automation by executing a shell command",
                 )
+            if any(word in lowered for word in automation_build_terms):
+                if len(successful_names) < 3 or "read_file" not in result_names:
+                    return VerificationResult(
+                        "tool_expectation_v1",
+                        "fail",
+                        "Expected Rocky to use at least three automation steps: `write_file`, `read_file`, and `run_shell_command`",
+                    )
         if route.task_class == TaskClass.REPO and any(
             phrase in lowered
             for phrase in (

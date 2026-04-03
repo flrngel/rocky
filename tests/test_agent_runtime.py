@@ -183,6 +183,13 @@ class _AutomationOutputRepairProvider:
                     },
                     {
                         "type": "tool_result",
+                        "name": "read_file",
+                        "arguments": {"path": "report.sh"},
+                        "text": "{}",
+                        "success": True,
+                    },
+                    {
+                        "type": "tool_result",
                         "name": "run_shell_command",
                         "arguments": {"command": "sh report.sh"},
                         "text": '{"success": true, "data": {"stdout": "220\\n", "stderr": "", "returncode": 0}}',
@@ -197,6 +204,13 @@ class _AutomationOutputRepairProvider:
                 {
                     "type": "tool_result",
                     "name": "write_file",
+                    "arguments": {"path": "report.sh"},
+                    "text": "{}",
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "read_file",
                     "arguments": {"path": "report.sh"},
                     "text": "{}",
                     "success": True,
@@ -232,6 +246,7 @@ class _AutomationShellWriteGuardProvider:
             "write_file",
             {"path": "scripts/report.sh", "content": "#!/bin/sh\necho hi\n"},
         )
+        reread = execute_tool("read_file", {"path": "scripts/report.sh"})
         verified = execute_tool("run_shell_command", {"command": "sh scripts/report.sh", "timeout_s": 5})
         return ProviderResponse(
             text="Ran `sh scripts/report.sh` and it printed `hi`.",
@@ -253,6 +268,13 @@ class _AutomationShellWriteGuardProvider:
                 },
                 {
                     "type": "tool_result",
+                    "name": "read_file",
+                    "arguments": {"path": "scripts/report.sh"},
+                    "text": reread,
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
                     "name": "run_shell_command",
                     "arguments": {"command": "sh scripts/report.sh", "timeout_s": 5},
                     "text": verified,
@@ -270,6 +292,7 @@ class _AutomationPreWriteShellLoopProvider:
             "write_file",
             {"path": "scripts/backup_logs.sh", "content": "#!/bin/sh\nmkdir -p backups\ncp logs/app.log backups/app.log\n"},
         )
+        reread = execute_tool("read_file", {"path": "scripts/backup_logs.sh"})
         verified = execute_tool(
             "run_shell_command",
             {"command": "sh scripts/backup_logs.sh && test -f backups/app.log", "timeout_s": 5},
@@ -297,6 +320,13 @@ class _AutomationPreWriteShellLoopProvider:
                     "name": "write_file",
                     "arguments": {"path": "scripts/backup_logs.sh"},
                     "text": wrote,
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "read_file",
+                    "arguments": {"path": "scripts/backup_logs.sh"},
+                    "text": reread,
                     "success": True,
                 },
                 {

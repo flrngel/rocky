@@ -37,6 +37,17 @@ def _prompt_choice(
             return selected
 
 
+def _prompt_bool(input_func: InputFunc, label: str, default: bool) -> bool:
+    default_label = 'true' if default else 'false'
+    while True:
+        raw = input_func(f"{label} [true/false] [{default_label}]: ").strip().lower()
+        selected = raw or default_label
+        if selected in {'true', 't', 'yes', 'y', '1', 'on'}:
+            return True
+        if selected in {'false', 'f', 'no', 'n', '0', 'off'}:
+            return False
+
+
 def _provider_defaults(config: dict, name: str, fallback: dict) -> dict:
     provider = ((config.get("providers") or {}).get(name) or {})
     return {**fallback, **provider}
@@ -53,6 +64,7 @@ def build_global_config(existing: dict | None, answers: dict[str, str]) -> dict:
             "base_url": answers["base_url"],
             "api_key_env": answers["api_key_env"] or None,
             "model": answers["model"],
+            "thinking": bool(answers["thinking"]),
             "store": False,
         }
     else:
@@ -60,6 +72,7 @@ def build_global_config(existing: dict | None, answers: dict[str, str]) -> dict:
         provider["base_url"] = answers["base_url"]
         provider["model"] = answers["model"]
         provider["api_key_env"] = answers["api_key_env"] or None
+        provider["thinking"] = bool(answers["thinking"])
         providers[active_provider] = provider
 
     base["active_provider"] = active_provider
@@ -78,6 +91,7 @@ def config_summary(config: dict) -> str:
         "active_provider": active_provider,
         "base_url": provider.get("base_url"),
         "model": provider.get("model"),
+        "thinking": bool(provider.get("thinking", True)),
         "api_key_env": provider.get("api_key_env"),
         "permission_mode": ((config.get("permissions") or {}).get("mode")),
     }
@@ -112,12 +126,14 @@ def run_config_wizard(
         style = provider_defaults["style"]
         base_url = _prompt_text(input_func, "Ollama base URL", str(provider_defaults["base_url"]))
         model = _prompt_text(input_func, "Ollama model", str(provider_defaults["model"]))
+        thinking = _prompt_bool(input_func, "Enable thinking mode", bool(provider_defaults.get("thinking", True)))
         api_key_env = _prompt_text(input_func, "API key env var", str(provider_defaults.get("api_key_env") or "OLLAMA_API_KEY"))
     elif active_provider == "openai":
         provider_defaults = _provider_defaults(merged, "openai", DEFAULT_CONFIG_DICT["providers"]["openai"])
         style = provider_defaults["style"]
         base_url = _prompt_text(input_func, "OpenAI base URL", str(provider_defaults["base_url"]))
         model = _prompt_text(input_func, "OpenAI model", str(provider_defaults["model"]))
+        thinking = _prompt_bool(input_func, "Enable thinking mode", bool(provider_defaults.get("thinking", True)))
         api_key_env = _prompt_text(input_func, "API key env var", str(provider_defaults.get("api_key_env") or "OPENAI_API_KEY"))
     else:
         compatible_defaults = _provider_defaults(
@@ -128,6 +144,7 @@ def run_config_wizard(
                 "base_url": "http://localhost:11434/v1",
                 "api_key_env": "COMPATIBLE_API_KEY",
                 "model": "llama3.2",
+                "thinking": True,
             },
         )
         style_choice = _prompt_choice(
@@ -139,6 +156,7 @@ def run_config_wizard(
         style = "openai_chat" if style_choice == "1" else "openai_responses"
         base_url = _prompt_text(input_func, "Compatible base URL", str(compatible_defaults["base_url"]))
         model = _prompt_text(input_func, "Compatible model", str(compatible_defaults["model"]))
+        thinking = _prompt_bool(input_func, "Enable thinking mode", bool(compatible_defaults.get("thinking", True)))
         api_key_env = _prompt_text(
             input_func,
             "API key env var (leave blank if none)",
@@ -161,6 +179,7 @@ def run_config_wizard(
             "compatible_style": style,
             "base_url": base_url,
             "model": model,
+            "thinking": thinking,
             "api_key_env": api_key_env,
             "permission_mode": permission_mode,
         },

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -111,6 +112,40 @@ class OpenAIChatProvider:
         assert last_error is not None
         raise last_error
 
+    def _uses_ollama_compat_reasoning(self) -> bool:
+        if self.config.name == "ollama":
+            return True
+        parsed = urlparse(self.config.base_url)
+        return parsed.port == 11434
+
+    def _reasoning_payload(self) -> dict[str, Any]:
+        if not self._uses_ollama_compat_reasoning():
+            return {}
+        if not self.config.thinking:
+            return {"think": False}
+        if "gpt-oss" in self.config.model.lower():
+            return {"think": "medium"}
+        return {"think": True}
+
+    def _chat_payload(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        stream: bool,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": stream,
+            **self._reasoning_payload(),
+        }
+        if tools is not None:
+            payload["tools"] = tools
+        return payload
+
     def _tool_summary_fallback(self, tool_events: list[dict[str, Any]]) -> str:
         successful_results = [
             event
@@ -187,12 +222,7 @@ class OpenAIChatProvider:
             ]
             data = self._post_chat(
                 client,
-                {
-                    "model": self.config.model,
-                    "messages": followup,
-                    "temperature": 0,
-                    "stream": False,
-                },
+                self._chat_payload(messages=followup, temperature=0, stream=False),
             )
             raw_rounds.append(data)
             usage = data.get("usage") or usage
@@ -218,12 +248,11 @@ class OpenAIChatProvider:
         stream: bool = False,
         event_handler: Callable[[dict[str, Any]], None] | None = None,
     ) -> ProviderResponse:
-        payload = {
-            "model": self.config.model,
-            "messages": self._convert_messages(system_prompt, messages),
-            "temperature": self.config.temperature,
-            "stream": bool(stream and event_handler),
-        }
+        payload = self._chat_payload(
+            messages=self._convert_messages(system_prompt, messages),
+            temperature=self.config.temperature,
+            stream=bool(stream and event_handler),
+        )
         if stream and event_handler:
             try:
                 return self._stream_complete(payload, event_handler)
@@ -300,11 +329,12 @@ class OpenAIChatProvider:
         with self._client() as client:
             for _ in range(max_rounds):
                 payload = {
-                    "model": self.config.model,
-                    "messages": conversation,
-                    "tools": tools,
-                    "temperature": self.config.temperature,
-                    "stream": False,
+                    **self._chat_payload(
+                        messages=conversation,
+                        tools=tools,
+                        temperature=self.config.temperature,
+                        stream=False,
+                    )
                 }
                 data = self._post_chat(client, payload)
                 raw_rounds.append(data)
@@ -377,11 +407,11 @@ class OpenAIChatProvider:
             with self._client() as client:
                 response = client.post(
                     f"{self.config.base_url}/chat/completions",
-                    json={
-                        "model": self.config.model,
-                        "messages": [{"role": "user", "content": "ping"}],
-                        "stream": False,
-                    },
+                    json=self._chat_payload(
+                        messages=[{"role": "user", "content": "ping"}],
+                        temperature=self.config.temperature,
+                        stream=False,
+                    ),
                 )
                 if response.status_code < 400:
                     return True, "Provider reachable"

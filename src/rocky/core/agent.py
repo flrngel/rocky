@@ -371,7 +371,9 @@ class AgentCore:
                 "JSON shape. Do not use shell redirection, heredocs, `tee`, or inline interpreter file-writes as a "
                 "substitute for `write_file` when creating project files. In the final answer, name the exact script "
                 "or command you verified and include the exact observed output. If the observed output is wrong or "
-                "incomplete, edit the files and rerun verification until the observed output matches."
+                "incomplete, edit the files and rerun verification until the observed output matches. Use at least "
+                "three successful tool steps for the finished automation flow: `write_file`, then `read_file` to "
+                "reread the created script, then `run_shell_command` to execute it."
             )
         return (
             f"Original task:\n{prompt}\n\n"

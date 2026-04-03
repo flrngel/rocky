@@ -14,6 +14,7 @@ def test_build_global_config_for_compatible_provider() -> None:
             "compatible_style": "openai_chat",
             "base_url": "http://example.test/v1",
             "model": "qwen3.5:4b",
+            "thinking": False,
             "api_key_env": "EXAMPLE_API_KEY",
             "permission_mode": "auto",
         },
@@ -22,6 +23,7 @@ def test_build_global_config_for_compatible_provider() -> None:
     assert config["active_provider"] == "compatible"
     assert config["providers"]["compatible"]["base_url"] == "http://example.test/v1"
     assert config["providers"]["compatible"]["model"] == "qwen3.5:4b"
+    assert config["providers"]["compatible"]["thinking"] is False
     assert config["permissions"]["mode"] == "auto"
 
 
@@ -32,6 +34,7 @@ def test_run_config_wizard_writes_selected_provider(tmp_path: Path) -> None:
             "1",
             "http://localhost:11434/v1",
             "qwen3.5:4b",
+            "false",
             "OLLAMA_API_KEY",
             "1",
         ]
@@ -42,4 +45,5 @@ def test_run_config_wizard_writes_selected_provider(tmp_path: Path) -> None:
     config = read_yaml(config_path)
     assert config["active_provider"] == "ollama"
     assert config["providers"]["ollama"]["model"] == "qwen3.5:4b"
+    assert config["providers"]["ollama"]["thinking"] is False
     assert config["permissions"]["mode"] == "supervised"

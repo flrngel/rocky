@@ -288,3 +288,90 @@ def test_run_with_tools_retries_transient_server_errors() -> None:
 
     assert response.text == "Recovered answer."
     assert len(fake_client.calls) == 2
+
+
+def test_complete_sends_ollama_think_true_by_default() -> None:
+    provider = OpenAIChatProvider(ProviderConfig(name="ollama", thinking=True))
+    fake_client = _FakeClient(
+        [
+            {
+                "choices": [{"message": {"content": "Ready."}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        ]
+    )
+    provider._client = lambda: fake_client  # type: ignore[method-assign]
+
+    response = provider.complete(
+        system_prompt="You are Rocky.",
+        messages=[Message(role="user", content="hello")],
+    )
+
+    assert response.text == "Ready."
+    assert fake_client.calls[0]["json"]["think"] is True
+
+
+def test_complete_disables_ollama_thinking_when_thinking_is_false() -> None:
+    provider = OpenAIChatProvider(ProviderConfig(name="ollama", thinking=False))
+    fake_client = _FakeClient(
+        [
+            {
+                "choices": [{"message": {"content": "Ready."}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        ]
+    )
+    provider._client = lambda: fake_client  # type: ignore[method-assign]
+
+    provider.complete(
+        system_prompt="You are Rocky.",
+        messages=[Message(role="user", content="hello")],
+    )
+
+    assert fake_client.calls[0]["json"]["think"] is False
+
+
+def test_complete_uses_medium_think_level_for_gpt_oss_models() -> None:
+    provider = OpenAIChatProvider(ProviderConfig(name="ollama", model="gpt-oss:20b", thinking=True))
+    fake_client = _FakeClient(
+        [
+            {
+                "choices": [{"message": {"content": "Ready."}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        ]
+    )
+    provider._client = lambda: fake_client  # type: ignore[method-assign]
+
+    provider.complete(
+        system_prompt="You are Rocky.",
+        messages=[Message(role="user", content="hello")],
+    )
+
+    assert fake_client.calls[0]["json"]["think"] == "medium"
+
+
+def test_complete_avoids_ollama_think_field_for_non_ollama_chat_endpoint() -> None:
+    provider = OpenAIChatProvider(
+        ProviderConfig(
+            name="compatible",
+            base_url="https://api.example.test/v1",
+            thinking=True,
+        )
+    )
+    fake_client = _FakeClient(
+        [
+            {
+                "choices": [{"message": {"content": "Ready."}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        ]
+    )
+    provider._client = lambda: fake_client  # type: ignore[method-assign]
+
+    provider.complete(
+        system_prompt="You are Rocky.",
+        messages=[Message(role="user", content="hello")],
+    )
+
+    assert "think" not in fake_client.calls[0]["json"]
