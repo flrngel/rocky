@@ -38,6 +38,8 @@ READ_ONLY_TASK_SIGNATURES = {
 TASK_ALLOWED_TOOL_NAMES: dict[str, set[str]] = {
     "repo/shell_execution": {
         "run_shell_command",
+        "run_python",
+        "write_file",
         "inspect_runtime_versions",
         "read_file",
         "stat_path",
@@ -71,6 +73,8 @@ TASK_ALLOWED_TOOL_NAMES: dict[str, set[str]] = {
 TASK_TOOL_PRIORITY: dict[str, list[str]] = {
     "repo/shell_execution": [
         "run_shell_command",
+        "run_python",
+        "write_file",
         "inspect_runtime_versions",
         "git_recent_commits",
         "read_file",

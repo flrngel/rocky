@@ -44,6 +44,19 @@ class MiniProjectScenario:
     expected_output: object
     output_kind: str = "text"
     response_snippets: tuple[str, ...] = ()
+    seed_files: tuple[tuple[str, str], ...] = ()
+    executable_files: tuple[str, ...] = ()
+    task_class: TaskClass = TaskClass.AUTOMATION
+    task_signature: str = "automation/general"
+    min_successful_tools: int = 3
+    required_successful_tools: tuple[str, ...] = ("run_shell_command",)
+
+
+CATALOG_X_SH = """#!/bin/sh
+cat <<'JSON'
+{"products":[{"product_id":"P001","name":"Red T-Shirt","sku":"RTS-001","candidates":[{"candidate_id":"C001","name":"Red T-Shirt","sku":"RTS-001"},{"candidate_id":"C002","name":"Blue T-Shirt","sku":"BTS-002"},{"candidate_id":"C003","name":"Red Hoodie","sku":"RHD-003"}]},{"product_id":"P002","name":"Glass Bottle 500ml","sku":"BOT-500-CLR","candidates":[{"candidate_id":"C010","name":"Glass Bottle 500ml","sku":"BOT-500-CLR"},{"candidate_id":"C011","name":"Glass Bottle 750ml","sku":"BOT-750-CLR"},{"candidate_id":"C012","name":"Plastic Bottle 500ml","sku":"BOT-500-PL"}]}]}
+JSON
+"""
 
 
 PHASE4_MINI_PROJECTS: tuple[MiniProjectScenario, ...] = (
@@ -94,6 +107,35 @@ PHASE4_MINI_PROJECTS: tuple[MiniProjectScenario, ...] = (
         output_kind="json",
         response_snippets=("ada@example.com", "bob@example.org", "emails"),
     ),
+    MiniProjectScenario(
+        name="workspace_script_catalog_review",
+        prompt=(
+            "You are now product catalog manager. Execute `x.sh` and explore the response. "
+            "Those are pending products to be managed, and each product has candidates to merge. "
+            "Treat a candidate as the same product only when both `name` and `sku` match exactly. "
+            "Write valid JSON to `merge_decisions.json` with a top-level key `products`, where each item contains "
+            "`product_id`, `merge`, and `skip` arrays of candidate ids. Then read the file and tell me the exact JSON."
+        ),
+        expected_files=("x.sh", "merge_decisions.json"),
+        verify_command=(
+            "python3",
+            "-c",
+            "import json, pathlib; print(json.dumps(json.loads(pathlib.Path('merge_decisions.json').read_text()), sort_keys=True))",
+        ),
+        expected_output={
+            "products": [
+                {"product_id": "P001", "merge": ["C001"], "skip": ["C002", "C003"]},
+                {"product_id": "P002", "merge": ["C010"], "skip": ["C011", "C012"]},
+            ]
+        },
+        output_kind="json",
+        response_snippets=("merge_decisions.json", "C001", "C010"),
+        seed_files=(("x.sh", CATALOG_X_SH),),
+        task_class=TaskClass.REPO,
+        task_signature="repo/shell_execution",
+        min_successful_tools=3,
+        required_successful_tools=("run_shell_command", "read_file"),
+    ),
 )
 
 
@@ -135,6 +177,16 @@ def _prepare_clean_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("SHELL", "/bin/zsh")
     monkeypatch.setenv("USER", "rockytester")
     return workspace
+
+
+def _seed_mini_project_workspace(workspace: Path, scenario: MiniProjectScenario) -> None:
+    for relative_path, content in scenario.seed_files:
+        path = workspace / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    for relative_path in scenario.executable_files:
+        path = workspace / relative_path
+        path.chmod(0o755)
 
 
 @pytest.fixture(scope="session")
@@ -359,6 +411,7 @@ def live_phase4_run(
     monkeypatch = pytest.MonkeyPatch()
     try:
         workspace = _prepare_clean_workspace(tmp_path, monkeypatch)
+        _seed_mini_project_workspace(workspace, scenario)
         runtime = RockyRuntime.load_from(workspace, cli_overrides=_live_cli_overrides())
         runtime.permissions.config.mode = "bypass"
         response = runtime.run_prompt(scenario.prompt, continue_session=False)
@@ -372,15 +425,17 @@ def test_live_llm_phase4_mini_project_agentic_verification(live_phase4_run) -> N
     trace_path = response.trace.get("trace_path", "unknown-trace")
     successful_names = _tool_result_names(response, successes_only=True)
 
-    assert response.route.task_class == TaskClass.AUTOMATION, trace_path
-    assert response.route.task_signature == "automation/general", trace_path
+    assert response.route.task_class == scenario.task_class, trace_path
+    assert response.route.task_signature == scenario.task_signature, trace_path
     assert response.trace["provider"] == "OpenAIChatProvider", trace_path
     assert response.verification["status"] == "pass", trace_path
     assert "Provider request failed:" not in response.text, trace_path
     assert "Tool loop ended without a final assistant response." not in response.text, trace_path
-    assert len(successful_names) >= 3, trace_path
-    assert "write_file" in successful_names, trace_path
-    assert "run_shell_command" in successful_names, trace_path
+    assert len(successful_names) >= scenario.min_successful_tools, trace_path
+    for tool_name in scenario.required_successful_tools:
+        assert tool_name in successful_names, trace_path
+    if scenario.task_signature == "automation/general":
+        assert "write_file" in successful_names, trace_path
 
     for relative_path in scenario.expected_files:
         assert (workspace / relative_path).is_file(), f"missing {relative_path}; trace={trace_path}"

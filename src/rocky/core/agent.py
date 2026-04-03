@@ -337,6 +337,18 @@ class AgentCore:
                 "Do the execution first, then use separate follow-up inspection steps "
                 "to verify or summarize the result instead of bundling everything into one tool call."
             )
+            if any(phrase in prompt.lower() for phrase in ("explore the response", "analyze the response", "inspect the response", "candidates to merge", "candidate", "merge")):
+                route_hint = (
+                    "Execute the referenced workspace command or script first. Then use a separate follow-up parsing "
+                    "step, such as `run_python`, to inspect the observed response before making decisions. If the "
+                    "user asked for a result file, create it from the observed data and reread or verify it before "
+                    "answering. If the user did not ask for a file, keep the decision output in the final answer "
+                    "instead of creating new files. If the script is not executable or returns permission denied, "
+                    "rerun it through an interpreter such as `sh x.sh` or `python3 tool.py`. If the live response "
+                    "returns an auth, permission, network, or other error payload, report that you cannot make the "
+                    "requested decision from live evidence instead of using previous traces or memories as a "
+                    "substitute. Do not stop after only printing or paraphrasing the raw command output."
+                )
             lowered = prompt.lower()
             if any(term in lowered for term in ("price", "stock", "quote")) and any(
                 term in lowered for term in ("today", "current", "latest")

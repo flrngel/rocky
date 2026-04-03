@@ -108,6 +108,8 @@ class Router:
     }
     SHELL_FENCE_RE = re.compile(r"```(?:bash|sh|zsh|shell)?\s*\n(?P<body>.*?)```", re.I | re.S)
     SHELL_TOKEN_RE = re.compile(r"(^|\s)(?:[a-z0-9_./-]+)(?:\s+[-\\w./:=@]+)*(?:\s*(?:&&|\|\||\||;|>|>>)\s*.+)+", re.I | re.M)
+    INLINE_COMMAND_RE = re.compile(r"`(?P<body>[^`\n]+)`")
+    SCRIPT_PATH_RE = re.compile(r"(?<![\w/])(?:\./)?[a-z0-9_.-]+\.(?:sh|py|rb|js|ts|tsx|pl|php)(?![\w/])", re.I)
     PATH_HINTS = ('.py', '.ts', '.tsx', '.js', '.jsx', '.rb', '.go', '.rs', '.java', '.json', '.yaml', '.yml', '.toml', '.md')
     SHELL_INFO_PHRASES = (
         'current shell',
@@ -163,6 +165,7 @@ class Router:
     def _looks_like_shell_task(self, text: str, lowered: str) -> bool:
         has_fenced_shell = bool(self.SHELL_FENCE_RE.search(text))
         has_shell_tokens = bool(self.SHELL_TOKEN_RE.search(text))
+        has_inline_command = self._looks_like_inline_command_reference(text)
         asks_to_run = any(phrase in lowered for phrase in (
             'run command',
             'execute command',
@@ -187,8 +190,22 @@ class Router:
             'via cli',
             'via terminal',
         ))
+        mentions_run_verb = bool(re.search(r"\b(?:run|execute|exec|launch|check)\b", lowered))
         starts_with_verb = lowered.startswith(self.COMMAND_VERBS)
-        return has_fenced_shell or has_shell_tokens or asks_to_run or starts_with_verb
+        return has_fenced_shell or has_shell_tokens or asks_to_run or starts_with_verb or (
+            mentions_run_verb and has_inline_command
+        )
+
+    def _looks_like_inline_command_reference(self, text: str) -> bool:
+        for match in self.INLINE_COMMAND_RE.finditer(text):
+            body = (match.group("body") or "").strip()
+            if not body:
+                continue
+            if self.SCRIPT_PATH_RE.fullmatch(body):
+                return True
+            if body.startswith(("./", "/")):
+                return True
+        return bool(self.SCRIPT_PATH_RE.search(text))
 
     def _looks_like_shell_inspection_task(self, lowered: str) -> bool:
         if self._looks_like_repo_task(lowered) and any(

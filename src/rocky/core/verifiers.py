@@ -8,6 +8,12 @@ import re
 from rocky.core.router import RouteDecision, TaskClass
 from rocky.util.text import extract_json_candidate
 
+SCRIPT_REFERENCE_RE = re.compile(
+    r"`(?P<quoted>(?:\./)?[a-z0-9_.-]+\.(?:sh|py|rb|js|ts|tsx|pl|php))`"
+    r"|(?<![\w/])(?P<bare>(?:\./)?[a-z0-9_.-]+\.(?:sh|py|rb|js|ts|tsx|pl|php))(?![\w/])",
+    re.I,
+)
+
 
 @dataclass(slots=True)
 class VerificationResult:
@@ -17,6 +23,52 @@ class VerificationResult:
 
 
 class VerifierRegistry:
+    RESPONSE_ANALYSIS_PHRASES = (
+        " explore ",
+        " analyze ",
+        " inspect the response",
+        " response",
+        " decide ",
+        " classify ",
+        " candidate",
+        " merge",
+    )
+    LIVE_ERROR_MARKERS = (
+        '"error":',
+        "invalid api token",
+        "unauthorized",
+        "forbidden",
+        "permission denied",
+        "connection refused",
+        "timed out",
+        "timeout",
+        "could not resolve",
+        "failed to connect",
+    )
+    FAILURE_ACKNOWLEDGEMENT_PHRASES = (
+        "cannot determine",
+        "can't determine",
+        "could not determine",
+        "couldn't determine",
+        "unable to determine",
+        "cannot decide",
+        "can't decide",
+        "could not decide",
+        "couldn't decide",
+        "unable to decide",
+        "cannot complete",
+        "could not complete",
+        "unable to complete",
+        "failed to retrieve",
+        "couldn't retrieve",
+        "not enough information",
+        "insufficient information",
+        "invalid api token",
+        "unauthorized",
+        "forbidden",
+        "script returned an error",
+    )
+
     def _successful_tool_names(self, tool_events: list[dict]) -> list[str]:
         return [
             str(event.get("name", ""))
@@ -93,6 +145,98 @@ class VerifierRegistry:
                 return command
         return ""
 
+    def _successful_shell_events(self, tool_events: list[dict]) -> list[dict]:
+        return [
+            event
+            for event in tool_events
+            if event.get("type") == "tool_result"
+            and event.get("success", True)
+            and event.get("name") == "run_shell_command"
+        ]
+
+    def _command_text(self, event: dict) -> str:
+        payload = self._tool_payload(event)
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return ""
+        return str(data.get("command", "")).strip()
+
+    def _referenced_script_names(self, prompt: str) -> set[str]:
+        names: set[str] = set()
+        for match in SCRIPT_REFERENCE_RE.finditer(prompt):
+            candidate = (match.group("quoted") or match.group("bare") or "").strip()
+            if not candidate:
+                continue
+            names.add(PurePosixPath(candidate).name.lower())
+        return names
+
+    def _command_executes_script(self, command: str, script_name: str) -> bool:
+        escaped = re.escape(script_name.lower())
+        patterns = (
+            rf"(^|\s)(?:\./)?{escaped}(?:\s|$)",
+            rf"(^|\s)(?:sh|bash|zsh|python|python3|python3\.\d+|ruby|node|php|perl)\s+(?:\./)?{escaped}(?:\s|$)",
+            rf"chmod\s+\+x\s+(?:\./)?{escaped}.*(?:&&|;)\s*(?:\./)?{escaped}(?:\s|$)",
+        )
+        return any(re.search(pattern, command) for pattern in patterns)
+
+    def _script_execution_events(self, prompt: str, tool_events: list[dict]) -> list[dict]:
+        script_names = self._referenced_script_names(prompt)
+        if not script_names:
+            return []
+        matches: list[dict] = []
+        for event in self._successful_shell_events(tool_events):
+            command = self._command_text(event).lower()
+            if any(self._command_executes_script(command, script_name) for script_name in script_names):
+                matches.append(event)
+        return matches
+
+    def _tool_path(self, event: dict) -> str:
+        arguments = event.get("arguments") or {}
+        return str(arguments.get("path") or "").strip()
+
+    def _is_internal_path(self, path: str) -> bool:
+        normalized = path.replace("\\", "/")
+        return (
+            normalized.startswith(".rocky/")
+            or normalized.startswith(".git/")
+            or "/.rocky/" in normalized
+            or "/.git/" in normalized
+        )
+
+    def _has_response_analysis_follow_up(self, prompt: str, tool_events: list[dict]) -> bool:
+        script_names = self._referenced_script_names(prompt)
+        for event in tool_events:
+            if event.get("type") != "tool_result" or not event.get("success", True):
+                continue
+            name = str(event.get("name", ""))
+            if name == "run_shell_command":
+                continue
+            if name == "run_python":
+                payload = self._tool_payload(event)
+                data = payload.get("data")
+                if isinstance(data, dict) and str(data.get("stdout", "")).strip():
+                    return True
+                continue
+            path = self._tool_path(event)
+            if name in {"write_file", "stat_path", "read_file"}:
+                if not path or self._is_internal_path(path):
+                    continue
+                if PurePosixPath(path).name.lower() in script_names:
+                    continue
+                return True
+        return False
+
+    def _latest_script_execution_error(self, prompt: str, tool_events: list[dict]) -> str:
+        for event in reversed(self._script_execution_events(prompt, tool_events)):
+            text = self._shell_output_text(event).lower()
+            if any(marker in text for marker in self.LIVE_ERROR_MARKERS):
+                return text
+        return ""
+
+    def _acknowledges_live_failure(self, output: str) -> bool:
+        lowered = output.lower()
+        return any(marker in lowered for marker in self.FAILURE_ACKNOWLEDGEMENT_PHRASES)
+
     def _mentions_shell_command(self, output: str, command: str) -> bool:
         lowered_output = output.lower()
         if command.lower() in lowered_output:
@@ -136,10 +280,13 @@ class VerifierRegistry:
         output: str,
         tool_events: list[dict],
     ) -> VerificationResult:
-        result = self._expected_tool_use(route, prompt, tool_events)
+        result = self._expected_tool_use(route, prompt, output, tool_events)
         if result.status != "pass":
             return result
         result = self._tool_failure(route, tool_events)
+        if result.status != "pass":
+            return result
+        result = self._shell_execution_truthfulness(prompt, route, output, tool_events)
         if result.status != "pass":
             return result
         result = self._structured_output(prompt, output)
@@ -157,6 +304,7 @@ class VerifierRegistry:
         self,
         route: RouteDecision,
         prompt: str,
+        output: str,
         tool_events: list[dict],
     ) -> VerificationResult:
         lowered = prompt.lower()
@@ -170,6 +318,12 @@ class VerifierRegistry:
                     "fail",
                     "Expected Rocky to execute the request with the shell tool, but `run_shell_command` was not used",
                 )
+            if self._referenced_script_names(prompt) and not self._script_execution_events(prompt, tool_events):
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to successfully execute the referenced workspace script before answering. If `./script` fails, retry with an interpreter such as `sh script.sh` or `python3 tool.py`.",
+                )
             needs_follow_up = any(
                 phrase in lowered
                 for phrase in (
@@ -179,6 +333,13 @@ class VerifierRegistry:
                     " verify ",
                     " confirm ",
                     " inspect ",
+                    " explore ",
+                    " analyze ",
+                    " response",
+                    " decide ",
+                    " classify ",
+                    " candidate",
+                    " merge",
                     " read ",
                     " stat ",
                     " count ",
@@ -189,6 +350,16 @@ class VerifierRegistry:
                     "tool_expectation_v1",
                     "fail",
                     "Expected Rocky to execute the command first and then use at least one follow-up tool step to inspect or verify the result",
+            )
+            needs_structured_response_follow_up = any(
+                phrase in lowered
+                for phrase in self.RESPONSE_ANALYSIS_PHRASES
+            )
+            if needs_structured_response_follow_up and not self._has_response_analysis_follow_up(prompt, tool_events):
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to execute the command and then use a non-shell follow-up tool step on the observed response or a produced result file before deciding",
                 )
             if self._is_current_price_prompt(prompt):
                 if not self._has_successful_price_lookup(tool_events):
@@ -321,6 +492,29 @@ class VerifierRegistry:
                 )
         return VerificationResult("tool_expectation_v1", "pass", "")
 
+    def _shell_execution_truthfulness(
+        self,
+        prompt: str,
+        route: RouteDecision,
+        output: str,
+        tool_events: list[dict],
+    ) -> VerificationResult:
+        if route.task_signature != "repo/shell_execution":
+            return VerificationResult("shell_truthfulness_v1", "pass", "")
+        lowered = prompt.lower()
+        if not any(phrase in lowered for phrase in self.RESPONSE_ANALYSIS_PHRASES):
+            return VerificationResult("shell_truthfulness_v1", "pass", "")
+        script_error = self._latest_script_execution_error(prompt, tool_events)
+        if not script_error:
+            return VerificationResult("shell_truthfulness_v1", "pass", "")
+        if self._acknowledges_live_failure(output):
+            return VerificationResult("shell_truthfulness_v1", "pass", "")
+        return VerificationResult(
+            "shell_truthfulness_v1",
+            "fail",
+            "Observed script execution returned an error payload. Rocky should say it could not make the requested decision from live evidence instead of inferring from prior context.",
+        )
+
     def _tool_failure(self, route: RouteDecision, tool_events: list[dict]) -> VerificationResult:
         failures = [
             event
@@ -348,6 +542,28 @@ class VerifierRegistry:
             if (
                 "run_shell_command" in successful_names_after_failure
                 and successful_names & {"write_file", "run_shell_command"}
+            ):
+                return VerificationResult("tool_failure_v1", "pass", "")
+        if failures and route.task_signature == "repo/shell_execution":
+            successful_names = {
+                str(event.get("name", ""))
+                for event in tool_events
+                if event.get("type") == "tool_result" and event.get("success", True)
+            }
+            last_failure_index = max(
+                index
+                for index, event in enumerate(tool_events)
+                if event.get("type") == "tool_result" and not event.get("success", True)
+            )
+            successful_names_after_failure = {
+                str(event.get("name", ""))
+                for event in tool_events[last_failure_index + 1 :]
+                if event.get("type") == "tool_result" and event.get("success", True)
+            }
+            if (
+                "run_shell_command" in successful_names
+                and "read_file" in successful_names_after_failure
+                and successful_names_after_failure & {"run_shell_command", "write_file", "stat_path", "run_python"}
             ):
                 return VerificationResult("tool_failure_v1", "pass", "")
         if failures:

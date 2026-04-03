@@ -8,7 +8,7 @@ def step(name: str, **arguments: object) -> ToolStep:
     return ToolStep(name=name, arguments=arguments)
 
 
-def shell_execution(name: str, prompt: str, *plan: ToolStep) -> Scenario:
+def shell_execution(name: str, prompt: str, *plan: ToolStep, output_kind: str = "plain") -> Scenario:
     return Scenario(
         name=name,
         prompt=prompt,
@@ -16,6 +16,7 @@ def shell_execution(name: str, prompt: str, *plan: ToolStep) -> Scenario:
         task_signature="repo/shell_execution",
         tool_families=("filesystem", "shell", "python", "git"),
         plan=plan,
+        output_kind=output_kind,
         tags=("repo", "shell_execution"),
     )
 
@@ -93,6 +94,27 @@ def automation_task(name: str, prompt: str, *plan: ToolStep) -> Scenario:
     )
 
 
+CATALOG_X_SH = """#!/bin/sh
+cat <<'JSON'
+{"products":[{"product_id":"P001","name":"Red T-Shirt","sku":"RTS-001","candidates":[{"candidate_id":"C001","name":"Red T-Shirt","sku":"RTS-001"},{"candidate_id":"C002","name":"Blue T-Shirt","sku":"BTS-002"},{"candidate_id":"C003","name":"Red Hoodie","sku":"RHD-003"}]},{"product_id":"P002","name":"Glass Bottle 500ml","sku":"BOT-500-CLR","candidates":[{"candidate_id":"C010","name":"Glass Bottle 500ml","sku":"BOT-500-CLR"},{"candidate_id":"C011","name":"Glass Bottle 750ml","sku":"BOT-750-CLR"},{"candidate_id":"C012","name":"Plastic Bottle 500ml","sku":"BOT-500-PL"}]}]}
+JSON
+"""
+
+
+CATALOG_DECISIONS_CODE = (
+    "import json, pathlib, subprocess; "
+    "payload=json.loads(subprocess.check_output(['sh', 'x.sh'], text=True)); "
+    "products=["
+    "{'product_id': product['product_id'], "
+    "'merge': [candidate['candidate_id'] for candidate in product['candidates'] if candidate['name']==product['name'] and candidate['sku']==product['sku']], "
+    "'skip': [candidate['candidate_id'] for candidate in product['candidates'] if not (candidate['name']==product['name'] and candidate['sku']==product['sku'])]}"
+    " for product in payload['products']]; "
+    "decisions={'products': products}; "
+    "pathlib.Path('merge_decisions.json').write_text(json.dumps(decisions, sort_keys=True), encoding='utf-8'); "
+    "print(json.dumps(decisions, sort_keys=True))"
+)
+
+
 SCENARIOS: list[Scenario] = [
 
     shell_execution(
@@ -150,6 +172,16 @@ SCENARIOS: list[Scenario] = [
         step("run_shell_command", command="printf '%s\\n' \"$HOME\"", timeout_s=5),
         step("run_shell_command", command="printf '%s\\n' \"$SHELL\"", timeout_s=5),
         step("inspect_shell_environment"),
+    ),
+    shell_execution(
+        "exec_existing_script_catalog_review",
+        "You are now product catalog manager. Execute `x.sh` and explore the response. "
+        "Those are pending products to be managed, and each product has candidates to merge. "
+        "Treat a candidate as the same product only when both `name` and `sku` match exactly. "
+        "Write valid JSON to `merge_decisions.json`, then read it and tell me the exact JSON.",
+        step("run_shell_command", command="sh x.sh", timeout_s=5),
+        step("run_python", code=CATALOG_DECISIONS_CODE, timeout_s=5),
+        step("read_file", path="merge_decisions.json", start_line=1, end_line=40),
     ),
     shell_inspection(
         "inspect_shell_cwd_history",
@@ -597,6 +629,35 @@ PHASE4_MINI_PROJECTS: tuple[MiniProjectScenario, ...] = (
         expected_output={"emails": ["ada@example.com", "bob@example.org"]},
         output_kind="json",
         response_snippets=("ada@example.com", "bob@example.org", "emails"),
+    ),
+    MiniProjectScenario(
+        name="workspace_script_catalog_review",
+        prompt=(
+            "You are now product catalog manager. Execute `x.sh` and explore the response. "
+            "Those are pending products to be managed, and each product has candidates to merge. "
+            "Treat a candidate as the same product only when both `name` and `sku` match exactly. "
+            "Write valid JSON to `merge_decisions.json` with a top-level key `products`, where each item contains "
+            "`product_id`, `merge`, and `skip` arrays of candidate ids. Then read the file and tell me the exact JSON."
+        ),
+        expected_files=("x.sh", "merge_decisions.json"),
+        verify_command=(
+            "python3",
+            "-c",
+            "import json, pathlib; print(json.dumps(json.loads(pathlib.Path('merge_decisions.json').read_text()), sort_keys=True))",
+        ),
+        expected_output={
+            "products": [
+                {"product_id": "P001", "merge": ["C001"], "skip": ["C002", "C003"]},
+                {"product_id": "P002", "merge": ["C010"], "skip": ["C011", "C012"]},
+            ]
+        },
+        output_kind="json",
+        response_snippets=("merge_decisions.json", "C001", "C010"),
+        seed_files=(("x.sh", CATALOG_X_SH),),
+        task_class=TaskClass.REPO,
+        task_signature="repo/shell_execution",
+        min_successful_tools=3,
+        required_successful_tools=("run_shell_command", "read_file"),
     ),
 )
 

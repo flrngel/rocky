@@ -56,8 +56,8 @@ def test_workspace_continuity_scenario_defaults_phase5() -> None:
 
 
 def test_harness_catalog_has_phase_specific_scenarios() -> None:
-    assert len(DEFAULT_SCENARIOS) == 50
-    assert len(PHASE4_MINI_PROJECTS) == 3
+    assert len(DEFAULT_SCENARIOS) == 51
+    assert len(PHASE4_MINI_PROJECTS) == 4
     assert len(WORKSPACE_CONTINUITY_SCENARIOS) == 3
     assert scenarios_by_phase("phase5_workspace_continuity")
 

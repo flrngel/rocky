@@ -45,6 +45,12 @@ class MiniProjectScenario:
     expected_output: object
     output_kind: str = "text"
     response_snippets: tuple[str, ...] = ()
+    seed_files: tuple[tuple[str, str], ...] = ()
+    executable_files: tuple[str, ...] = ()
+    task_class: TaskClass = TaskClass.AUTOMATION
+    task_signature: str = "automation/general"
+    min_successful_tools: int = 3
+    required_successful_tools: tuple[str, ...] = ("run_shell_command",)
     phase_targets: tuple[str, ...] = ("phase4_exact_output_build",)
     tags: tuple[str, ...] = ("mini_project",)
 

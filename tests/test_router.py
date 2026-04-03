@@ -108,6 +108,20 @@ def test_router_treats_use_command_current_fact_prompt_as_shell_execution() -> N
     assert 'shell' in route.tool_families
 
 
+def test_router_treats_inline_workspace_script_execution_as_shell_execution() -> None:
+    router = Router()
+
+    route = router.route(
+        "You are now product catalog manager. Execute `x.sh` and explore the response. "
+        "Those are pending products to be managed, and each product has candidates to merge. "
+        "Use tools properly."
+    )
+
+    assert route.task_class == TaskClass.REPO
+    assert route.task_signature == 'repo/shell_execution'
+    assert 'shell' in route.tool_families
+
+
 def test_router_does_not_treat_latest_shell_command_as_research() -> None:
     router = Router()
 

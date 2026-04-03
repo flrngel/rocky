@@ -73,6 +73,14 @@ def test_system_prompt_guides_shell_and_automation_tasks() -> None:
     assert "the first tool call should be `run_shell_command`" in shell_prompt
     assert "keep them inside the workspace instead of using `/tmp`" in shell_prompt
     assert "do not collapse that into one tool call" in shell_prompt
+    assert "such as `x.sh`" in shell_prompt
+    assert "execute that workspace file directly" in shell_prompt
+    assert "permission denied" in shell_prompt
+    assert "returns structured text such as JSON" in shell_prompt
+    assert "current command output from this turn is the source of truth" in shell_prompt
+    assert "Do not substitute previous traces, memories, or handoff summaries" in shell_prompt
+    assert "auth, permission, network, or other error payload" in shell_prompt
+    assert "did not ask for a result file" in shell_prompt
     assert "verify it with `run_shell_command` before answering" in automation_prompt
     assert "Keep the script path inside the workspace" in automation_prompt
     assert "Do not probe the environment or run verification commands before the file exists" in automation_prompt

@@ -64,6 +64,24 @@ def build_system_prompt(
             "If the user asks you to execute something and then inspect, read, stat, count, or verify the result, do not collapse that into one tool call. Execute first, then use one or more separate follow-up tool calls to inspect or verify the result before answering."
         )
         parts.append(
+            "If the user names a script or command file already in the workspace, such as `x.sh`, execute that workspace file directly with a workspace-relative invocation like `sh x.sh`, `python3 tool.py`, or `./x.sh`. Do not merely describe the command, and do not assume the current directory is on PATH."
+        )
+        parts.append(
+            "If a referenced workspace script is not executable or returns permission denied, rerun it through the appropriate interpreter such as `sh x.sh`, `bash x.sh`, or `python3 tool.py` before concluding that execution failed."
+        )
+        parts.append(
+            "If the executed command returns structured text such as JSON, CSV, or line-oriented records and the user asks you to explore, analyze, classify, or decide from that response, use a follow-up parsing step such as `run_python` or a targeted file read before answering. Do not rely on a single raw shell output blob for downstream decisions."
+        )
+        parts.append(
+            "For response-analysis tasks, the current command output from this turn is the source of truth. Do not substitute previous traces, memories, or handoff summaries for missing live response data."
+        )
+        parts.append(
+            "If the live command output is an auth, permission, network, or other error payload, say clearly that the response could not support the requested decision instead of inferring business decisions from prior context."
+        )
+        parts.append(
+            "If the user did not ask for a result file, keep the response analysis in the final answer instead of creating new files just to hold intermediate decisions."
+        )
+        parts.append(
             "If the user wants exact current values such as today's date, time, or a current live price, do not answer from memory. Use shell commands to retrieve the observed values now, and if the task asks for more than one current fact, gather each requested fact before answering."
         )
         parts.append(

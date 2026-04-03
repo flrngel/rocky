@@ -36,7 +36,7 @@ def step(name: str, **arguments: object) -> ToolStep:
     return ToolStep(name=name, arguments=arguments)
 
 
-def shell_execution(name: str, prompt: str, *plan: ToolStep) -> Scenario:
+def shell_execution(name: str, prompt: str, *plan: ToolStep, output_kind: str = "plain") -> Scenario:
     return Scenario(
         name=name,
         prompt=prompt,
@@ -44,6 +44,7 @@ def shell_execution(name: str, prompt: str, *plan: ToolStep) -> Scenario:
         task_signature="repo/shell_execution",
         tool_families=("filesystem", "shell", "python", "git"),
         plan=plan,
+        output_kind=output_kind,
     )
 
 
@@ -114,6 +115,27 @@ def automation_task(name: str, prompt: str, *plan: ToolStep) -> Scenario:
     )
 
 
+CATALOG_X_SH = """#!/bin/sh
+cat <<'JSON'
+{"products":[{"product_id":"P001","name":"Red T-Shirt","sku":"RTS-001","candidates":[{"candidate_id":"C001","name":"Red T-Shirt","sku":"RTS-001"},{"candidate_id":"C002","name":"Blue T-Shirt","sku":"BTS-002"},{"candidate_id":"C003","name":"Red Hoodie","sku":"RHD-003"}]},{"product_id":"P002","name":"Glass Bottle 500ml","sku":"BOT-500-CLR","candidates":[{"candidate_id":"C010","name":"Glass Bottle 500ml","sku":"BOT-500-CLR"},{"candidate_id":"C011","name":"Glass Bottle 750ml","sku":"BOT-750-CLR"},{"candidate_id":"C012","name":"Plastic Bottle 500ml","sku":"BOT-500-PL"}]}]}
+JSON
+"""
+
+
+CATALOG_DECISIONS_CODE = (
+    "import json, pathlib, subprocess; "
+    "payload=json.loads(subprocess.check_output(['sh', 'x.sh'], text=True)); "
+    "products=["
+    "{'product_id': product['product_id'], "
+    "'merge': [candidate['candidate_id'] for candidate in product['candidates'] if candidate['name']==product['name'] and candidate['sku']==product['sku']], "
+    "'skip': [candidate['candidate_id'] for candidate in product['candidates'] if not (candidate['name']==product['name'] and candidate['sku']==product['sku'])]}"
+    " for product in payload['products']]; "
+    "decisions={'products': products}; "
+    "pathlib.Path('merge_decisions.json').write_text(json.dumps(decisions, sort_keys=True), encoding='utf-8'); "
+    "print(json.dumps(decisions, sort_keys=True))"
+)
+
+
 SCENARIOS: list[Scenario] = [
     shell_execution(
         "exec_pwd_whoami_env",
@@ -170,6 +192,17 @@ SCENARIOS: list[Scenario] = [
         step("run_shell_command", command="printf '%s\\n' \"$HOME\"", timeout_s=5),
         step("run_shell_command", command="printf '%s\\n' \"$SHELL\"", timeout_s=5),
         step("inspect_shell_environment"),
+    ),
+    shell_execution(
+        "exec_existing_script_catalog_review",
+        "You are now product catalog manager. Execute `x.sh` and explore the response. "
+        "Those are pending products to be managed, and each product has candidates to merge. "
+        "Treat a candidate as the same product only when both `name` and `sku` match exactly. "
+        "Write valid JSON to `merge_decisions.json`, then read it and tell me the exact JSON.",
+        step("run_shell_command", command="sh x.sh", timeout_s=5),
+        step("run_python", code=CATALOG_DECISIONS_CODE, timeout_s=5),
+        step("read_file", path="merge_decisions.json", start_line=1, end_line=40),
+        output_kind="json",
     ),
     shell_inspection(
         "inspect_shell_cwd_history",
@@ -568,7 +601,7 @@ SCENARIOS: list[Scenario] = [
 ]
 
 
-assert len(SCENARIOS) == 50
+assert len(SCENARIOS) == 51
 assert all(len(scenario.plan) >= 3 for scenario in SCENARIOS)
 
 
@@ -676,6 +709,7 @@ def _prepare_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         workspace / "notes.txt",
         "Reach alice@example.com and bob@example.org for follow-up.\n",
     )
+    _write(workspace / "x.sh", CATALOG_X_SH)
     _write(
         workspace / "todos.txt",
         "- ship cli\n- fix repl\n- verify tools\n",
@@ -829,7 +863,7 @@ class ProviderRegistryStub:
 
 
 def test_agentic_scenario_count() -> None:
-    assert len(SCENARIOS) == 50
+    assert len(SCENARIOS) == 51
     assert all(len(scenario.plan) >= 3 for scenario in SCENARIOS)
     assert all(scenario.tool_families for scenario in SCENARIOS)
 

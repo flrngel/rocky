@@ -313,6 +313,155 @@ def test_verifier_requires_write_file_for_build_automation_tasks() -> None:
     assert "write_file" in result.message
 
 
+def test_shell_execution_verifier_requires_follow_up_for_response_exploration() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="Execute `x.sh` and explore the response to decide which candidates should merge.",
+        route=route,
+        task_class=route.task_class,
+        output="I ran the script and here is the answer.",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh x.sh", "stdout": "{\\"products\\": []}", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "printf done", "stdout": "done\\n", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "fail"
+    assert "non-shell follow-up tool step" in result.message
+
+
+def test_shell_execution_verifier_requires_successful_referenced_script_execution() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="Execute `x.sh` and explore the response to decide which candidates should merge.",
+        route=route,
+        task_class=route.task_class,
+        output="I decided which candidates should merge.",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": False,
+                "text": '{"success": false, "data": {"command": "./x.sh", "stdout": "", "stderr": "permission denied"}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "read_file",
+                "success": True,
+                "arguments": {"path": "/tmp/workspace/x.sh"},
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "curl -s https://example.test", "stdout": "{\\"error\\":\\"Invalid API token\\"}", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "fail"
+    assert "referenced workspace script" in result.message
+
+
+def test_shell_execution_verifier_requires_honest_failure_when_script_returns_error_payload() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="Execute `x.sh` and explore the response to decide which candidates should merge.",
+        route=route,
+        task_class=route.task_class,
+        output="Blue Jeans should merge BJT-007 and Red T-Shirt should merge RTS-001.",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh x.sh", "stdout": "{\\"error\\":\\"Invalid API token\\"}", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_python",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "{\\"status\\": \\"error\\"}", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "fail"
+    assert "error payload" in result.message.lower()
+
+
+def test_shell_execution_verifier_accepts_honest_failure_when_script_returns_error_payload() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="Execute `x.sh` and explore the response to decide which candidates should merge.",
+        route=route,
+        task_class=route.task_class,
+        output="I ran `sh x.sh`, but it returned `Invalid API token`, so I cannot determine which candidates should merge from live evidence.",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh x.sh", "stdout": "{\\"error\\":\\"Invalid API token\\"}", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_python",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "{\\"status\\": \\"error\\"}", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "pass"
+
+
 def test_verifier_requires_reread_step_for_build_automation_tasks() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(
@@ -413,6 +562,38 @@ def test_verifier_accepts_recovered_automation_after_intermediate_tool_failure()
             {"type": "tool_result", "name": "run_shell_command", "success": True},
             {"type": "tool_result", "name": "write_file", "success": False},
             {"type": "tool_result", "name": "run_shell_command", "success": True},
+        ],
+    )
+
+    assert result.status == "pass"
+
+
+def test_verifier_accepts_recovered_shell_execution_after_structured_follow_up_failure() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="Execute `x.sh` and explore the response, then write merge_decisions.json and read it back.",
+        route=route,
+        task_class=route.task_class,
+        output='{"products":[{"product_id":"P001","merge":["C001"],"skip":["C002","C003"]}]}',
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh x.sh", "stdout": "{\\"products\\": [{\\"product_id\\": \\"P001\\", \\"candidates\\": []}]}", "stderr": ""}}',
+            },
+            {"type": "tool_result", "name": "run_python", "success": False},
+            {"type": "tool_result", "name": "write_file", "success": True, "arguments": {"path": "merge_decisions.json"}},
+            {"type": "tool_result", "name": "read_file", "success": True, "arguments": {"path": "merge_decisions.json"}},
         ],
     )
 
