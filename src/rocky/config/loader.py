@@ -52,8 +52,14 @@ class ConfigLoader:
         if not self.global_config.exists():
             write_yaml(self.global_config, DEFAULT_CONFIG_DICT)
 
-    def load(self, cli_overrides: dict[str, Any] | None = None) -> AppConfig:
-        self.ensure_defaults()
+    def load(
+        self,
+        cli_overrides: dict[str, Any] | None = None,
+        *,
+        create_defaults: bool = True,
+    ) -> AppConfig:
+        if create_defaults:
+            self.ensure_defaults()
         merged = dict(DEFAULT_CONFIG_DICT)
         for path in [self.global_config, self.project_config, self.local_config]:
             data = read_yaml(path)

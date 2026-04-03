@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.history import FileHistory
+from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.keys import Keys
 
 from rocky.core.permissions import PermissionRequest
@@ -17,6 +17,7 @@ def _make_runtime(tmp_path: Path) -> MagicMock:
     runtime = MagicMock()
     runtime.workspace.cache_dir = tmp_path
     runtime.commands.names = ["help", "exit"]
+    runtime.freeze_enabled = False
     return runtime
 
 
@@ -93,3 +94,20 @@ def test_session_wiring(tmp_path):
         assert call_kwargs.kwargs.get("multiline") is False, (
             "ask_permission must pass multiline=False to prevent Alt+Enter requirement"
         )
+
+
+def test_freeze_repl_uses_in_memory_history_and_toolbar(tmp_path):
+    runtime = _make_runtime(tmp_path)
+    runtime.freeze_enabled = True
+
+    repl = RockyRepl(runtime)
+
+    assert isinstance(repl.session.history, InMemoryHistory)
+    assert "Freeze: ON" in repl._toolbar().value
+    assert "freeze" in repl._prompt_message().value
+
+
+def test_non_freeze_repl_uses_file_history(tmp_path):
+    repl = RockyRepl(_make_runtime(tmp_path))
+
+    assert isinstance(repl.session.history, FileHistory)

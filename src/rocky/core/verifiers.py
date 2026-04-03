@@ -279,10 +279,16 @@ class VerifierRegistry:
                 "fail",
                 "Expected Rocky to use at least two extraction steps before answering",
             )
-        if route.task_signature == "automation/general" and any(
-            word in lowered for word in ("verify", "execute", "run")
-        ):
-            if "run_shell_command" not in result_names:
+        if route.task_signature == "automation/general":
+            automation_build_terms = ("build", "create", "script", "scaffold", "project", "automation", "repeatable")
+            if any(word in lowered for word in automation_build_terms):
+                if "write_file" not in result_names:
+                    return VerificationResult(
+                        "tool_expectation_v1",
+                        "fail",
+                        "Expected Rocky to create or edit the automation with `write_file` before verifying it",
+                    )
+            if any(word in lowered for word in ("verify", "execute", "run")) and "run_shell_command" not in result_names:
                 return VerificationResult(
                     "tool_expectation_v1",
                     "fail",

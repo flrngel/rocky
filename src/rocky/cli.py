@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", help="Base URL override for the selected provider")
     parser.add_argument("--permission-mode", choices=["plan", "supervised", "accept-edits", "auto", "bypass"])
     parser.add_argument("--continue-session", action="store_true", help="Reuse current session history for one-shot tasks")
+    parser.add_argument("--freeze", action="store_true", help="Read existing Rocky state but do not persist new Rocky state")
     parser.add_argument("-y", "--yes", action="store_true", help="Auto-approve permission prompts")
     parser.add_argument("--json", action="store_true", help="Print machine-readable output for one-shot tasks")
     parser.add_argument("-V", "--version", action="store_true", help="Print Rocky version and exit")
@@ -85,7 +86,18 @@ def main(argv: list[str] | None = None) -> int:
     requested_text = " ".join(args.task).strip() if args.task else None
     configure_requested = requested_text in {"configure", "/configure"}
 
-    _maybe_run_first_launch_wizard(cwd, console, allow_wizard=not args.json and not configure_requested)
+    if not args.freeze:
+        _maybe_run_first_launch_wizard(cwd, console, allow_wizard=not args.json and not configure_requested)
+    elif configure_requested:
+        if args.json:
+            print(json.dumps({"error": "FreezeMode", "message": "Freeze mode blocks configure because it writes persistent config."}, ensure_ascii=False))
+        else:
+            console.print(
+                "Freeze mode blocks configure because it writes persistent config.",
+                markup=False,
+                style="yellow",
+            )
+        return 1
     if configure_requested and not args.json and _interactive_terminal():
         _run_configure_flow(cwd, console)
         return 0
@@ -96,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.permission_mode:
         cli_overrides.setdefault("permissions", {})["mode"] = args.permission_mode
 
-    runtime = RockyRuntime.load_from(cwd, cli_overrides=cli_overrides)
+    runtime = RockyRuntime.load_from(cwd, cli_overrides=cli_overrides, freeze=args.freeze)
     provider_name = args.provider or runtime.config.active_provider
     provider_cfg = runtime.config.provider(provider_name)
     runtime.config.active_provider = provider_name
@@ -141,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             stream=not args.json,
             event_handler=printer,
             continue_session=args.continue_session,
+            freeze=args.freeze,
         )
         if args.json:
             print(

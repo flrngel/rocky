@@ -105,6 +105,9 @@ def build_system_prompt(
             "For create, build, automate, scaffold, or cleanup-script tasks, your first successful tool call should usually be `write_file`. Do not burn multiple exploratory shell steps before creating the automation. If you truly need discovery first, do at most one lightweight inspection, then use `write_file` immediately after. Repeated shell probing before the first write is a failure mode."
         )
         parts.append(
+            "Do not use shell redirection, heredocs, `tee`, or inline interpreter one-liners as a substitute for `write_file` when creating the project's script or source files. Use `write_file` for the initial file contents, then verify with shell."
+        )
+        parts.append(
             "If the user asks you to build a tiny project or scaffold files in an empty workspace, create every requested file inside the workspace, then run the project or script to verify it before answering. Do not stop after creating only part of the project or after describing what you would do."
         )
         parts.append(

@@ -286,6 +286,33 @@ def test_verifier_requires_execution_for_verifying_automation() -> None:
     assert "verify the automation" in result.message.lower()
 
 
+def test_verifier_requires_write_file_for_build_automation_tasks() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.AUTOMATION,
+        risk="medium",
+        reasoning="Automation task",
+        tool_families=["filesystem", "shell", "python"],
+        task_signature="automation/general",
+    )
+
+    result = verifier.verify(
+        prompt="build a repeatable sales report script and run it",
+        route=route,
+        task_class=route.task_class,
+        output="Ran shell commands to create the script.",
+        tool_events=[
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+            {"type": "tool_result", "name": "read_file", "success": True},
+            {"type": "tool_result", "name": "run_shell_command", "success": True},
+        ],
+    )
+
+    assert result.status == "fail"
+    assert "write_file" in result.message
+
+
 def test_verifier_requires_multiple_steps_for_spreadsheet_analysis() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(

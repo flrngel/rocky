@@ -14,18 +14,21 @@ class EpisodeStore:
         support_dir: Path,
         query_dir: Path,
         generation_file: Path,
+        *,
+        create_layout: bool = True,
     ) -> None:
         self.support_dir = support_dir
         self.query_dir = query_dir
         self.generation_file = generation_file
-        self.support_dir.mkdir(parents=True, exist_ok=True)
-        self.query_dir.mkdir(parents=True, exist_ok=True)
-        self.generation_file.parent.mkdir(parents=True, exist_ok=True)
-        if not self.generation_file.exists():
-            self.generation_file.write_text(
-                '{"current_generation": 0}\n',
-                encoding="utf-8",
-            )
+        if create_layout:
+            self.support_dir.mkdir(parents=True, exist_ok=True)
+            self.query_dir.mkdir(parents=True, exist_ok=True)
+            self.generation_file.parent.mkdir(parents=True, exist_ok=True)
+            if not self.generation_file.exists():
+                self.generation_file.write_text(
+                    '{"current_generation": 0}\n',
+                    encoding="utf-8",
+                )
 
     def current_generation(self) -> int:
         try:

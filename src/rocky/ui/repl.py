@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.history import FileHistory
+from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
@@ -105,8 +105,12 @@ class RockyRepl:
                 "continuation": "ansibrightblack",
             }
         )
-        history_path = runtime.workspace.cache_dir / "repl_history.txt"
-        history_path.parent.mkdir(parents=True, exist_ok=True)
+        if runtime.freeze_enabled:
+            history = InMemoryHistory()
+        else:
+            history_path = runtime.workspace.cache_dir / "repl_history.txt"
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            history = FileHistory(str(history_path))
         _kb = KeyBindings()
 
         @_kb.add("enter")
@@ -118,7 +122,7 @@ class RockyRepl:
             event.current_buffer.insert_text("\n")
 
         self.session = PromptSession(
-            history=FileHistory(str(history_path)),
+            history=history,
             completer=build_completer(runtime.commands.names),
             multiline=True,
             key_bindings=_kb,
@@ -128,10 +132,13 @@ class RockyRepl:
         )
 
     def _prompt_message(self) -> HTML:
+        if self.runtime.freeze_enabled:
+            return HTML("<prompt>rocky</prompt><accent>[freeze]&gt;</accent> ")
         return HTML("<prompt>rocky</prompt><accent>&gt;</accent> ")
 
     def _toolbar(self) -> HTML:
-        return HTML("<toolbar> Enter submit  Alt+Enter newline  /help commands </toolbar>")
+        freeze_label = "Freeze: ON" if self.runtime.freeze_enabled else "Freeze: OFF"
+        return HTML(f"<toolbar> Enter submit  Alt+Enter newline  /help commands  {freeze_label} </toolbar>")
 
     def _continuation(self, width: int, line_number: int, wrap_count: int):
         return [("class:continuation", "... ".rjust(width))]
@@ -150,6 +157,13 @@ class RockyRepl:
         self.print_text(result.text)
 
     def run_config_wizard(self) -> None:
+        if self.runtime.freeze_enabled:
+            self.console.print(
+                "Freeze mode is enabled; /configure is disabled because it would write persistent config.",
+                markup=False,
+                style="yellow",
+            )
+            return
         loader = ConfigLoader(self.runtime.global_root, self.runtime.workspace.root)
         run_config_wizard(loader.global_config, console=self.console)
         self.runtime.reload_config()

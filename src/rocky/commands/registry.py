@@ -44,6 +44,7 @@ class CommandRegistry:
             "doctor",
             "why",
             "compact",
+            "freeze",
             "plan",
             "learn",
             "undo",
@@ -100,6 +101,8 @@ class CommandRegistry:
                 "- `/why` show last routing trace",
                 "- `/trace` show last full trace",
                 "- `/compact` compact current session history",
+                "- `/freeze` toggle freeze mode for this process",
+                "- `/freeze on|off|status` manage freeze mode",
                 "- `/plan` toggle plan/read-only mode",
                 "- `/learn <feedback>` publish a learned skill from last answer",
                 "- `/undo` rollback latest learned skill",
@@ -209,8 +212,25 @@ class CommandRegistry:
         return CommandResult("trace", dump_yaml(data), data)
 
     def cmd_compact(self, args: list[str]) -> CommandResult:
-        data = self.runtime.sessions.compact()
+        data = self.runtime.compact_session()
         return CommandResult("compact", dump_yaml(data), data)
+
+    def cmd_freeze(self, args: list[str]) -> CommandResult:
+        if not args:
+            data = self.runtime.set_freeze_mode(not self.runtime.freeze_enabled)
+            return CommandResult("freeze", dump_yaml(data), data)
+        action = args[0].lower()
+        if action == "status":
+            data = self.runtime.freeze_status()
+            return CommandResult("freeze", dump_yaml(data), data)
+        if action in {"on", "true", "1"}:
+            data = self.runtime.set_freeze_mode(True)
+            return CommandResult("freeze", dump_yaml(data), data)
+        if action in {"off", "false", "0"}:
+            data = self.runtime.set_freeze_mode(False)
+            return CommandResult("freeze", dump_yaml(data), data)
+        text = "Usage: /freeze [on|off|status]"
+        return CommandResult("freeze", text, {"freeze_mode": self.runtime.freeze_enabled, "reason": text})
 
     def cmd_plan(self, args: list[str]) -> CommandResult:
         enabled = True

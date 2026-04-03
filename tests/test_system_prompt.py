@@ -78,6 +78,7 @@ def test_system_prompt_guides_shell_and_automation_tasks() -> None:
     assert "Do not probe the environment or run verification commands before the file exists" in automation_prompt
     assert "first successful tool call should usually be `write_file`" in automation_prompt
     assert "do at most one lightweight inspection" in automation_prompt
+    assert "Do not use shell redirection, heredocs, `tee`, or inline interpreter one-liners" in automation_prompt
     assert "mention the exact script or command you ran and the exact observed output" in automation_prompt
     assert "at least three successful tool steps" in automation_prompt
     assert "reread it with `read_file`" in automation_prompt

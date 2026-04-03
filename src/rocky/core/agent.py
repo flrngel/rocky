@@ -17,7 +17,7 @@ from rocky.core.verifiers import VerificationResult, VerifierRegistry
 from rocky.learning.manager import LearningManager
 from rocky.providers.base import ProviderResponse
 from rocky.providers.registry import ProviderRegistry
-from rocky.session.store import SessionStore
+from rocky.session.store import Session, SessionStore
 from rocky.tools.registry import ToolRegistry
 from rocky.util.text import extract_json_candidate, safe_json
 from rocky.util.time import utc_iso
@@ -30,6 +30,13 @@ class AgentResponse:
     verification: dict[str, Any]
     usage: dict[str, Any] = field(default_factory=dict)
     trace: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ExecutionOptions:
+    continue_session: bool = True
+    freeze: bool = False
+    session_seed: Session | None = None
 
 
 class AgentCore:
@@ -45,6 +52,8 @@ class AgentCore:
         permissions,
         traces_dir: Path,
         meta_handler: Callable[[str], str],
+        *,
+        create_layout: bool = True,
     ) -> None:
         self.router = router
         self.sessions = sessions
@@ -55,7 +64,8 @@ class AgentCore:
         self.learning_manager = learning_manager
         self.permissions = permissions
         self.traces_dir = traces_dir
-        self.traces_dir.mkdir(parents=True, exist_ok=True)
+        if create_layout:
+            self.traces_dir.mkdir(parents=True, exist_ok=True)
         self.meta_handler = meta_handler
         self.last_prompt: str | None = None
         self.last_answer: str | None = None
@@ -101,6 +111,7 @@ class AgentCore:
         selected_skills: list[str],
         provider_name: str,
         exc: Exception,
+        options: ExecutionOptions,
         stream: bool = False,
         event_handler: Callable[[dict[str, Any]], None] | None = None,
     ) -> AgentResponse:
@@ -125,7 +136,7 @@ class AgentCore:
             "context": context_summary,
             "error": {"type": exc.__class__.__name__, "message": str(exc)},
         }
-        return self._finalize(session, prompt, text, route, verification, {}, trace)
+        return self._finalize(session, prompt, text, route, verification, {}, trace, options=options)
 
     def _run_tool(
         self,
@@ -191,36 +202,52 @@ class AgentCore:
         verification: dict[str, Any],
         usage: dict[str, Any],
         trace: dict[str, Any],
+        *,
+        options: ExecutionOptions,
     ) -> AgentResponse:
         session.append("user", prompt)
         session.append("assistant", text)
-        self.sessions.save(session)
-        trace["trace_path"] = self._write_trace(trace)
         self.last_prompt = prompt
         self.last_answer = text
         self.last_trace = trace
-        if route.lane != Lane.META:
-            self.sessions.record_turn(
-                session,
-                prompt=prompt,
-                answer=text,
-                task_signature=route.task_signature,
-                verification=verification,
-                trace=trace,
-                execution_cwd=self.tool_registry.context.execution_relative,
-            )
-        try:
-            self.learning_manager.record_query(
-                task_signature=route.task_signature,
-                skills_used=trace.get("selected_skills") or [],
-                verifier=verification.get("name", "default_v1"),
-                result="success" if verification.get("status") == "pass" else verification.get("status", "warn"),
-                usage=usage,
-                latency_ms=None,
-            )
-        except Exception:
-            pass
+        if not options.freeze:
+            self.sessions.save(session)
+            trace["trace_path"] = self._write_trace(trace)
+            if route.lane != Lane.META:
+                self.sessions.record_turn(
+                    session,
+                    prompt=prompt,
+                    answer=text,
+                    task_signature=route.task_signature,
+                    verification=verification,
+                    trace=trace,
+                    execution_cwd=self.tool_registry.context.execution_relative,
+                )
+            try:
+                self.learning_manager.record_query(
+                    task_signature=route.task_signature,
+                    skills_used=trace.get("selected_skills") or [],
+                    verifier=verification.get("name", "default_v1"),
+                    result="success" if verification.get("status") == "pass" else verification.get("status", "warn"),
+                    usage=usage,
+                    latency_ms=None,
+                )
+            except Exception:
+                pass
         return AgentResponse(text=text, route=route, verification=verification, usage=usage, trace=trace)
+
+    def _session_for_run(self, prompt: str, options: ExecutionOptions):
+        if options.freeze:
+            if options.session_seed is not None:
+                return options.session_seed.clone()
+            if options.continue_session:
+                current = self.sessions.peek_current()
+                if current is not None:
+                    return current
+            return self.sessions.create_ephemeral(title=self._session_title(prompt))
+        if options.continue_session:
+            return self.sessions.ensure_current()
+        return self.sessions.create(title=self._session_title(prompt), make_current=False)
 
     def _normalize_output(self, route: RouteDecision, text: str) -> str:
         if route.task_signature == "extract/general":
@@ -341,9 +368,10 @@ class AgentCore:
                 "automation, do at most one lightweight inspection first, then use `write_file` within your next "
                 "successful tool call or two. After the file exists, verify it with `run_shell_command`. Compare "
                 "the verified command output against the user's requested behavior, sample data, and any required "
-                "JSON shape. In the final answer, name the exact script or command you verified and include the "
-                "exact observed output. If the observed output is wrong or incomplete, edit the files and rerun "
-                "verification until the observed output matches."
+                "JSON shape. Do not use shell redirection, heredocs, `tee`, or inline interpreter file-writes as a "
+                "substitute for `write_file` when creating project files. In the final answer, name the exact script "
+                "or command you verified and include the exact observed output. If the observed output is wrong or "
+                "incomplete, edit the files and rerun verification until the observed output matches."
             )
         return (
             f"Original task:\n{prompt}\n\n"
@@ -351,6 +379,46 @@ class AgentCore:
             f"{route_hint}\n"
             "Continue the task now, use more tools if needed, and return the corrected final answer."
         )
+
+    def _automation_shell_write_guard(
+        self,
+        route: RouteDecision,
+        prompt: str,
+        name: str,
+        arguments: dict[str, Any],
+        successful_tool_names: list[str],
+    ) -> str | None:
+        if route.task_signature != "automation/general" or name != "run_shell_command":
+            return None
+        if "write_file" in successful_tool_names:
+            return None
+        lowered_prompt = prompt.lower()
+        if not any(term in lowered_prompt for term in ("build", "create", "script", "scaffold", "project", "automation")):
+            return None
+        command = str(arguments.get("command") or "")
+        lowered_command = command.lower()
+        shell_write_markers = (
+            ">>",
+            "<<",
+            " >",
+            "> ",
+            "tee ",
+            "touch ",
+            "sed -i",
+            "perl -pi",
+        )
+        if not any(marker in lowered_command for marker in shell_write_markers):
+            return None
+        payload = {
+            "success": False,
+            "summary": (
+                "Use `write_file` to create or edit project files before shell verification. "
+                "Shell redirection or inline shell-based file writes are not allowed as the first automation write step."
+            ),
+            "data": {},
+            "metadata": {"error": "use_write_file_first"},
+        }
+        return safe_json(payload)
 
     def _should_judge_automation_output(
         self,
@@ -445,10 +513,39 @@ class AgentCore:
         selected_tool_names: set[str],
         verification_message: str,
         normalized_text: str,
+        prompt: str,
         *,
         stream: bool,
         event_handler: Callable[[dict[str, Any]], None] | None = None,
     ):
+        successful_tool_names: list[str] = []
+
+        def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+            guarded = self._automation_shell_write_guard(
+                route,
+                prompt,
+                name,
+                arguments,
+                successful_tool_names,
+            )
+            if guarded is not None:
+                if event_handler:
+                    event_handler({"type": "tool_result", "name": name, "text": guarded, "success": False})
+                return guarded
+            text = self._run_selected_tool(
+                selected_tool_names,
+                name,
+                arguments,
+                event_handler=event_handler,
+            )
+            try:
+                payload = json.loads(text)
+            except Exception:
+                payload = {}
+            if payload.get("success", False):
+                successful_tool_names.append(name)
+            return text
+
         retry_messages = [
             *messages,
             Message(role="assistant", content=normalized_text),
@@ -465,12 +562,7 @@ class AgentCore:
             system_prompt=system_prompt,
             messages=retry_messages,
             tools=[tool.openai_schema() for tool in selected_tool_objects],
-            execute_tool=lambda name, arguments: self._run_selected_tool(
-                selected_tool_names,
-                name,
-                arguments,
-                event_handler=event_handler,
-            ),
+            execute_tool=execute_tool,
             max_rounds=self._tool_loop_rounds(route),
             event_handler=event_handler if stream else None,
         )
@@ -481,12 +573,15 @@ class AgentCore:
         stream: bool = False,
         event_handler: Callable[[dict[str, Any]], None] | None = None,
         continue_session: bool = True,
+        freeze: bool = False,
+        session_seed: Session | None = None,
     ) -> AgentResponse:
-        session = (
-            self.sessions.ensure_current()
-            if continue_session
-            else self.sessions.create(title=self._session_title(prompt), make_current=False)
+        options = ExecutionOptions(
+            continue_session=continue_session,
+            freeze=freeze,
+            session_seed=session_seed,
         )
+        session = self._session_for_run(prompt, options)
         route = self.router.route(prompt)
         if route.lane == Lane.META:
             text = self.meta_handler(prompt)
@@ -503,7 +598,7 @@ class AgentCore:
                 "context": {"instructions": [], "memories": [], "skills": [], "tool_families": []},
             }
             self.last_context = trace["context"]
-            return self._finalize(session, prompt, text, route, verification, {}, trace)
+            return self._finalize(session, prompt, text, route, verification, {}, trace, options=options)
 
         context = self.context_builder.build(
             prompt,
@@ -538,7 +633,7 @@ class AgentCore:
                 "tool_events": [],
                 "context": context_summary,
             }
-            return self._finalize(session, prompt, text, route, verification, {}, trace)
+            return self._finalize(session, prompt, text, route, verification, {}, trace, options=options)
         messages = [*recent_messages, Message(role="user", content=prompt)]
         provider = self.provider_registry.provider_for_task(needs_tools=bool(route.tool_families))
         selected_tool_objects = self.tool_registry.select_for_task(
@@ -554,18 +649,41 @@ class AgentCore:
         provider_response = None
         attempts = 3
         for attempt in range(attempts):
+            successful_tool_names: list[str] = []
+
+            def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+                guarded = self._automation_shell_write_guard(
+                    route,
+                    prompt,
+                    name,
+                    arguments,
+                    successful_tool_names,
+                )
+                if guarded is not None:
+                    if event_handler:
+                        event_handler({"type": "tool_result", "name": name, "text": guarded, "success": False})
+                    return guarded
+                text = self._run_selected_tool(
+                    selected_tool_names,
+                    name,
+                    arguments,
+                    event_handler=event_handler,
+                )
+                try:
+                    payload = json.loads(text)
+                except Exception:
+                    payload = {}
+                if payload.get("success", False):
+                    successful_tool_names.append(name)
+                return text
+
             try:
                 if route.tool_families:
                     provider_response = provider.run_with_tools(
                         system_prompt=system_prompt,
                         messages=messages,
                         tools=[tool.openai_schema() for tool in selected_tool_objects],
-                        execute_tool=lambda name, arguments: self._run_selected_tool(
-                            selected_tool_names,
-                            name,
-                            arguments,
-                            event_handler=event_handler,
-                        ),
+                        execute_tool=execute_tool,
                         max_rounds=self._tool_loop_rounds(route),
                         event_handler=event_handler if stream else None,
                     )
@@ -590,6 +708,7 @@ class AgentCore:
                     selected_skills=selected_skills,
                     provider_name=provider_name,
                     exc=exc,
+                    options=options,
                     stream=stream,
                     event_handler=event_handler,
                 )
@@ -634,6 +753,7 @@ class AgentCore:
                     selected_tool_names,
                     verification_result.message,
                     normalized_text,
+                    prompt,
                     stream=stream,
                     event_handler=event_handler,
                 )
@@ -700,4 +820,5 @@ class AgentCore:
             verification=verification,
             usage=provider_response.usage,
             trace=trace,
+            options=options,
         )

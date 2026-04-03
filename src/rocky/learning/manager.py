@@ -21,6 +21,8 @@ class LearningManager:
         artifacts_dir: Path,
         policies_dir: Path,
         config: LearningConfig,
+        *,
+        create_layout: bool = True,
     ) -> None:
         self.support_dir = support_dir
         self.query_dir = query_dir
@@ -28,15 +30,21 @@ class LearningManager:
         self.artifacts_dir = artifacts_dir
         self.policies_dir = policies_dir
         self.config = config
-        self.learned_root.mkdir(parents=True, exist_ok=True)
-        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        if create_layout:
+            self.learned_root.mkdir(parents=True, exist_ok=True)
+            self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.episode_store = EpisodeStore(
             support_dir=support_dir,
             query_dir=query_dir,
             generation_file=learned_root / "generation.json",
+            create_layout=create_layout,
         )
         self.synthesizer = SkillSynthesizer(use_model=False)
-        self.slow_learner = SlowLearner(query_dir=query_dir, policies_dir=policies_dir)
+        self.slow_learner = SlowLearner(
+            query_dir=query_dir,
+            policies_dir=policies_dir,
+            create_layout=create_layout,
+        )
 
     def current_generation(self) -> int:
         return self.episode_store.current_generation()

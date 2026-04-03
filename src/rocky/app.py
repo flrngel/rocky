@@ -44,6 +44,8 @@ class RockyRuntime:
         provider_registry: ProviderRegistry,
         learning_manager: LearningManager,
         agent: AgentCore,
+        *,
+        freeze_enabled: bool = False,
     ) -> None:
         self.workspace = workspace
         self.global_root = global_root
@@ -59,6 +61,8 @@ class RockyRuntime:
         self.provider_registry = provider_registry
         self.learning_manager = learning_manager
         self.agent = agent
+        self.freeze_enabled = freeze_enabled
+        self.freeze_session_seed = sessions.peek_current() if freeze_enabled else None
         self.commands = CommandRegistry(self)
 
     @classmethod
@@ -66,19 +70,23 @@ class RockyRuntime:
         cls,
         cwd: Path | None = None,
         cli_overrides: dict[str, Any] | None = None,
+        *,
+        freeze: bool = False,
     ) -> "RockyRuntime":
         cwd = (cwd or Path.cwd()).resolve()
         workspace = discover_workspace(cwd)
-        workspace.ensure_layout()
-        global_root = ensure_global_layout()
-        config = ConfigLoader(global_root, workspace.root).load(cli_overrides)
+        if not freeze:
+            workspace.ensure_layout()
+        global_root = ensure_global_layout(create_layout=not freeze)
+        config = ConfigLoader(global_root, workspace.root).load(cli_overrides, create_defaults=not freeze)
         permissions = PermissionManager(config.permissions, workspace.root)
-        sessions = SessionStore(workspace.sessions_dir)
-        sessions.ensure_current()
+        sessions = SessionStore(workspace.sessions_dir, create_layout=not freeze)
+        if not freeze:
+            sessions.ensure_current()
         bundled_root = Path(__file__).resolve().parent / "data" / "bundled_skills"
         skill_loader = SkillLoader(workspace.root, global_root, bundled_root)
         skill_retriever = SkillRetriever(skill_loader.load_all())
-        memory_store = MemoryStore(workspace.memories_dir, global_root / "memories")
+        memory_store = MemoryStore(workspace.memories_dir, global_root / "memories", create_layout=not freeze)
         memory_retriever = MemoryRetriever(memory_store.load_all())
         instruction_candidates = workspace.instruction_candidates + [global_root / "AGENTS.md"]
         context_builder = ContextBuilder(
@@ -105,6 +113,7 @@ class RockyRuntime:
             artifacts_dir=workspace.artifacts_dir,
             policies_dir=workspace.policies_dir,
             config=config.learning,
+            create_layout=not freeze,
         )
         agent = AgentCore(
             router=Router(),
@@ -117,6 +126,7 @@ class RockyRuntime:
             permissions=permissions,
             traces_dir=workspace.traces_dir,
             meta_handler=lambda prompt: "",
+            create_layout=not freeze,
         )
         runtime = cls(
             workspace=workspace,
@@ -133,6 +143,7 @@ class RockyRuntime:
             provider_registry=provider_registry,
             learning_manager=learning_manager,
             agent=agent,
+            freeze_enabled=freeze,
         )
         agent.meta_handler = runtime.meta_answer
         return runtime
@@ -165,14 +176,18 @@ class RockyRuntime:
         stream: bool = False,
         event_handler=None,
         continue_session: bool = True,
+        freeze: bool | None = None,
     ) -> AgentResponse:
+        effective_freeze = self.freeze_enabled if freeze is None else freeze
         response = self.agent.run(
             prompt,
             stream=stream,
             event_handler=event_handler,
             continue_session=continue_session,
+            freeze=effective_freeze,
+            session_seed=self.freeze_session_seed if effective_freeze else None,
         )
-        if self._should_capture_project_memory(response):
+        if not effective_freeze and self._should_capture_project_memory(response):
             try:
                 result = self.memory_store.capture_project_memory(
                     prompt=prompt,
@@ -252,14 +267,15 @@ class RockyRuntime:
         }
 
     def status(self) -> dict[str, Any]:
-        current = self.sessions.ensure_current()
+        current = self._status_session()
         return {
             "workspace_root": str(self.workspace.root),
             "execution_root": str(self.workspace.execution_root),
             "execution_cwd": self.workspace.execution_relative,
-            "session_id": current.id,
+            "session_id": current.id if current is not None else None,
             "active_provider": self.config.active_provider,
             "permission_mode": self.config.permissions.mode,
+            "freeze_mode": self.freeze_enabled,
             "skills": len(self.skill_retriever.skills),
             "memories": len(self.memory_retriever.notes),
             "learned_generation": self.learning_manager.current_generation(),
@@ -313,28 +329,51 @@ class RockyRuntime:
         }
 
     def memory_add(self, name: str, text: str) -> dict[str, Any]:
+        if self.freeze_enabled:
+            return self._freeze_blocked_result("memory add")
         result = self.memory_store.add_global_manual(name, text)
         if result.get("ok"):
             self.refresh_knowledge()
         return result
 
     def memory_set(self, name: str, text: str) -> dict[str, Any]:
+        if self.freeze_enabled:
+            return self._freeze_blocked_result("memory set")
         result = self.memory_store.set_global_manual(name, text)
         if result.get("ok"):
             self.refresh_knowledge()
         return result
 
     def memory_remove(self, name: str) -> dict[str, Any]:
+        if self.freeze_enabled:
+            return self._freeze_blocked_result("memory remove")
         result = self.memory_store.remove_global_manual(name)
         if result.get("ok"):
             self.refresh_knowledge()
         return result
 
     def new_session(self, title: str = "session") -> dict[str, Any]:
+        if self.freeze_enabled:
+            session = self.sessions.create_ephemeral(title=title)
+            self.freeze_session_seed = session
+            return {"created": True, "session_id": session.id, "title": session.title, "ephemeral": True}
         session = self.sessions.create(title=title)
         return {"created": True, "session_id": session.id, "title": session.title}
 
     def resume_session(self, session_id: str | None = None) -> dict[str, Any]:
+        if self.freeze_enabled:
+            if session_id:
+                session = self.sessions.load_snapshot(session_id)
+                self.freeze_session_seed = session
+                return {"resumed": True, "session_id": session.id, "title": session.title, "ephemeral": True}
+            rows = self.sessions.list()
+            if not rows:
+                session = self.sessions.create_ephemeral()
+                self.freeze_session_seed = session
+                return {"resumed": True, "session_id": session.id, "title": session.title, "ephemeral": True}
+            session = self.sessions.load_snapshot(rows[0]["id"])
+            self.freeze_session_seed = session
+            return {"resumed": True, "session_id": session.id, "title": session.title, "ephemeral": True}
         if session_id:
             session = self.sessions.load(session_id)
             return {"resumed": True, "session_id": session.id, "title": session.title}
@@ -351,6 +390,8 @@ class RockyRuntime:
         return {"permission_mode": self.config.permissions.mode}
 
     def learn(self, feedback: str) -> dict[str, Any]:
+        if self.freeze_enabled:
+            return self._freeze_blocked_result("learn", key="published")
         if not feedback.strip():
             return {"published": False, "reason": "feedback is required"}
         if not self.agent.last_prompt or not self.agent.last_answer or not self.agent.last_trace:
@@ -367,19 +408,67 @@ class RockyRuntime:
         return result
 
     def undo(self) -> dict[str, Any]:
+        if self.freeze_enabled:
+            return self._freeze_blocked_result("undo", key="rolled_back")
         result = self.learning_manager.rollback_latest() or {"rolled_back": False, "reason": "no learned skills found"}
         self.refresh_knowledge()
         return result
 
     def doctor(self) -> dict[str, Any]:
         provider_ok, provider_message = self.provider_registry.healthcheck()
+        current = self._status_session()
         return {
             "provider": {"ok": provider_ok, "message": provider_message},
             "workspace": str(self.workspace.root),
-            "current_session": self.sessions.ensure_current().id,
+            "current_session": current.id if current is not None else None,
+            "freeze_mode": self.freeze_enabled,
             "tool_count": len(self.tool_registry.tools),
             "skill_count": len(self.skill_retriever.skills),
             "memory_count": len(self.memory_retriever.notes),
+        }
+
+    def compact_session(self) -> dict[str, Any]:
+        if self.freeze_enabled:
+            return self._freeze_blocked_result("compact", key="compacted")
+        return self.sessions.compact()
+
+    def set_freeze_mode(self, enabled: bool) -> dict[str, Any]:
+        if enabled:
+            if not self.freeze_enabled or self.freeze_session_seed is None:
+                self.freeze_session_seed = self._snapshot_session_seed()
+            self.freeze_enabled = True
+        else:
+            self.freeze_enabled = False
+            self.freeze_session_seed = None
+        return {
+            "freeze_mode": self.freeze_enabled,
+            "session_id": self.freeze_session_seed.id if self.freeze_session_seed is not None else None,
+        }
+
+    def freeze_status(self) -> dict[str, Any]:
+        current = self._status_session()
+        return {
+            "freeze_mode": self.freeze_enabled,
+            "session_id": current.id if current is not None else None,
+        }
+
+    def _snapshot_session_seed(self):
+        if self.sessions.current is not None:
+            return self.sessions.current.clone()
+        return self.sessions.peek_current()
+
+    def _status_session(self):
+        if self.freeze_enabled:
+            if self.freeze_session_seed is not None:
+                return self.freeze_session_seed
+            return self.sessions.peek_current()
+        return self.sessions.ensure_current()
+
+    def _freeze_blocked_result(self, action: str, *, key: str = "ok") -> dict[str, Any]:
+        return {
+            key: False,
+            "reason": f"Freeze mode is enabled; {action} is disabled because it would write Rocky state.",
+            "freeze_mode": True,
         }
 
     def init_scaffold(self) -> dict[str, Any]:

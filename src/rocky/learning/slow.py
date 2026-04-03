@@ -9,10 +9,11 @@ from rocky.util.time import utc_iso
 
 
 class SlowLearner:
-    def __init__(self, query_dir: Path, policies_dir: Path) -> None:
+    def __init__(self, query_dir: Path, policies_dir: Path, *, create_layout: bool = True) -> None:
         self.query_dir = query_dir
         self.policies_dir = policies_dir
-        self.policies_dir.mkdir(parents=True, exist_ok=True)
+        if create_layout:
+            self.policies_dir.mkdir(parents=True, exist_ok=True)
 
     def run_once(self) -> dict[str, Any]:
         rows: list[dict[str, Any]] = []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import re
 import uuid
@@ -73,13 +74,23 @@ class Session:
         self.meta["last_turn_summary"] = summary
         self.meta["last_updated_at"] = summary.get("at", utc_iso())
 
+    def clone(self) -> "Session":
+        return Session(
+            id=self.id,
+            created_at=self.created_at,
+            title=self.title,
+            messages=deepcopy(self.messages),
+            meta=deepcopy(self.meta),
+        )
+
 
 class SessionStore:
-    def __init__(self, sessions_dir: Path) -> None:
+    def __init__(self, sessions_dir: Path, *, create_layout: bool = True) -> None:
         self.sessions_dir = sessions_dir
-        self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.current_session_id_path = self.sessions_dir / ".current"
         self.current: Session | None = None
+        if create_layout:
+            self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def _path(self, session_id: str) -> Path:
         return self.sessions_dir / f"{session_id}.json"
@@ -101,21 +112,39 @@ class SessionStore:
         )
 
     def load(self, session_id: str) -> Session:
-        data = json.loads(self._path(session_id).read_text(encoding="utf-8"))
-        session = Session(**data)
+        session = self.load_snapshot(session_id)
         self.current = session
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.current_session_id_path.write_text(session.id, encoding="utf-8")
         return session
 
+    def load_snapshot(self, session_id: str) -> Session:
+        data = json.loads(self._path(session_id).read_text(encoding="utf-8"))
+        return Session(**data)
+
     def ensure_current(self) -> Session:
         if self.current:
             return self.current
-        if self.current_session_id_path.exists():
-            sid = self.current_session_id_path.read_text(encoding="utf-8").strip()
-            if sid and self._path(sid).exists():
-                return self.load(sid)
+        current = self.peek_current()
+        if current is not None:
+            self.current = current
+            self.sessions_dir.mkdir(parents=True, exist_ok=True)
+            self.current_session_id_path.write_text(current.id, encoding="utf-8")
+            return current
         return self.create()
+
+    def peek_current(self) -> Session | None:
+        if self.current is not None:
+            return self.current.clone()
+        if not self.current_session_id_path.exists():
+            return None
+        sid = self.current_session_id_path.read_text(encoding="utf-8").strip()
+        if not sid or not self._path(sid).exists():
+            return None
+        return self.load_snapshot(sid)
+
+    def create_ephemeral(self, title: str = "session") -> Session:
+        return Session(id=f"tmp_{uuid.uuid4().hex[:10]}", created_at=utc_iso(), title=title)
 
     def list(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []

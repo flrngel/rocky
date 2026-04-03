@@ -222,6 +222,46 @@ class _AutomationOutputRepairProvider:
         )
 
 
+class _AutomationShellWriteGuardProvider:
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        blocked = execute_tool(
+            "run_shell_command",
+            {"command": "cat > scripts/report.sh <<'EOF'\necho hi\nEOF", "timeout_s": 5},
+        )
+        wrote = execute_tool(
+            "write_file",
+            {"path": "scripts/report.sh", "content": "#!/bin/sh\necho hi\n"},
+        )
+        verified = execute_tool("run_shell_command", {"command": "sh scripts/report.sh", "timeout_s": 5})
+        return ProviderResponse(
+            text="Ran `sh scripts/report.sh` and it printed `hi`.",
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "cat > scripts/report.sh <<'EOF'\necho hi\nEOF", "timeout_s": 5},
+                    "text": blocked,
+                    "success": False,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "write_file",
+                    "arguments": {"path": "scripts/report.sh", "content": "#!/bin/sh\necho hi\n"},
+                    "text": wrote,
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "sh scripts/report.sh", "timeout_s": 5},
+                    "text": verified,
+                    "success": True,
+                },
+            ],
+        )
+
+
 class _FailingProvider:
     def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
         raise RuntimeError("provider offline")
@@ -265,6 +305,15 @@ def test_runtime_trace_uses_no_tools_for_direct_prompt(tmp_path: Path) -> None:
     assert response.text == "ok"
     assert response.trace["selected_tools"] == []
     assert [message.content for message in provider.calls[0]] == ["hello"]
+
+
+def test_freeze_load_does_not_create_internal_layout(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runtime = RockyRuntime.load_from(tmp_path, freeze=True)
+
+    assert runtime.freeze_enabled is True
+    assert not runtime.workspace.rocky_dir.exists()
+    assert not runtime.global_root.exists()
 
 
 def test_runtime_returns_failure_response_when_provider_errors(tmp_path: Path) -> None:
@@ -347,6 +396,35 @@ def test_session_run_can_still_include_previous_messages(tmp_path: Path) -> None
     runtime.run_prompt("new task", continue_session=True)
 
     assert [message.content for message in provider.calls[0]] == ["old task", "old answer", "new task"]
+
+
+def test_freeze_continue_session_reads_existing_messages_without_persisting(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    current = runtime.sessions.ensure_current()
+    current.append("user", "old task")
+    current.append("assistant", "old answer")
+    runtime.sessions.save(current)
+
+    frozen = RockyRuntime.load_from(tmp_path, freeze=True)
+    provider = _OkProvider()
+    registry = _ProviderRegistry(provider)
+    frozen.provider_registry = registry
+    frozen.agent.provider_registry = registry
+
+    sessions_before = list(runtime.workspace.sessions_dir.glob("ses_*.json"))
+    traces_before = list(runtime.workspace.traces_dir.glob("trace_*.json"))
+    query_before = list(runtime.workspace.episodes_query_dir.glob("qry_*.json"))
+
+    response = frozen.run_prompt("new task", continue_session=True)
+
+    assert response.text == "ok"
+    assert [message.content for message in provider.calls[0]] == ["old task", "old answer", "new task"]
+    reloaded = runtime.sessions.load(current.id)
+    assert [message["content"] for message in reloaded.messages[-2:]] == ["old task", "old answer"]
+    assert list(runtime.workspace.sessions_dir.glob("ses_*.json")) == sessions_before
+    assert list(runtime.workspace.traces_dir.glob("trace_*.json")) == traces_before
+    assert list(runtime.workspace.episodes_query_dir.glob("qry_*.json")) == query_before
+    assert "trace_path" not in response.trace
 
 
 def test_isolated_run_refuses_to_invent_previous_turns(tmp_path: Path) -> None:
@@ -488,6 +566,22 @@ def test_runtime_recreates_internal_state_dirs_if_deleted_mid_run(tmp_path: Path
     assert Path(response.trace["trace_path"]).exists()
 
 
+def test_freeze_run_does_not_recreate_internal_state_dirs(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path, freeze=True)
+    provider = _OkProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt("hello", continue_session=False)
+
+    assert response.text == "ok"
+    assert not runtime.workspace.sessions_dir.exists()
+    assert not runtime.workspace.traces_dir.exists()
+    assert not runtime.workspace.episodes_query_dir.exists()
+    assert "trace_path" not in response.trace
+
+
 def test_runtime_retries_tool_loop_after_verification_failure(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
     runtime.permissions.config.mode = "bypass"
@@ -531,3 +625,22 @@ def test_runtime_retries_automation_when_judged_output_is_wrong(tmp_path: Path) 
     retried_messages = provider.tool_calls[1]["messages"]
     assert retried_messages[-1].role == "user"
     assert "360" in str(retried_messages[-1].content)
+
+
+def test_runtime_blocks_shell_file_creation_before_write_file_for_automation(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _AutomationShellWriteGuardProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt("build a repeatable report script and run it", continue_session=False)
+
+    assert response.verification["status"] == "pass"
+    first_event = response.trace["tool_events"][0]
+    assert first_event["name"] == "run_shell_command"
+    assert first_event["success"] is False
+    assert "use_write_file_first" in first_event["text"]
+    assert response.trace["tool_events"][1]["name"] == "write_file"

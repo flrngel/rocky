@@ -102,8 +102,9 @@ def global_root() -> Path:
     return Path.home() / ".config" / "rocky"
 
 
-def ensure_global_layout() -> Path:
+def ensure_global_layout(*, create_layout: bool = True) -> Path:
     root = global_root()
-    for rel in ["skills", "memories", "providers", "policies", "caches"]:
-        (root / rel).mkdir(parents=True, exist_ok=True)
+    if create_layout:
+        for rel in ["skills", "memories", "providers", "policies", "caches"]:
+            (root / rel).mkdir(parents=True, exist_ok=True)
     return root

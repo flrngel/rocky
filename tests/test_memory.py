@@ -87,6 +87,24 @@ def test_repl_and_one_shot_both_participate_in_project_auto_memory(tmp_path: Pat
     assert len(runtime.memory_list()["project_auto"]) >= first_count
 
 
+def test_freeze_run_reads_existing_memory_but_does_not_write_new_auto_memory(tmp_path: Path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch)
+    provider = _CompleteProvider("Keep all state inside .rocky. README.md is an important project path.")
+    _set_provider(runtime, provider)
+    runtime.run_prompt("Build the project and keep all state inside .rocky.", continue_session=False)
+    existing = list(runtime.workspace.memories_dir.joinpath("auto").glob("*.json"))
+
+    frozen = RockyRuntime.load_from(runtime.workspace.root, freeze=True)
+    frozen_provider = _CompleteProvider("Use prompt_toolkit and Rich. docs/TUI.md is an important project path.")
+    _set_provider(frozen, frozen_provider)
+
+    context = frozen.context_builder.build("keep all state inside .rocky", "conversation/general", [])
+    frozen.run_prompt("Improve the TUI and keep all state inside .rocky.", continue_session=False)
+
+    assert any(item["scope"] == "project_auto" for item in context.memories)
+    assert list(runtime.workspace.memories_dir.joinpath("auto").glob("*.json")) == existing
+
+
 def test_subdirectory_uses_workspace_root_memory_bucket(tmp_path: Path, monkeypatch) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
@@ -129,6 +147,17 @@ def test_memory_commands_manage_global_manual_memory_only(tmp_path: Path, monkey
 
     removed = runtime.commands.handle("/memory remove style")
     assert removed.data["ok"] is True
+    assert runtime.memory_list()["global_manual"] == []
+
+
+def test_memory_commands_are_blocked_in_freeze_mode(tmp_path: Path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch)
+    runtime.set_freeze_mode(True)
+
+    added = runtime.commands.handle('/memory add style "Prefer plain text output."')
+
+    assert added.data["ok"] is False
+    assert "Freeze mode is enabled" in added.data["reason"]
     assert runtime.memory_list()["global_manual"] == []
 
 

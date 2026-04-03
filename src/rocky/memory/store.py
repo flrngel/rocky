@@ -122,13 +122,14 @@ class MemoryCandidate:
 
 
 class MemoryStore:
-    def __init__(self, project_dir: Path, global_dir: Path) -> None:
+    def __init__(self, project_dir: Path, global_dir: Path, *, create_layout: bool = True) -> None:
         self.project_dir = project_dir
         self.global_dir = global_dir
         self.project_auto_dir = project_dir / "auto"
         self.project_brief_path = project_dir / "project_brief.md"
         self.global_manual_dir = global_dir / "global"
-        self.ensure_layout()
+        if create_layout:
+            self.ensure_layout()
 
     def ensure_layout(self) -> None:
         self.project_dir.mkdir(parents=True, exist_ok=True)
