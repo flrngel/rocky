@@ -112,7 +112,7 @@ def test_cli_can_opt_into_session_continuation(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
     monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False: runtime)
 
-    exit_code = main(["--continue-session", "say hi", "--json"])
+    exit_code = main(["--continue", "say hi", "--json"])
 
     assert exit_code == 0
     assert runtime.continue_session_values == [True]
