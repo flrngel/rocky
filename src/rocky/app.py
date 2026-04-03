@@ -22,7 +22,7 @@ from rocky.skills.loader import SkillLoader
 from rocky.skills.retriever import SkillRetriever
 from rocky.tools.base import ToolContext
 from rocky.tools.registry import ToolRegistry
-from rocky.util.io import write_text
+from rocky.util.io import read_yaml, write_text
 from rocky.util.paths import WorkspacePaths, discover_workspace, ensure_global_layout
 from rocky.util.yamlx import dump_yaml
 
@@ -268,17 +268,30 @@ class RockyRuntime:
 
     def status(self) -> dict[str, Any]:
         current = self._status_session()
+        provider = self.config.provider(self.config.active_provider)
         return {
+            "version": __version__,
             "workspace_root": str(self.workspace.root),
             "execution_root": str(self.workspace.execution_root),
             "execution_cwd": self.workspace.execution_relative,
             "session_id": current.id if current is not None else None,
-            "active_provider": self.config.active_provider,
-            "permission_mode": self.config.permissions.mode,
-            "freeze_mode": self.freeze_enabled,
+            "runtime": {
+                "active_provider": self.config.active_provider,
+                "model": provider.model,
+                "base_url": provider.base_url,
+                "style": provider.style,
+                "permission_mode": self.config.permissions.mode,
+                "freeze_mode": self.freeze_enabled,
+            },
             "skills": len(self.skill_retriever.skills),
             "memories": len(self.memory_retriever.notes),
             "learned_generation": self.learning_manager.current_generation(),
+            "global_settings": self._config_source_snapshot("global", self.global_root / "config.yaml"),
+            "project_settings": {
+                "project": self._config_source_snapshot("project", self.workspace.config_path),
+                "local": self._config_source_snapshot("local", self.workspace.config_local_path),
+            },
+            "effective_settings": self.config_dict(),
         }
 
     def current_context(self) -> dict[str, Any]:
@@ -469,6 +482,15 @@ class RockyRuntime:
             key: False,
             "reason": f"Freeze mode is enabled; {action} is disabled because it would write Rocky state.",
             "freeze_mode": True,
+        }
+
+    def _config_source_snapshot(self, scope: str, path: Path) -> dict[str, Any]:
+        data = read_yaml(path)
+        return {
+            "scope": scope,
+            "path": str(path),
+            "exists": path.exists(),
+            "values": data if isinstance(data, dict) else None,
         }
 
     def init_scaffold(self) -> dict[str, Any]:
