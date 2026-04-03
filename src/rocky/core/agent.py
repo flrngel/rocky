@@ -395,30 +395,47 @@ class AgentCore:
         lowered_prompt = prompt.lower()
         if not any(term in lowered_prompt for term in ("build", "create", "script", "scaffold", "project", "automation")):
             return None
-        command = str(arguments.get("command") or "")
+        command = str(arguments.get("command") or "").strip()
         lowered_command = command.lower()
-        shell_write_markers = (
-            ">>",
-            "<<",
-            " >",
-            "> ",
-            "tee ",
-            "touch ",
-            "sed -i",
-            "perl -pi",
-        )
-        if not any(marker in lowered_command for marker in shell_write_markers):
+        if not successful_tool_names and self._is_lightweight_automation_inspection_command(lowered_command):
             return None
         payload = {
             "success": False,
             "summary": (
                 "Use `write_file` to create or edit project files before shell verification. "
-                "Shell redirection or inline shell-based file writes are not allowed as the first automation write step."
+                "Only one lightweight inspection command is allowed before the first `write_file`; "
+                "do not use repeated shell setup or shell-based file creation as a substitute."
             ),
             "data": {},
             "metadata": {"error": "use_write_file_first"},
         }
         return safe_json(payload)
+
+    def _is_lightweight_automation_inspection_command(self, command: str) -> bool:
+        if not command:
+            return False
+        blocked_markers = ("&&", "||", ";", ">", "<", "|", "tee ", "mkdir ", "cp ", "mv ", "rm ", "touch ", "chmod ")
+        if any(marker in command for marker in blocked_markers):
+            return False
+        prefixes = (
+            "pwd",
+            "ls",
+            "find ",
+            "stat ",
+            "cat ",
+            "head ",
+            "wc ",
+            "git status",
+            "git branch",
+            "git rev-parse",
+            "which ",
+            "command -v ",
+            "env",
+            "printenv",
+            "test -f ",
+            "test -d ",
+        )
+        return command.startswith(prefixes)
 
     def _should_judge_automation_output(
         self,

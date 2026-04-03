@@ -262,6 +262,54 @@ class _AutomationShellWriteGuardProvider:
         )
 
 
+class _AutomationPreWriteShellLoopProvider:
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        inspect = execute_tool("run_shell_command", {"command": "ls", "timeout_s": 5})
+        blocked = execute_tool("run_shell_command", {"command": "mkdir -p scripts backups", "timeout_s": 5})
+        wrote = execute_tool(
+            "write_file",
+            {"path": "scripts/backup_logs.sh", "content": "#!/bin/sh\nmkdir -p backups\ncp logs/app.log backups/app.log\n"},
+        )
+        verified = execute_tool(
+            "run_shell_command",
+            {"command": "sh scripts/backup_logs.sh && test -f backups/app.log", "timeout_s": 5},
+        )
+        return ProviderResponse(
+            text="Ran `sh scripts/backup_logs.sh` and verified backups/app.log exists.",
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "ls", "timeout_s": 5},
+                    "text": inspect,
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "mkdir -p scripts backups", "timeout_s": 5},
+                    "text": blocked,
+                    "success": False,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "write_file",
+                    "arguments": {"path": "scripts/backup_logs.sh"},
+                    "text": wrote,
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "sh scripts/backup_logs.sh && test -f backups/app.log", "timeout_s": 5},
+                    "text": verified,
+                    "success": True,
+                },
+            ],
+        )
+
+
 class _FailingProvider:
     def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
         raise RuntimeError("provider offline")
@@ -644,3 +692,23 @@ def test_runtime_blocks_shell_file_creation_before_write_file_for_automation(tmp
     assert first_event["success"] is False
     assert "use_write_file_first" in first_event["text"]
     assert response.trace["tool_events"][1]["name"] == "write_file"
+
+
+def test_runtime_allows_only_one_lightweight_shell_inspection_before_write_file(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _AutomationPreWriteShellLoopProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt("automate a backup log script and verify it runs", continue_session=False)
+
+    assert response.verification["status"] == "pass"
+    assert response.trace["tool_events"][0]["name"] == "run_shell_command"
+    assert response.trace["tool_events"][0]["success"] is True
+    assert response.trace["tool_events"][1]["name"] == "run_shell_command"
+    assert response.trace["tool_events"][1]["success"] is False
+    assert "use_write_file_first" in response.trace["tool_events"][1]["text"]
+    assert response.trace["tool_events"][2]["name"] == "write_file"
