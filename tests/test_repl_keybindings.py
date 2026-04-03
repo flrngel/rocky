@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.keys import Keys
 
@@ -111,3 +112,19 @@ def test_non_freeze_repl_uses_file_history(tmp_path):
     repl = RockyRepl(_make_runtime(tmp_path))
 
     assert isinstance(repl.session.history, FileHistory)
+
+
+def test_slash_command_completion_matches_prefix(tmp_path):
+    repl = RockyRepl(_make_runtime(tmp_path))
+
+    completions = list(repl.session.completer.get_completions(Document("/he"), None))
+
+    assert any(item.text == "/help" for item in completions)
+
+
+def test_non_command_text_does_not_offer_slash_completion(tmp_path):
+    repl = RockyRepl(_make_runtime(tmp_path))
+
+    completions = list(repl.session.completer.get_completions(Document("hello"), None))
+
+    assert completions == []

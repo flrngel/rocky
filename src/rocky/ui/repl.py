@@ -127,7 +127,7 @@ class RockyRepl:
             multiline=True,
             key_bindings=_kb,
             style=self.prompt_style,
-            complete_while_typing=False,
+            complete_while_typing=True,
             reserve_space_for_menu=6,
         )
 
