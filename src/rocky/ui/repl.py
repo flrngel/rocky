@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
@@ -52,6 +53,7 @@ def make_live_console(console: Console) -> Console:
 class EventPrinter:
     console: Console
     speaker_label: str = field(default="Rocky")
+    verbose: bool = field(default=False)
     streamed_text: bool = field(default=False)
     _stream_open: bool = field(default=False)
 
@@ -65,6 +67,20 @@ class EventPrinter:
             self.console.print()
             self._stream_open = False
 
+    def _tool_summary(self, event: dict) -> str:
+        text = str(event.get("text", "")).strip()
+        if not text:
+            return "done"
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return text.splitlines()[0][:160]
+        if isinstance(payload, dict):
+            summary = str(payload.get("summary", "")).strip()
+            if summary:
+                return summary
+        return text.splitlines()[0][:160]
+
     def __call__(self, event: dict) -> None:
         kind = event.get("type")
         if kind == "assistant_chunk":
@@ -73,6 +89,9 @@ class EventPrinter:
             self.console.print(Text(str(event.get("text", ""))), end="")
         elif kind == "tool_call":
             self._close_stream_line()
+            if not self.verbose:
+                self.console.print(Text(f"tool: {event.get('name', '')}", style="cyan"))
+                return
             body = Text()
             body.append(str(event.get("name", "")), style="bold cyan")
             body.append("\n")
@@ -80,6 +99,12 @@ class EventPrinter:
             self.console.print(Panel(body, title="tool call", border_style="cyan"))
         elif kind == "tool_result":
             self._close_stream_line()
+            if not self.verbose:
+                status = "ok" if event.get("success") else "fail"
+                summary = self._tool_summary(event)
+                style = "green" if event.get("success") else "red"
+                self.console.print(Text(f"{status}: {event.get('name', '')} - {summary}", style=style))
+                return
             self.console.print(
                 Panel(
                     Text(str(event.get("text", ""))),
@@ -138,7 +163,10 @@ class RockyRepl:
 
     def _toolbar(self) -> HTML:
         freeze_label = "Freeze: ON" if self.runtime.freeze_enabled else "Freeze: OFF"
-        return HTML(f"<toolbar> Enter submit  Alt+Enter newline  /help commands  {freeze_label} </toolbar>")
+        verbose_label = "Verbose: ON" if getattr(self.runtime, "verbose_enabled", False) else "Verbose: OFF"
+        return HTML(
+            f"<toolbar> Enter submit  Alt+Enter newline  /help commands  {freeze_label}  {verbose_label} </toolbar>"
+        )
 
     def _continuation(self, width: int, line_number: int, wrap_count: int):
         return [("class:continuation", "... ".rjust(width))]
@@ -195,7 +223,7 @@ class RockyRepl:
                 result = self.runtime.commands.handle(line)
                 self.print_command_result(result)
                 continue
-            printer = EventPrinter(self.live_console)
+            printer = EventPrinter(self.live_console, verbose=getattr(self.runtime, "verbose_enabled", False))
             with patch_stdout():
                 response = self.runtime.run_prompt(line, stream=True, event_handler=printer)
             if printer.streamed_text:

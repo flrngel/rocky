@@ -16,6 +16,7 @@ def test_runtime_meta_and_init(tmp_path: Path, monkeypatch) -> None:
     assert status["version"]
     assert status['workspace_root'] == str(workspace)
     assert status["runtime"]["active_provider"] == runtime.config.active_provider
+    assert status["runtime"]["verbose_mode"] is False
     assert status["global_settings"]["path"].endswith("config.yaml")
     assert status["project_settings"]["project"]["path"].endswith(".rocky/config.yaml")
     assert status["effective_settings"]["active_provider"] == runtime.config.active_provider

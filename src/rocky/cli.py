@@ -28,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--continue", dest="continue_session", action="store_true", help="Reuse current session history for one-shot tasks")
     parser.add_argument("--continue-session", dest="continue_session", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--freeze", action="store_true", help="Read existing Rocky state but do not persist new Rocky state")
+    parser.add_argument("--verbose", action="store_true", help="Show full tool call and tool result logs")
     parser.add_argument("-y", "--yes", action="store_true", help="Auto-approve permission prompts")
     parser.add_argument("--json", action="store_true", help="Print machine-readable output for one-shot tasks")
     parser.add_argument("-V", "--version", action="store_true", help="Print Rocky version and exit")
@@ -109,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.permission_mode:
         cli_overrides.setdefault("permissions", {})["mode"] = args.permission_mode
 
-    runtime = RockyRuntime.load_from(cwd, cli_overrides=cli_overrides, freeze=args.freeze)
+    runtime = RockyRuntime.load_from(cwd, cli_overrides=cli_overrides, freeze=args.freeze, verbose=args.verbose)
     provider_name = args.provider or runtime.config.active_provider
     provider_cfg = runtime.config.provider(provider_name)
     runtime.config.active_provider = provider_name
@@ -148,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                 render_console_text(console, result.text)
             return 0
 
-        printer = None if args.json else EventPrinter(make_live_console(console))
+        printer = None if args.json else EventPrinter(make_live_console(console), verbose=args.verbose)
         response = runtime.run_prompt(
             text,
             stream=not args.json,

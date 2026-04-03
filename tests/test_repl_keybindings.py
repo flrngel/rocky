@@ -19,6 +19,7 @@ def _make_runtime(tmp_path: Path) -> MagicMock:
     runtime.workspace.cache_dir = tmp_path
     runtime.commands.names = ["help", "exit"]
     runtime.freeze_enabled = False
+    runtime.verbose_enabled = False
     return runtime
 
 
@@ -105,6 +106,7 @@ def test_freeze_repl_uses_in_memory_history_and_toolbar(tmp_path):
 
     assert isinstance(repl.session.history, InMemoryHistory)
     assert "Freeze: ON" in repl._toolbar().value
+    assert "Verbose: OFF" in repl._toolbar().value
     assert "freeze" in repl._prompt_message().value
 
 
@@ -112,6 +114,15 @@ def test_non_freeze_repl_uses_file_history(tmp_path):
     repl = RockyRepl(_make_runtime(tmp_path))
 
     assert isinstance(repl.session.history, FileHistory)
+
+
+def test_verbose_repl_toolbar_shows_enabled(tmp_path):
+    runtime = _make_runtime(tmp_path)
+    runtime.verbose_enabled = True
+
+    repl = RockyRepl(runtime)
+
+    assert "Verbose: ON" in repl._toolbar().value
 
 
 def test_slash_command_completion_matches_prefix(tmp_path):

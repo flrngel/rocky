@@ -46,6 +46,7 @@ class RockyRuntime:
         agent: AgentCore,
         *,
         freeze_enabled: bool = False,
+        verbose_enabled: bool = False,
     ) -> None:
         self.workspace = workspace
         self.global_root = global_root
@@ -62,6 +63,7 @@ class RockyRuntime:
         self.learning_manager = learning_manager
         self.agent = agent
         self.freeze_enabled = freeze_enabled
+        self.verbose_enabled = verbose_enabled
         self.freeze_session_seed = sessions.peek_current() if freeze_enabled else None
         self.commands = CommandRegistry(self)
 
@@ -72,6 +74,7 @@ class RockyRuntime:
         cli_overrides: dict[str, Any] | None = None,
         *,
         freeze: bool = False,
+        verbose: bool = False,
     ) -> "RockyRuntime":
         cwd = (cwd or Path.cwd()).resolve()
         workspace = discover_workspace(cwd)
@@ -144,6 +147,7 @@ class RockyRuntime:
             learning_manager=learning_manager,
             agent=agent,
             freeze_enabled=freeze,
+            verbose_enabled=verbose,
         )
         agent.meta_handler = runtime.meta_answer
         return runtime
@@ -282,6 +286,7 @@ class RockyRuntime:
                 "style": provider.style,
                 "permission_mode": self.config.permissions.mode,
                 "freeze_mode": self.freeze_enabled,
+                "verbose_mode": self.verbose_enabled,
             },
             "skills": len(self.skill_retriever.skills),
             "memories": len(self.memory_retriever.notes),

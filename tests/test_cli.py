@@ -46,6 +46,7 @@ class _FakeRuntime:
         self.permissions = SimpleNamespace(ask_callback=None)
         self.commands = _FakeCommands()
         self.freeze_enabled = False
+        self.verbose_enabled = False
         self.prompts: list[str] = []
         self.continue_session_values: list[bool] = []
         self.freeze_values: list[bool | None] = []
@@ -72,7 +73,7 @@ class _FakeRuntime:
 
 def test_cli_reads_task_from_stdin(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
-    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False: runtime)
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False: runtime)
     monkeypatch.setattr("sys.stdin", _FakeStdin("summarize this\n"))
 
     exit_code = main(["--json"])
@@ -86,7 +87,7 @@ def test_cli_reads_task_from_stdin(monkeypatch, capsys) -> None:
 
 def test_cli_maps_command_aliases(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
-    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False: runtime)
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False: runtime)
 
     exit_code = main(["configure", "--json"])
 
@@ -98,7 +99,7 @@ def test_cli_maps_command_aliases(monkeypatch, capsys) -> None:
 
 def test_cli_routes_multiword_memory_commands(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
-    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False: runtime)
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False: runtime)
 
     exit_code = main(["memory", "add", "style", "Prefer terse output.", "--json"])
 
@@ -110,7 +111,7 @@ def test_cli_routes_multiword_memory_commands(monkeypatch, capsys) -> None:
 
 def test_cli_can_opt_into_session_continuation(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
-    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False: runtime)
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False: runtime)
 
     exit_code = main(["--continue", "say hi", "--json"])
 
@@ -143,7 +144,7 @@ def test_cli_version_prints_and_exits_without_runtime(monkeypatch, capsys) -> No
 
 def test_cli_verification_output_is_plain_text(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
-    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False: runtime)
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False: runtime)
 
     def _run_prompt(
         text: str,
@@ -177,9 +178,10 @@ def test_cli_freeze_flag_reaches_runtime(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
     load_calls: list[bool] = []
 
-    def _load_from(cwd, cli_overrides=None, freeze=False):
+    def _load_from(cwd, cli_overrides=None, freeze=False, verbose=False):
         load_calls.append(freeze)
         runtime.freeze_enabled = freeze
+        runtime.verbose_enabled = verbose
         return runtime
 
     monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", _load_from)
@@ -189,5 +191,24 @@ def test_cli_freeze_flag_reaches_runtime(monkeypatch, capsys) -> None:
     assert exit_code == 0
     assert load_calls == [True]
     assert runtime.freeze_values == [True]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["text"] == "done"
+
+
+def test_cli_verbose_flag_reaches_runtime(monkeypatch, capsys) -> None:
+    runtime = _FakeRuntime()
+    load_calls: list[bool] = []
+
+    def _load_from(cwd, cli_overrides=None, freeze=False, verbose=False):
+        load_calls.append(verbose)
+        runtime.verbose_enabled = verbose
+        return runtime
+
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", _load_from)
+
+    exit_code = main(["--verbose", "say hi", "--json"])
+
+    assert exit_code == 0
+    assert load_calls == [True]
     payload = json.loads(capsys.readouterr().out)
     assert payload["text"] == "done"
