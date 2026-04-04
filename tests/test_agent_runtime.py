@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -236,6 +237,68 @@ class _AutomationOutputRepairProvider:
         )
 
 
+class _AutomationJsonNormalizationProvider:
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        return ProviderResponse(
+            text='Done.\n```json\n{"line_count": 2, "word_count": 7}\n```',
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "write_file",
+                    "arguments": {"path": "count.py"},
+                    "text": "{}",
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "read_file",
+                    "arguments": {"path": "count.py"},
+                    "text": "{}",
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "python3 count.py"},
+                    "text": '{"success": true, "data": {"stdout": "{\\"line_count\\": 2, \\"word_count\\": 7}\\n", "stderr": "", "returncode": 0}}',
+                    "success": True,
+                },
+            ],
+        )
+
+
+class _RepoJsonFileNormalizationProvider:
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        return ProviderResponse(
+            text='{"products":[{"product_id":"P1","merge":["C1"],"skip":["C2"]}]}',
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "sh catalog.sh"},
+                    "text": '{"success": true, "data": {"command": "sh catalog.sh", "stdout": "{\\"products\\":[{\\"product_id\\":\\"P1\\",\\"merge\\":[\\"C1\\"],\\"skip\\":[\\"C2\\"]}]}", "stderr": "", "returncode": 0}}',
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "write_file",
+                    "arguments": {"path": "decisions.json"},
+                    "text": "{}",
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "read_file",
+                    "arguments": {"path": "decisions.json"},
+                    "text": '{"success": true, "metadata": {"path": "decisions.json"}, "data": "{\\"products\\":[{\\"product_id\\":\\"P1\\",\\"merge\\":[\\"C1\\"],\\"skip\\":[\\"C2\\"]}]}", "summary": "Read decisions.json"}',
+                    "success": True,
+                },
+            ],
+        )
+
+
 class _AutomationShellWriteGuardProvider:
     def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
         blocked = execute_tool(
@@ -334,6 +397,40 @@ class _AutomationPreWriteShellLoopProvider:
                     "name": "run_shell_command",
                     "arguments": {"command": "sh scripts/backup_logs.sh && test -f backups/app.log", "timeout_s": 5},
                     "text": verified,
+                    "success": True,
+                },
+            ],
+        )
+
+
+class _ShellFollowUpGuardProvider:
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        first_shell = execute_tool("run_shell_command", {"command": "printf '{\"products\": []}\\n'", "timeout_s": 5})
+        blocked_shell = execute_tool("run_shell_command", {"command": "printf '{\"products\": []}\\n' | jq .", "timeout_s": 5})
+        parsed = execute_tool("run_python", {"code": "print('parsed response')"})
+        return ProviderResponse(
+            text="Executed the script and parsed the response.",
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "printf '{\"products\": []}\\n'", "timeout_s": 5},
+                    "text": first_shell,
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "printf '{\"products\": []}\\n' | jq .", "timeout_s": 5},
+                    "text": blocked_shell,
+                    "success": False,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "run_python",
+                    "arguments": {"code": "print('parsed response')"},
+                    "text": parsed,
                     "success": True,
                 },
             ],
@@ -698,11 +795,54 @@ def test_runtime_retries_automation_when_judged_output_is_wrong(tmp_path: Path) 
     )
 
     assert response.verification["status"] == "pass"
+    assert response.text == "Ran `sh report.sh` and it printed `360`."
     assert len(provider.tool_calls) == 2
     assert len(provider.complete_calls) == 2
     retried_messages = provider.tool_calls[1]["messages"]
     assert retried_messages[-1].role == "user"
     assert "360" in str(retried_messages[-1].content)
+
+
+def test_runtime_normalizes_exact_json_automation_answers(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _AutomationJsonNormalizationProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt(
+        "Build a tiny Python script project and tell me the exact JSON output. The script prints valid JSON.",
+        continue_session=False,
+    )
+
+    assert json.loads(response.text) == {
+        "verified_command": "python3 count.py",
+        "verified_output": {"line_count": 2, "word_count": 7},
+    }
+    assert response.verification["status"] == "pass"
+
+
+def test_runtime_normalizes_repo_json_file_answers_with_output_path(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _RepoJsonFileNormalizationProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt(
+        "Execute `catalog.sh`, write valid JSON to `decisions.json`, then read the file back and tell me the exact JSON.",
+        continue_session=False,
+    )
+
+    assert json.loads(response.text) == {
+        "output_path": "decisions.json",
+        "verified_output": {"products": [{"product_id": "P1", "merge": ["C1"], "skip": ["C2"]}]},
+    }
+    assert response.verification["status"] == "pass"
 
 
 def test_runtime_blocks_shell_file_creation_before_write_file_for_automation(tmp_path: Path) -> None:
@@ -742,3 +882,25 @@ def test_runtime_allows_only_one_lightweight_shell_inspection_before_write_file(
     assert response.trace["tool_events"][1]["success"] is False
     assert "use_write_file_first" in response.trace["tool_events"][1]["text"]
     assert response.trace["tool_events"][2]["name"] == "write_file"
+
+
+def test_runtime_blocks_second_shell_step_when_repo_execution_needs_non_shell_follow_up(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _ShellFollowUpGuardProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt(
+        "Execute `x.sh` and explore the response to decide which candidates should merge.",
+        continue_session=False,
+    )
+
+    assert response.trace["tool_events"][0]["name"] == "run_shell_command"
+    assert response.trace["tool_events"][0]["success"] is True
+    assert response.trace["tool_events"][1]["name"] == "run_shell_command"
+    assert response.trace["tool_events"][1]["success"] is False
+    assert "use_non_shell_follow_up" in response.trace["tool_events"][1]["text"]
+    assert response.trace["tool_events"][2]["name"] == "run_python"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from rocky.core.router import RouteDecision, Lane, TaskClass
+from rocky.core.runtime_state import AnswerContract, EvidenceGraph
 from rocky.core.verifiers import VerifierRegistry
 
 
@@ -236,6 +237,112 @@ def test_verifier_accepts_recovered_live_price_lookup_after_retry() -> None:
     assert result.status == "pass"
 
 
+def test_verifier_accepts_graceful_live_price_failure_after_multiple_sources() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Shell execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="what's the date today? use cli to get exact date and check the nike price of today",
+        route=route,
+        task_class=route.task_class,
+        output=(
+            "Date is 2026-04-02. I could not retrieve Nike's live quote because multiple live sources "
+            "returned rate-limit or auth errors."
+        ),
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "date", "stdout": "2026-04-02\\n", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "curl -s \\"https://query1.finance.yahoo.com/v8/finance/chart/NKE\\"", "stdout": "Edge: Too Many Requests", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "curl -s \\"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=NKE\\"", "stdout": "{\\"Error Message\\": \\"apikey missing\\"}", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "curl -s \\"https://api.marketstack.com/v1/eod/latest?symbols=NKE\\"", "stdout": "{\\"error\\": {\\"message\\": \\"missing access key\\"}}", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "pass"
+
+
+def test_verifier_accepts_graceful_live_price_failure_even_with_some_tool_failures() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Shell execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="what's the date today? use cli to get exact date and check the nike price of today",
+        route=route,
+        task_class=route.task_class,
+        output=(
+            "Date is 2026-04-02. I could not retrieve Nike's live quote from multiple CLI sources "
+            "in this environment."
+        ),
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "date", "stdout": "2026-04-02\\n", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_python",
+                "success": False,
+                "text": '{"success": false, "data": {"stdout": "", "stderr": "ModuleNotFoundError: No module named requests"}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "curl -s \\"https://query1.finance.yahoo.com/v8/finance/chart/NKE\\"", "stdout": "Edge: Too Many Requests", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": False,
+                "text": '{"success": false, "data": {"command": "curl -s \\"https://query2.finance.yahoo.com/v8/finance/chart/NKE\\"", "stdout": "", "stderr": "curl: (6) Could not resolve host"}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "curl -s \\"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=NKE\\"", "stdout": "{\\"Error Message\\": \\"apikey missing\\"}", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "pass"
+
+
 def test_verifier_requires_runtime_inspection_tool() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(
@@ -346,7 +453,7 @@ def test_shell_execution_verifier_requires_follow_up_for_response_exploration() 
     )
 
     assert result.status == "fail"
-    assert "non-shell follow-up tool step" in result.message
+    assert "follow-up analysis step" in result.message
 
 
 def test_shell_execution_verifier_requires_early_follow_up_for_response_exploration() -> None:
@@ -388,6 +495,41 @@ def test_shell_execution_verifier_requires_early_follow_up_for_response_explorat
 
     assert result.status == "fail"
     assert "first five successful tool results" in result.message
+
+
+def test_shell_execution_verifier_accepts_analytical_shell_follow_up_for_response_exploration() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt="Execute `x.sh` and explore the response to decide which candidates should merge.",
+        route=route,
+        task_class=route.task_class,
+        output="I executed the script and then analyzed its response.",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh x.sh", "stdout": "{\\"products\\": []}", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh x.sh | python3 -c \\"import sys, json; print(json.load(sys.stdin))\\"", "stdout": "{\\"products\\": []}", "stderr": ""}}',
+            },
+        ],
+    )
+
+    assert result.status == "pass"
 
 
 def test_shell_execution_verifier_requires_successful_referenced_script_execution() -> None:
@@ -742,6 +884,167 @@ def test_verifier_accepts_exact_command_mention_for_exact_automation_output() ->
                 "text": '{"success": true, "data": {"command": "sh report.sh", "stdout": "360\\n", "stderr": ""}}',
             },
         ],
+    )
+
+    assert result.status == "pass"
+
+
+def test_verifier_extract_output_claims_skips_markdown_scaffolding() -> None:
+    verifier = VerifierRegistry()
+
+    claims = verifier._extract_output_claims(
+        """## Duplicate Product Review Analysis
+
+### Script Execution Result
+Executed `catalog.sh` successfully. The script returned JSON data containing 2 products.
+
+**Confirmed via shell:**
+
+| Candidate | Name | SKU | Merge? |
+|-----------|------|-----|--------|
+| C1101 | Juniper Original Small | JUN-ORI-011 | YES |
+"""
+    )
+
+    assert "Duplicate Product Review Analysis" not in claims
+    assert "Script Execution Result" not in claims
+    assert "Confirmed via shell:" not in claims
+    assert "| Candidate | Name | SKU | Merge? |" not in claims
+    assert "|-----------|------|-----|--------|" not in claims
+    assert "Executed `catalog.sh` successfully. The script returned JSON data containing 2 products." in claims
+    assert "| C1101 | Juniper Original Small | JUN-ORI-011 | YES |" in claims
+
+
+def test_claim_support_allows_supported_markdown_tables_without_treating_scaffolding_as_claims() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+    graph = EvidenceGraph(thread_id="thread_1")
+    script_claim = graph.add_claim(
+        "Shell command `bash catalog.sh` exited with code 0",
+        "tool_observed",
+        "run_shell_command",
+        confidence=0.9,
+    )
+    stdout_claim = graph.add_claim(
+        "Observed stdout from `bash catalog.sh`: JSON data containing 2 products and candidate lists",
+        "tool_observed",
+        "run_shell_command",
+        confidence=0.9,
+    )
+    analysis_claim = graph.add_claim(
+        "Python output: C1101 Juniper Original Small JUN-ORI-011 yes exact match C1104 Northwind Tea Original NOR-TEA-012 yes exact match total merge candidates 2",
+        "tool_observed",
+        "run_python",
+        confidence=0.9,
+    )
+    contract = AnswerContract(
+        current_question="Execute `catalog.sh` and decide which candidates should merge.",
+        target_scope="repo",
+        relevant_claim_ids=[script_claim.claim_id, stdout_claim.claim_id, analysis_claim.claim_id],
+        allowed_claim_ids=[script_claim.claim_id, stdout_claim.claim_id, analysis_claim.claim_id],
+    )
+
+    result = verifier._claim_support(
+        """## Duplicate Product Review Analysis
+
+### Script Execution Result
+Executed `catalog.sh` successfully. The script returned JSON data containing 2 products.
+
+| Candidate | Name | SKU | Merge? |
+|-----------|------|-----|--------|
+| C1101 | Juniper Original Small | JUN-ORI-011 | YES |
+| C1104 | Northwind Tea Original | NOR-TEA-012 | YES |
+
+2 candidates should merge.
+""",
+        graph,
+        contract,
+        route,
+    )
+
+    assert result.status == "pass"
+
+
+def test_claim_support_still_fails_for_unsupported_fact_after_markdown_filtering() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+    graph = EvidenceGraph(thread_id="thread_1")
+    analysis_claim = graph.add_claim(
+        "Python output: C1101 Juniper Original Small JUN-ORI-011 yes exact match total merge candidates 2",
+        "tool_observed",
+        "run_python",
+        confidence=0.9,
+    )
+    contract = AnswerContract(
+        current_question="Execute `catalog.sh` and decide which candidates should merge.",
+        target_scope="repo",
+        relevant_claim_ids=[analysis_claim.claim_id],
+        allowed_claim_ids=[analysis_claim.claim_id],
+    )
+
+    result = verifier._claim_support(
+        """## Decision
+
+3 candidates should merge.
+""",
+        graph,
+        contract,
+        route,
+    )
+
+    assert result.status == "fail"
+    assert result.failure_class == "unsupported_claim_introduced"
+
+
+def test_claim_support_accepts_fact_supported_by_multiple_observed_claims() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+    graph = EvidenceGraph(thread_id="thread_1")
+    product_claim = graph.add_claim(
+        "Python output line: Product P1102 - Northwind Tea Original (SKU: NOR-TEA-012)",
+        "tool_observed",
+        "run_python",
+        confidence=0.9,
+    )
+    candidate_claim = graph.add_claim(
+        "Python output line: C1104: Name=Northwind Tea Original, SKU=NOR-TEA-012 | Match: MERGE",
+        "tool_observed",
+        "run_python",
+        confidence=0.9,
+    )
+    contract = AnswerContract(
+        current_question="Execute `catalog.sh` and decide which candidates should merge.",
+        target_scope="repo",
+        relevant_claim_ids=[product_claim.claim_id, candidate_claim.claim_id],
+        allowed_claim_ids=[product_claim.claim_id, candidate_claim.claim_id],
+    )
+
+    result = verifier._claim_support(
+        "- **C1104** (matches P1102 exactly)",
+        graph,
+        contract,
+        route,
     )
 
     assert result.status == "pass"

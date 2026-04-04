@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
+from typing import Any
 import re
 
 from rocky.core.router import RouteDecision, TaskClass
+from rocky.core.runtime_state import ActiveTaskThread, AnswerContract, EvidenceGraph
 from rocky.util.text import extract_json_candidate
 
 SCRIPT_REFERENCE_RE = re.compile(
@@ -13,6 +15,7 @@ SCRIPT_REFERENCE_RE = re.compile(
     r"|(?<![\w/])(?P<bare>(?:\./)?[a-z0-9_.-]+\.(?:sh|py|rb|js|ts|tsx|pl|php))(?![\w/])",
     re.I,
 )
+MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$")
 
 
 @dataclass(slots=True)
@@ -20,6 +23,27 @@ class VerificationResult:
     name: str
     status: str
     message: str
+    failure_class: str | None = None
+    unsupported_claim_ids: list[str] = field(default_factory=list)
+    missing_evidence_ids: list[str] = field(default_factory=list)
+    answer_drift_score: float = 0.0
+    memory_promotion_allowed: bool = False
+    learning_promotion_allowed: bool = False
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def as_record(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "status": self.status,
+            "message": self.message,
+            "failure_class": self.failure_class,
+            "unsupported_claim_ids": self.unsupported_claim_ids,
+            "missing_evidence_ids": self.missing_evidence_ids,
+            "answer_drift_score": self.answer_drift_score,
+            "memory_promotion_allowed": self.memory_promotion_allowed,
+            "learning_promotion_allowed": self.learning_promotion_allowed,
+            "details": self.details,
+        }
 
 
 class VerifierRegistry:
@@ -60,7 +84,9 @@ class VerifierRegistry:
         "could not complete",
         "unable to complete",
         "failed to retrieve",
+        "could not retrieve",
         "couldn't retrieve",
+        "unable to retrieve",
         "not enough information",
         "insufficient information",
         "invalid api token",
@@ -129,6 +155,36 @@ class VerifierRegistry:
             if any(marker in text for marker in markers):
                 return True
         return False
+
+    def _live_cli_source_hosts(self, tool_events: list[dict]) -> set[str]:
+        hosts: set[str] = set()
+        for event in tool_events:
+            if event.get("type") != "tool_result" or event.get("name") != "run_shell_command":
+                continue
+            command = self._command_text(event)
+            if not command:
+                continue
+            for host in re.findall(r"https?://([^/'\"`\s]+)", command, flags=re.I):
+                hosts.add(host.lower())
+        return hosts
+
+    def _live_cli_source_attempts(self, tool_events: list[dict]) -> list[str]:
+        attempts: list[str] = []
+        for event in tool_events:
+            if event.get("type") != "tool_result" or event.get("name") != "run_shell_command":
+                continue
+            command = self._command_text(event)
+            if re.search(r"https?://", command, flags=re.I):
+                attempts.append(command)
+        return attempts
+
+    def _can_gracefully_fail_current_price_lookup(self, output: str, tool_events: list[dict]) -> bool:
+        if not self._acknowledges_live_failure(output):
+            return False
+        return (
+            len(self._live_cli_source_hosts(tool_events)) >= 2
+            and len(self._live_cli_source_attempts(tool_events)) >= 3
+        )
 
     def _last_successful_shell_command(self, tool_events: list[dict]) -> str:
         for event in reversed(tool_events):
@@ -208,6 +264,8 @@ class VerifierRegistry:
         for event in events:
             name = str(event.get("name", ""))
             if name == "run_shell_command":
+                if self._is_analysis_shell_follow_up(prompt, event, script_names=script_names):
+                    return True
                 continue
             if name == "run_python":
                 payload = self._tool_payload(event)
@@ -222,6 +280,45 @@ class VerifierRegistry:
                 if PurePosixPath(path).name.lower() in script_names:
                     continue
                 return True
+        return False
+
+    def _is_analysis_shell_follow_up(
+        self,
+        prompt: str,
+        event: dict,
+        *,
+        script_names: set[str] | None = None,
+    ) -> bool:
+        command = self._command_text(event).lower()
+        if not command:
+            return False
+        analysis_markers = (
+            "|",
+            "<<",
+            "python ",
+            "python3",
+            "jq ",
+            "awk ",
+            "perl ",
+            "ruby ",
+            "node ",
+            "php ",
+            "grep ",
+            "rg ",
+            "sed ",
+            "cut ",
+            "wc ",
+            "head ",
+            "tail ",
+            "tee ",
+            "json.",
+            "json ",
+        )
+        if any(marker in command for marker in analysis_markers):
+            return True
+        referenced = script_names or self._referenced_script_names(prompt)
+        if referenced and any(self._command_executes_script(command, script_name) for script_name in referenced):
+            return any(marker in command for marker in ("cat ", "grep ", "rg ", "wc ", "head ", "tail "))
         return False
 
     def _has_response_analysis_follow_up(
@@ -317,6 +414,146 @@ class VerifierRegistry:
         }
         return bool(failed_names) and failed_names.issubset(successful_names_after_failure)
 
+    def _route_validity(
+        self,
+        prompt: str,
+        route: RouteDecision,
+        active_thread: ActiveTaskThread | None,
+        continuation_expected: bool,
+    ) -> VerificationResult:
+        if active_thread is None or not continuation_expected:
+            return VerificationResult("route_validity_v1", "pass", "")
+        short_follow_up = len(prompt.split()) <= 18
+        if short_follow_up and route.continued_thread_id is None and route.task_signature.startswith("conversation/"):
+            return VerificationResult(
+                "route_validity_v1",
+                "fail",
+                "Expected Rocky to continue the active task thread instead of degrading into generic chat.",
+                failure_class="continuation_lost_after_tool_backed_work",
+            )
+        return VerificationResult("route_validity_v1", "pass", "")
+
+    def _extract_output_claims(self, output: str) -> list[str]:
+        lines = [line.rstrip() for line in output.splitlines()]
+        non_empty = [line.strip() for line in lines if line.strip()]
+        if len(non_empty) == 1 and len(non_empty[0]) > 600:
+            lines = re.split(r"(?<=[.!?])\s+", non_empty[0])
+        claims: list[str] = []
+        for index, line in enumerate(lines):
+            raw = line.strip()
+            if not raw:
+                continue
+            if raw.lstrip().startswith("#"):
+                continue
+            if MARKDOWN_TABLE_SEPARATOR_RE.match(raw):
+                continue
+            if "|" in raw and raw.count("|") >= 2:
+                next_non_empty = ""
+                for candidate in lines[index + 1 :]:
+                    if candidate.strip():
+                        next_non_empty = candidate.strip()
+                        break
+                if next_non_empty and MARKDOWN_TABLE_SEPARATOR_RE.match(next_non_empty):
+                    continue
+            stripped = raw.strip(' -*#	')
+            if not stripped:
+                continue
+            if stripped.startswith("{") or stripped.startswith("["):
+                continue
+            if stripped.lower().startswith(("sources:", "note:", "warning:")):
+                continue
+            plain = re.sub(r"[`*_]+", "", stripped).strip()
+            plain_tokens = re.findall(r"[a-z0-9_.+-]+", plain.lower())
+            if plain.endswith(":") and len(plain_tokens) <= 6:
+                continue
+            claims.append(stripped[:280])
+        return claims[:12]
+
+    def _claim_support(
+        self,
+        output: str,
+        evidence_graph: EvidenceGraph | None,
+        answer_contract: AnswerContract | None,
+        route: RouteDecision,
+    ) -> VerificationResult:
+        if evidence_graph is None or not evidence_graph.claims:
+            return VerificationResult("claim_support_v1", "pass", "")
+        supported_claims = [claim for claim in evidence_graph.claims if claim.status in {"active", "provisional"}]
+        if not supported_claims:
+            return VerificationResult("claim_support_v1", "pass", "")
+        allowed_ids = set(answer_contract.allowed_claim_ids if answer_contract else [claim.claim_id for claim in supported_claims])
+        allowed_claims = [claim for claim in supported_claims if claim.claim_id in allowed_ids] or supported_claims
+        allowed_claim_tokens = [
+            set(re.findall(r"[a-z0-9_.+-]+", claim.text.lower()))
+            for claim in allowed_claims
+        ]
+        unsupported: list[str] = []
+        for index, claim_text in enumerate(self._extract_output_claims(output), start=1):
+            lowered = claim_text.lower()
+            if any(term in lowered for term in ("i'm not sure", "not sure", "unclear", "cannot determine", "can't determine", "maybe ", "might ", "could ")):
+                continue
+            claim_tokens = set(re.findall(r"[a-z0-9_.+-]+", lowered))
+            if len(claim_tokens) < 3:
+                continue
+            overlaps = sorted(
+                (len(claim_tokens & tokens) for tokens in allowed_claim_tokens),
+                reverse=True,
+            )
+            best_overlap = overlaps[0] if overlaps else 0
+            ranked_tokens = sorted(
+                allowed_claim_tokens,
+                key=lambda item: len(claim_tokens & item),
+                reverse=True,
+            )[:3]
+            combined_tokens: set[str] = set()
+            contributing_claims = 0
+            for tokens in ranked_tokens:
+                if claim_tokens & tokens:
+                    contributing_claims += 1
+                combined_tokens |= tokens
+            combined_overlap = len(claim_tokens & combined_tokens)
+            threshold = 2 if route.task_signature.startswith(("repo/", "local/", "data/", "extract/", "automation/")) else 1
+            if best_overlap < threshold and not (
+                combined_overlap >= threshold and contributing_claims >= 2
+            ):
+                unsupported.append(f"output_claim_{index}")
+        if unsupported:
+            return VerificationResult(
+                "claim_support_v1",
+                "fail",
+                "Final answer includes unsupported deterministic claims that do not map cleanly to evidence-bearing claims.",
+                failure_class="unsupported_claim_introduced",
+                unsupported_claim_ids=unsupported,
+            )
+        return VerificationResult("claim_support_v1", "pass", "")
+
+    def _answer_discipline(
+        self,
+        prompt: str,
+        output: str,
+        answer_contract: AnswerContract | None,
+        prior_answer: str | None,
+    ) -> VerificationResult:
+        if answer_contract is None:
+            return VerificationResult("answer_discipline_v1", "pass", "")
+        prompt_tokens = set(re.findall(r"[a-z0-9_.+-]+", prompt.lower()))
+        output_tokens = set(re.findall(r"[a-z0-9_.+-]+", output.lower()))
+        prior_tokens = set(re.findall(r"[a-z0-9_.+-]+", (prior_answer or "").lower()))
+        prompt_overlap = len(prompt_tokens & output_tokens) / max(len(output_tokens) or 1, 1)
+        prior_overlap = len(prior_tokens & output_tokens) / max(len(output_tokens) or 1, 1) if prior_tokens else 0.0
+        drift = max(0.0, prior_overlap - prompt_overlap)
+        if answer_contract.do_not_repeat_context and drift > 0.35 and len(output.split()) > 40:
+            return VerificationResult(
+                "answer_discipline_v1",
+                "fail",
+                "Answer recapped prior context instead of answering the current ask directly.",
+                failure_class="answer_recapped_previous_context",
+                answer_drift_score=drift,
+            )
+        if answer_contract.missing_evidence and not answer_contract.uncertainty_required:
+            return VerificationResult("answer_discipline_v1", "pass", "", answer_drift_score=drift)
+        return VerificationResult("answer_discipline_v1", "pass", "", answer_drift_score=drift)
+
     def verify(
         self,
         prompt: str,
@@ -324,11 +561,20 @@ class VerifierRegistry:
         task_class: TaskClass,
         output: str,
         tool_events: list[dict],
+        *,
+        active_thread: ActiveTaskThread | None = None,
+        evidence_graph: EvidenceGraph | None = None,
+        answer_contract: AnswerContract | None = None,
+        prior_answer: str | None = None,
+        continuation_expected: bool = False,
     ) -> VerificationResult:
+        result = self._route_validity(prompt, route, active_thread, continuation_expected)
+        if result.status != "pass":
+            return result
         result = self._expected_tool_use(route, prompt, output, tool_events)
         if result.status != "pass":
             return result
-        result = self._tool_failure(route, tool_events)
+        result = self._tool_failure(prompt, route, output, tool_events)
         if result.status != "pass":
             return result
         result = self._shell_execution_truthfulness(prompt, route, output, tool_events)
@@ -343,7 +589,26 @@ class VerifierRegistry:
         result = self._citations(task_class, output, tool_events)
         if result.status != "pass":
             return result
-        return VerificationResult("default_v1", "pass", "Passed basic verification")
+        result = self._claim_support(output, evidence_graph, answer_contract, route)
+        if result.status != "pass":
+            result.memory_promotion_allowed = False
+            result.learning_promotion_allowed = False
+            return result
+        discipline = self._answer_discipline(prompt, output, answer_contract, prior_answer)
+        if discipline.status != "pass":
+            discipline.memory_promotion_allowed = False
+            discipline.learning_promotion_allowed = False
+            return discipline
+        memory_allowed = not bool((answer_contract.missing_evidence if answer_contract else [])) and not bool(result.unsupported_claim_ids)
+        learning_allowed = True
+        return VerificationResult(
+            "default_v1",
+            "pass",
+            "Passed verification",
+            answer_drift_score=discipline.answer_drift_score,
+            memory_promotion_allowed=memory_allowed,
+            learning_promotion_allowed=learning_allowed,
+        )
 
     def _expected_tool_use(
         self,
@@ -412,10 +677,12 @@ class VerifierRegistry:
                 return VerificationResult(
                     "tool_expectation_v1",
                     "fail",
-                    "Expected Rocky to execute the command and then use a non-shell follow-up tool step within the first five successful tool results, or within five successful steps after the final execution retry, on the observed response or a produced result file before deciding",
+                    "Expected Rocky to execute the command and then use a follow-up analysis step within the first five successful tool results, or within five successful steps after the final execution retry, on the observed response or a produced result file before deciding",
                 )
             if self._is_current_price_prompt(prompt):
                 if not self._has_successful_price_lookup(tool_events):
+                    if self._can_gracefully_fail_current_price_lookup(output, tool_events):
+                        return VerificationResult("tool_expectation_v1", "pass", "")
                     if self._has_live_lookup_failure_marker(tool_events):
                         return VerificationResult(
                             "tool_expectation_v1",
@@ -568,13 +835,27 @@ class VerifierRegistry:
             "Observed script execution returned an error payload. Rocky should say it could not make the requested decision from live evidence instead of inferring from prior context.",
         )
 
-    def _tool_failure(self, route: RouteDecision, tool_events: list[dict]) -> VerificationResult:
+    def _tool_failure(
+        self,
+        prompt: str,
+        route: RouteDecision,
+        output: str,
+        tool_events: list[dict],
+    ) -> VerificationResult:
         failures = [
             event
             for event in tool_events
             if event.get("type") == "tool_result" and not event.get("success", True)
         ]
         if failures and self._recovered_after_tool_failures(tool_events):
+            return VerificationResult("tool_failure_v1", "pass", "")
+        if (
+            failures
+            and route.task_signature == "repo/shell_execution"
+            and self._is_current_price_prompt(prompt)
+            and not self._has_successful_price_lookup(tool_events)
+            and self._can_gracefully_fail_current_price_lookup(output, tool_events)
+        ):
             return VerificationResult("tool_failure_v1", "pass", "")
         if failures and route.task_signature == "automation/general":
             successful_names = {
