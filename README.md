@@ -1,42 +1,47 @@
 # rocky
 
-Rocky is a CLI-first, file-first, continuously learning general agent built from scratch against the Rocky PRD.
+Rocky is a CLI-first, file-first, local-model-first general agent for real workspace tasks.
 
-It is designed around five constraints:
+v0.3.0 upgrades Rocky from a prompt-routed tool assistant into a more runtime-grounded agent with:
 
-- interactive by default
-- one-shot when a task string is passed
-- typed tools + `SKILL.md` skills + deterministic slash-command inspection
-- file-first `.rocky/` state instead of a primary database
-- real cross-task learning through support/query episodes and learned skill publication
+- active task threads for multi-turn continuation
+- evidence/claim tracking with provenance
+- answer contracts that constrain final responses to the current ask
+- candidate-first memory and learned behavior promotion
+- stronger verification around unsupported claims and answer drift
+- generator/oracle harness assets for repeatable capability evaluation
 
-## v0.2.0 highlights
+## What Rocky is optimizing for
 
-- Hermes-inspired harness inventory with five explicit upgrade phases and a `/harness` command
-- execution-root aware behavior, so running Rocky from `pkg/ui` keeps shell commands and new files focused on `pkg/ui` by default
-- fresh-session project handoffs, so recent successful work in the same workspace is loaded into the next system prompt as a continuation scaffold
-- scaffolded phase-4 mini-project and phase-5 workspace-continuity scenarios for later prompt/model tuning
+- useful local-model operation before hosted frontier-model assumptions
+- practical repo, shell, automation, extraction, and data workflows
+- inspectable state in `.rocky/` instead of opaque hidden services
+- explicit traces, verifiers, and tuning surfaces
+- future tuning by a coding agent or engineer without a rewrite
 
-## TUI choice
+## v0.3.0 highlights
 
-Rocky ships today with **prompt_toolkit + Rich** for the interaction layer because that combination gives the best Python-native CLI editing UX, stable history/completion, and rich rendering without forcing a full-screen app for every use case.
+- **Thread-aware runtime**: short follow-ups can stay attached to an active artifact-backed workflow instead of collapsing into generic chat.
+- **Evidence-first answering**: Rocky now accumulates provenance-bearing claims from prompts and tool results, then builds an answer contract before finalizing a response.
+- **Safer memory**: project memory capture now prefers supported claims, explicit user corrections, and verified paths over answer prose.
+- **Candidate-first learning**: `/learn` now binds to the best available workflow thread context and publishes learned behaviors as candidates that can later be promoted after verified reuse.
+- **Better retrieval**: memory and learned skill retrieval now factor task/thread relevance, provenance, contradiction state, and verified reuse signals.
+- **Improved debuggability**: traces now include continuation decisions, thread snapshots, answer contracts, and supported claim snapshots.
 
-We also document a future-ready path to **Textual** and **OpenTUI** in `docs/TUI_RESEARCH.md`.
+## High-level runtime architecture
 
-## What is implemented
-
-- interactive REPL (`rocky`)
-- one-shot execution (`rocky "task"`)
-- deterministic slash commands:
-  - `/help`, `/tools`, `/skills`, `/harness`, `/memory`, `/learned`, `/permissions`, `/context`, `/status`, `/sessions`, `/resume`, `/new`, `/config`, `/doctor`, `/why`, `/compact`, `/plan`, `/learn`, `/undo`, `/init`, `/trace`
-- workspace discovery and file-first `.rocky/` state
-- global + project + local config precedence
-- configurable providers with **Ollama** default and **OpenAI** compatibility
-- support for both **OpenAI chat-completions** and **Responses API** styles
-- typed tools for filesystem, shell, python, web, browser, spreadsheets, and git
-- `SKILL.md` loading from bundled/global/project/learned/compat directories
-- support episodes, query episodes, learned skill generation, rollback, and a slow-learner report
-- verifier hooks and `/why` traceability
+```text
+prompt
+  -> continuation resolver
+  -> thread-aware router
+  -> active task thread + evidence graph update
+  -> context assembly (instructions + durable memory + learned behaviors + handoffs + thread/evidence)
+  -> provider/tool loop
+  -> answer contract build
+  -> structured verification
+  -> memory/learning gating
+  -> trace + session persistence
+```
 
 ## Quick start
 
@@ -82,8 +87,8 @@ permissions:
 Override at runtime:
 
 ```bash
-rocky --provider openai --model gpt-5.2 "explain this project"
 rocky --provider ollama --base-url http://localhost:11434/v1 "profile data.xlsx"
+rocky --provider openai --model gpt-5.2 "explain this project"
 ```
 
 ## Layout
@@ -109,6 +114,9 @@ Project:
   config.local.yaml
   sessions/
   memories/
+    auto/
+    candidates/
+    project_brief.md
   skills/
     bundled/
     project/
@@ -123,16 +131,40 @@ Project:
   cache/
 ```
 
+## Core operator features
+
+- interactive REPL (`rocky`)
+- one-shot execution (`rocky "task"`)
+- deterministic slash commands:
+  - `/help`, `/tools`, `/skills`, `/harness`, `/memory`, `/learned`, `/permissions`, `/context`, `/status`, `/sessions`, `/resume`, `/new`, `/config`, `/doctor`, `/why`, `/compact`, `/plan`, `/learn`, `/undo`, `/init`, `/trace`
+- workspace discovery and file-first `.rocky/` state
+- global + project + local config precedence
+- configurable providers with **Ollama** default and **OpenAI** compatibility
+- support for both **OpenAI chat-completions** and **Responses API** styles
+- typed tools for filesystem, shell, python, web, browser, spreadsheets, and git
+- `SKILL.md` loading from bundled/global/project/learned/compat directories
+- support episodes, query episodes, learned skill generation, rollback, and a slow-learner report
+- verifier hooks and `/why` traceability
+
 ## Learning loop
 
 1. Run Rocky on a task.
 2. Correct Rocky with `/learn <feedback>`.
-3. Rocky writes a support episode and a learned `SKILL.md`.
-4. The next analogous task retrieves the learned skill automatically.
-5. Rocky writes query episodes with `skill_generation_seen` for support/query hygiene.
+3. Rocky writes a support episode and a candidate learned `SKILL.md`.
+4. Similar later tasks can retrieve that learned behavior.
+5. Verified successful reuse can promote a candidate skill.
+
+## Tuning and handoff docs
+
+For serious tuning work, start with:
+
+- `UPGRADE_REPORT_v0.3.0.md`
+- `ROCKY_TUNING_KNOWLEDGE.md`
+- `RELEASE_v0.3.0.md`
 
 ## Notes
 
 - Browser tools use Playwright. If browser binaries are missing, Rocky degrades cleanly and tells the operator to run `playwright install`.
 - Web search is implemented as a best-effort DuckDuckGo HTML fallback.
-- The slow learner currently emits an inspectable heuristic report instead of performing weight updates.
+- The slow learner still emits an inspectable heuristic report instead of weight updates.
+- Live agentic tests skip automatically when the configured local provider is unreachable.

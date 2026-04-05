@@ -69,7 +69,7 @@ def test_runtime_harness_command_exposes_inventory(tmp_path: Path, monkeypatch) 
     result = runtime.commands.handle("/harness")
 
     assert result.name == "harness"
-    assert result.data["version"] == "0.2.0"
+    assert result.data["version"] == "0.3.0"
     assert result.data["execution_cwd"] == "."
     assert result.data["phases"][0]["slug"] == "phase1_route_anchor"
     assert result.data["generation"]["strategy"] == "on_demand_generators_without_static_catalog"

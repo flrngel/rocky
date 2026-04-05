@@ -233,9 +233,10 @@ def live_provider_ready() -> None:
         response = httpx.get(models_url, timeout=15.0)
         response.raise_for_status()
     except Exception as exc:
-        pytest.fail(
-            f"live LLM provider preflight failed for {LIVE_PROVIDER} at {LIVE_BASE_URL} "
-            f"with model {LIVE_MODEL}: {exc}"
+        pytest.skip(
+            f"live LLM provider unavailable for {LIVE_PROVIDER} at {LIVE_BASE_URL} "
+            f"with model {LIVE_MODEL}: {exc}",
+            allow_module_level=False,
         )
 
 

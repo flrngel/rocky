@@ -388,8 +388,6 @@ def materialize_scenario_workspace(workspace: Path, home: Path, scenario: Scenar
     workbook.save(workspace / bundle.metrics_xlsx)
 
     for command_name, output in bundle.runtime_outputs.items():
-        if shutil.which(command_name):
-            continue
         script = bin_dir / command_name
         _write(script, f"#!/bin/sh\necho {output}\n")
         script.chmod(0o755)

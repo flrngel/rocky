@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
+from rocky.core.runtime_state import ActiveTaskThread, AnswerContract, EvidenceGraph
 from rocky.memory.retriever import MemoryRetriever
 from rocky.session.store import SessionStore
 from rocky.skills.retriever import SkillRetriever
@@ -17,16 +19,33 @@ class ContextPackage:
     tool_families: list[str]
     workspace_focus: dict = field(default_factory=dict)
     handoffs: list[dict] = field(default_factory=list)
+    thread_summary: dict[str, Any] = field(default_factory=dict)
+    evidence_summary: dict[str, Any] = field(default_factory=dict)
+    contradictions: list[dict[str, Any]] = field(default_factory=list)
+    answer_target: dict[str, Any] = field(default_factory=dict)
 
     def summary(self) -> dict:
         return {
             "instructions": self.instructions,
             "memories": [
-                {"name": m["name"], "scope": m["scope"], "kind": m.get("kind")}
+                {
+                    "name": m["name"],
+                    "scope": m["scope"],
+                    "kind": m.get("kind"),
+                    "provenance_type": m.get("provenance_type"),
+                    "contradiction_state": m.get("contradiction_state"),
+                }
                 for m in self.memories
             ],
             "skills": [
-                {"name": s["name"], "scope": s["scope"], "generation": s["generation"], "origin": s.get("origin")}
+                {
+                    "name": s["name"],
+                    "scope": s["scope"],
+                    "generation": s["generation"],
+                    "origin": s.get("origin"),
+                    "promotion_state": s.get("promotion_state"),
+                    "failure_class": s.get("failure_class"),
+                }
                 for s in self.skills
             ],
             "tool_families": self.tool_families,
@@ -37,9 +56,14 @@ class ContextPackage:
                     "task_signature": item.get("task_signature"),
                     "execution_cwd": item.get("execution_cwd"),
                     "verification": item.get("verification"),
+                    "thread_id": item.get("thread_id"),
                 }
                 for item in self.handoffs
             ],
+            "thread_summary": self.thread_summary,
+            "evidence_summary": self.evidence_summary,
+            "contradictions": self.contradictions,
+            "answer_target": self.answer_target,
         }
 
 
@@ -74,6 +98,61 @@ class ContextBuilder:
             ),
         }
 
+    def _thread_summary(self, thread: ActiveTaskThread | None) -> dict[str, Any]:
+        if thread is None:
+            return {}
+        latest_prompt = thread.prompt_history[-1]["prompt"] if thread.prompt_history else ""
+        latest_answer = thread.answer_history[-1]["answer"] if thread.answer_history else ""
+        return {
+            "thread_id": thread.thread_id,
+            "task_family": thread.task_family,
+            "task_signature": thread.task_signature,
+            "status": thread.status,
+            "execution_cwd": thread.execution_cwd,
+            "artifacts": thread.artifact_refs[:8],
+            "entities": thread.entity_refs[:8],
+            "unresolved_questions": thread.unresolved_questions[:6],
+            "latest_prompt": latest_prompt[:500],
+            "latest_answer": latest_answer[:500],
+            "text": thread.summary_text(),
+        }
+
+    def _evidence_summary(self, evidence_graph: EvidenceGraph | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        if evidence_graph is None:
+            return {}, []
+        supported = evidence_graph.supported_claims(include_statuses={"active", "provisional"})
+        contradictions: list[dict[str, Any]] = []
+        for claim in supported:
+            if claim.contradiction_refs:
+                contradictions.append(
+                    {
+                        "claim_id": claim.claim_id,
+                        "text": claim.text,
+                        "contradiction_refs": claim.contradiction_refs[:6],
+                        "status": claim.status,
+                    }
+                )
+        summary = {
+            "thread_id": evidence_graph.thread_id,
+            "claims": [
+                {
+                    "claim_id": claim.claim_id,
+                    "text": claim.text,
+                    "provenance_type": claim.provenance_type,
+                    "provenance_source": claim.provenance_source,
+                    "confidence": claim.confidence,
+                    "status": claim.status,
+                }
+                for claim in supported[:12]
+            ],
+            "artifacts": evidence_graph.artifacts[:12],
+            "entities": evidence_graph.entities[:12],
+            "questions": evidence_graph.questions[:8],
+            "decisions": evidence_graph.decisions[:8],
+            "corrections": evidence_graph.corrections[:8],
+        }
+        return summary, contradictions[:8]
+
     def build(
         self,
         prompt: str,
@@ -81,6 +160,9 @@ class ContextBuilder:
         tool_families: list[str],
         *,
         current_session_id: str | None = None,
+        active_thread: ActiveTaskThread | None = None,
+        evidence_graph: EvidenceGraph | None = None,
+        answer_contract: AnswerContract | None = None,
     ) -> ContextPackage:
         instructions: list[dict] = []
         for path in self.instruction_candidates:
@@ -98,10 +180,16 @@ class ContextBuilder:
                     "kind": brief.kind,
                     "path": str(brief.path),
                     "text": brief.text[:3000],
+                    "provenance_type": getattr(brief, "provenance_type", "learned_rule"),
+                    "contradiction_state": getattr(brief, "contradiction_state", "active"),
                 }
             )
         seen_ids = {item["id"] for item in memories}
-        for note in self.memory_retriever.retrieve(prompt):
+        for note in self.memory_retriever.retrieve(
+            prompt,
+            task_signature=task_signature,
+            thread=active_thread,
+        ):
             if note.id in seen_ids:
                 continue
             memories.append(
@@ -113,6 +201,9 @@ class ContextBuilder:
                     "kind": note.kind,
                     "path": str(note.path),
                     "text": note.text[:3000],
+                    "provenance_type": getattr(note, "provenance_type", "user_asserted"),
+                    "contradiction_state": getattr(note, "contradiction_state", "active"),
+                    "supporting_claim_ids": getattr(note, "supporting_claim_ids", []),
                 }
             )
             seen_ids.add(note.id)
@@ -125,8 +216,11 @@ class ContextBuilder:
                 "path": str(skill.path),
                 "description": skill.description,
                 "text": skill.body[:6000],
+                "promotion_state": skill.metadata.get("promotion_state", "promoted"),
+                "failure_class": skill.metadata.get("failure_class"),
+                "task_family": skill.metadata.get("task_family"),
             }
-            for skill in self.skill_retriever.retrieve(prompt, task_signature)
+            for skill in self.skill_retriever.retrieve(prompt, task_signature, thread=active_thread)
         ]
         workspace_focus = self._workspace_focus()
         handoffs: list[dict] = []
@@ -138,6 +232,7 @@ class ContextBuilder:
                     "task_signature": item.get("task_signature"),
                     "verification": item.get("verification"),
                     "execution_cwd": item.get("execution_cwd"),
+                    "thread_id": item.get("thread_id"),
                     "text": str(item.get("text") or "")[:1500],
                 }
                 for item in self.session_store.retrieve_handoffs(
@@ -147,6 +242,9 @@ class ContextBuilder:
                     exclude_session_id=current_session_id,
                 )
             ]
+        thread_summary = self._thread_summary(active_thread)
+        evidence_summary, contradictions = self._evidence_summary(evidence_graph)
+        answer_target = answer_contract.as_record() if answer_contract is not None else {}
         return ContextPackage(
             instructions=instructions,
             memories=memories,
@@ -154,4 +252,8 @@ class ContextBuilder:
             tool_families=tool_families,
             workspace_focus=workspace_focus,
             handoffs=handoffs,
+            thread_summary=thread_summary,
+            evidence_summary=evidence_summary,
+            contradictions=contradictions,
+            answer_target=answer_target,
         )

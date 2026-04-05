@@ -74,6 +74,13 @@ class Session:
         self.meta["last_turn_summary"] = summary
         self.meta["last_updated_at"] = summary.get("at", utc_iso())
 
+    def append_thread_summary(self, summary: dict[str, Any], *, limit: int = TURN_SUMMARY_LIMIT) -> None:
+        rows = list(self.meta.get("thread_summaries") or [])
+        rows.append(summary)
+        self.meta["thread_summaries"] = rows[-limit:]
+        self.meta["last_thread_summary"] = summary
+        self.meta["last_updated_at"] = summary.get("at", utc_iso())
+
     def clone(self) -> "Session":
         return Session(
             id=self.id,
@@ -163,6 +170,7 @@ class SessionStore:
                     "messages": len(data.get("messages", [])),
                     "last_task_signature": meta.get("last_task_signature"),
                     "last_verification": meta.get("last_verification"),
+                    "last_thread_id": meta.get("last_thread_id"),
                 }
             )
         rows.sort(key=lambda item: str(item.get("last_updated_at") or item.get("created_at") or ""), reverse=True)
@@ -224,6 +232,7 @@ class SessionStore:
                 )
             )
         )[:64]
+        thread = (trace.get("thread") or {}).get("current_thread") or {}
         summary = {
             "at": utc_iso(),
             "task_signature": task_signature,
@@ -234,6 +243,7 @@ class SessionStore:
             "important_paths": paths,
             "execution_cwd": execution_cwd or ".",
             "project_keywords": keywords,
+            "thread_id": thread.get("thread_id"),
             "text": "\n".join(summary_lines),
         }
         session.append_turn_summary(summary)
@@ -241,6 +251,21 @@ class SessionStore:
         session.meta["last_verification"] = verification_status
         session.meta["last_updated_at"] = summary["at"]
         session.meta["project_keywords"] = keywords
+        if thread.get("thread_id"):
+            session.meta["last_thread_id"] = thread.get("thread_id")
+            thread_summary = {
+                "at": summary["at"],
+                "thread_id": thread.get("thread_id"),
+                "task_signature": thread.get("task_signature") or task_signature,
+                "task_family": thread.get("task_family"),
+                "verification": verification_status,
+                "execution_cwd": thread.get("execution_cwd") or execution_cwd or ".",
+                "artifacts": thread.get("artifact_refs") or [],
+                "entities": thread.get("entity_refs") or [],
+                "status": thread.get("status"),
+                "text": thread.get("summary_text") or summary["text"],
+            }
+            session.append_thread_summary(thread_summary)
         self.save(session)
         return summary
 
@@ -259,8 +284,37 @@ class SessionStore:
             session_id = data.get("id")
             if exclude_session_id and session_id == exclude_session_id:
                 continue
-            title = data.get("title", "")
-            summaries = ((data.get("meta") or {}).get("turn_summaries") or [])[-TURN_SUMMARY_LIMIT:]
+            title = data.get("title") or "session"
+            summaries = list((data.get("meta") or {}).get("turn_summaries") or [])[-TURN_SUMMARY_LIMIT:]
+            for item in summaries:
+                rows.append(
+                    {
+                        **item,
+                        "session_id": session_id,
+                        "session_title": title,
+                        "created_at": data.get("created_at"),
+                    }
+                )
+        rows.sort(key=lambda item: str(item.get("at") or item.get("created_at") or ""), reverse=True)
+        return rows[:limit]
+
+    def recent_thread_summaries(
+        self,
+        *,
+        limit: int = 40,
+        exclude_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for path in self.sessions_dir.glob("ses_*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            session_id = data.get("id")
+            if exclude_session_id and session_id == exclude_session_id:
+                continue
+            title = data.get("title") or "session"
+            summaries = list((data.get("meta") or {}).get("thread_summaries") or [])[-TURN_SUMMARY_LIMIT:]
             for item in summaries:
                 rows.append(
                     {
@@ -281,7 +335,8 @@ class SessionStore:
         limit: int = 3,
         exclude_session_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        summaries = self.recent_turn_summaries(limit=40, exclude_session_id=exclude_session_id)
+        thread_summaries = self.recent_thread_summaries(limit=40, exclude_session_id=exclude_session_id)
+        summaries = thread_summaries or self.recent_turn_summaries(limit=40, exclude_session_id=exclude_session_id)
         if not summaries:
             return []
 
@@ -308,13 +363,14 @@ class SessionStore:
                 preferred_seed.get("session_id"),
                 preferred_seed.get("at"),
                 preferred_seed.get("task_signature"),
+                preferred_seed.get("thread_id"),
             )
         }
 
         query_tokens = tokenize_keywords(" ".join([prompt, execution_cwd or "."]))
-        scored: list[tuple[tuple[int, int, int, str], dict[str, Any]]] = []
+        scored: list[tuple[tuple[int, int, int, int, str], dict[str, Any]]] = []
         for item in summaries:
-            key = (item.get("session_id"), item.get("at"), item.get("task_signature"))
+            key = (item.get("session_id"), item.get("at"), item.get("task_signature"), item.get("thread_id"))
             if key in seen_keys:
                 continue
             item_tokens = set(item.get("project_keywords") or [])
@@ -323,23 +379,27 @@ class SessionStore:
                     [
                         str(item.get("prompt") or ""),
                         str(item.get("answer_excerpt") or ""),
+                        str(item.get("text") or ""),
                         str(item.get("task_signature") or ""),
                         str(item.get("execution_cwd") or "."),
                         " ".join(item.get("tool_names") or []),
                         " ".join(item.get("important_paths") or []),
+                        " ".join(item.get("artifacts") or []),
+                        " ".join(item.get("entities") or []),
                     ]
                 )
             )
             overlap = len(query_tokens & item_tokens)
             same_dir = 1 if str(item.get("execution_cwd") or ".") == execution_cwd else 0
             passed = 1 if str(item.get("verification") or "") == "pass" else 0
-            scored.append(((same_dir, overlap + passed, passed, str(item.get("at") or "")), item))
+            has_thread = 1 if item.get("thread_id") else 0
+            scored.append(((same_dir, overlap + passed + has_thread, has_thread, passed, str(item.get("at") or "")), item))
         scored.sort(key=lambda item: item[0], reverse=True)
 
         for _, item in scored:
             if len(selected) >= limit:
                 break
-            key = (item.get("session_id"), item.get("at"), item.get("task_signature"))
+            key = (item.get("session_id"), item.get("at"), item.get("task_signature"), item.get("thread_id"))
             if key in seen_keys:
                 continue
             selected.append(item)

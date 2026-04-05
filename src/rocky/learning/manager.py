@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
+import shutil
 from typing import Any
 
 from rocky.config.models import LearningConfig
@@ -58,19 +58,54 @@ class LearningManager:
         trace: dict[str, Any] | None = None,
         scope: str = "project",
         failure_type: str = "user_feedback",
+        *,
+        thread_id: str | None = None,
+        task_family: str | None = None,
+        failure_class: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             "task_signature": task_signature,
+            "task_family": task_family or task_signature.split("/", 1)[0],
+            "thread_id": thread_id,
             "scope": scope,
             "skill_generation_seen": self.current_generation(),
             "prompt_summary": prompt[:240],
             "tool_trace": list((trace or {}).get("selected_tools") or []),
             "failure_type": failure_type,
+            "failure_class": failure_class or (trace or {}).get("verification", {}).get("failure_class"),
             "user_feedback": feedback,
             "artifacts": [],
             "last_answer_excerpt": answer[:1200],
         }
         return self.episode_store.record_support(payload)
+
+    def _meta_paths(self) -> list[Path]:
+        return sorted(self.learned_root.rglob("SKILL.meta.json"))
+
+    def _read_meta(self, path: Path) -> dict[str, Any] | None:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def _write_meta(self, path: Path, payload: dict[str, Any]) -> None:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def _skill_name_from_meta(self, meta: dict[str, Any], meta_path: Path) -> str:
+        return str(meta.get("skill_id") or meta_path.parent.name)
+
+    def _promote_skill_meta(self, meta_path: Path, payload: dict[str, Any]) -> None:
+        payload["metadata"] = dict(payload.get("metadata") or {})
+        payload["metadata"]["promotion_state"] = "promoted"
+        payload["metadata"]["verified_success_count"] = int(payload["metadata"].get("verified_success_count") or 0)
+        payload["metadata"]["verification"] = {"status": "promoted", "tests": payload["metadata"].get("verification", {}).get("tests", [])}
+        payload["promoted_at"] = utc_iso()
+        self._write_meta(meta_path, payload)
+        skill_path = Path(payload["skill_path"])
+        if skill_path.exists():
+            text = skill_path.read_text(encoding="utf-8")
+            if "promotion_state: candidate" in text:
+                skill_path.write_text(text.replace("promotion_state: candidate", "promotion_state: promoted", 1), encoding="utf-8")
 
     def learn_from_feedback(
         self,
@@ -80,6 +115,10 @@ class LearningManager:
         feedback: str,
         trace: dict[str, Any] | None = None,
         scope: str = "project",
+        *,
+        thread_id: str | None = None,
+        task_family: str | None = None,
+        failure_class: str | None = None,
     ) -> dict[str, Any]:
         if not self.config.enabled:
             return {"published": False, "reason": "learning disabled"}
@@ -90,6 +129,9 @@ class LearningManager:
             feedback,
             trace,
             scope,
+            thread_id=thread_id,
+            task_family=task_family,
+            failure_class=failure_class,
         )
         new_generation = self.current_generation() + 1
         draft = self.synthesizer.build_draft(
@@ -102,6 +144,9 @@ class LearningManager:
             answer,
             trace,
             scope,
+            task_family=task_family,
+            thread_id=thread_id,
+            failure_class=failure_class,
         )
         path = draft.path
         if path.exists():
@@ -119,12 +164,13 @@ class LearningManager:
             "support_episode_id": support["id"],
             "rollback": None,
             "metadata": draft.metadata,
+            "thread_id": thread_id,
+            "task_family": task_family or task_signature.split("/", 1)[0],
+            "failure_class": failure_class or draft.metadata.get("failure_class"),
+            "promotion_state": draft.metadata.get("promotion_state", "candidate"),
         }
         meta_path = path.parent / "SKILL.meta.json"
-        meta_path.write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        self._write_meta(meta_path, meta)
         self.episode_store.set_generation(new_generation)
         return {
             "published": True,
@@ -133,6 +179,10 @@ class LearningManager:
             "meta_path": str(meta_path),
             "support_episode_id": support["id"],
             "generation": new_generation,
+            "promotion_state": draft.metadata.get("promotion_state", "candidate"),
+            "failure_class": meta["failure_class"],
+            "task_family": meta["task_family"],
+            "thread_id": thread_id,
         }
 
     def record_query(
@@ -146,7 +196,7 @@ class LearningManager:
     ) -> dict[str, Any]:
         if not self.config.enabled:
             return {"recorded": False, "reason": "learning disabled"}
-        return {
+        recorded = {
             "recorded": True,
             **self.episode_store.record_query(
                 {
@@ -160,14 +210,32 @@ class LearningManager:
                 }
             ),
         }
+        if skills_used:
+            skill_names = set(skills_used)
+            for meta_path in self._meta_paths():
+                meta = self._read_meta(meta_path)
+                if meta is None:
+                    continue
+                if self._skill_name_from_meta(meta, meta_path) not in skill_names:
+                    continue
+                metadata = dict(meta.get("metadata") or {})
+                metadata["reuse_count"] = int(metadata.get("reuse_count") or 0) + 1
+                if result == "success":
+                    metadata["verified_success_count"] = int(metadata.get("verified_success_count") or 0) + 1
+                meta["metadata"] = metadata
+                meta["last_query_result"] = result
+                meta["last_query_at"] = utc_iso()
+                self._write_meta(meta_path, meta)
+                if metadata.get("promotion_state") == "candidate" and int(metadata.get("verified_success_count") or 0) >= 1 and result == "success":
+                    self._promote_skill_meta(meta_path, meta)
+        return recorded
 
     def list_learned(self) -> list[dict[str, Any]]:
         rows = []
-        for meta_path in sorted(self.learned_root.rglob("SKILL.meta.json")):
-            try:
-                rows.append(json.loads(meta_path.read_text(encoding="utf-8")))
-            except Exception:
-                continue
+        for meta_path in self._meta_paths():
+            payload = self._read_meta(meta_path)
+            if payload is not None:
+                rows.append(payload)
         rows.sort(key=lambda item: item.get("published_at", ""), reverse=True)
         return rows
 

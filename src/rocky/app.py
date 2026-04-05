@@ -193,11 +193,14 @@ class RockyRuntime:
         )
         if not effective_freeze and self._should_capture_project_memory(response):
             try:
+                current_thread = ((response.trace.get("thread") or {}).get("current_thread") or {})
                 result = self.memory_store.capture_project_memory(
                     prompt=prompt,
                     answer=response.text,
-                    task_signature=response.route.task_signature,
+                    task_signature=str(current_thread.get("task_signature") or response.route.task_signature),
                     trace=response.trace,
+                    supported_claims=response.trace.get("supported_claims") or [],
+                    thread_id=str(current_thread.get("thread_id") or "") or None,
                 )
                 if result.get("written"):
                     self.refresh_knowledge()
@@ -209,6 +212,8 @@ class RockyRuntime:
         if response.verification.get("status") != "pass":
             return False
         if response.route.lane == Lane.META:
+            return False
+        if response.verification.get("memory_promotion_allowed") is False:
             return False
         return True
 
@@ -414,13 +419,21 @@ class RockyRuntime:
             return {"published": False, "reason": "feedback is required"}
         if not self.agent.last_prompt or not self.agent.last_answer or not self.agent.last_trace:
             return {"published": False, "reason": "no previous answer to learn from"}
+        thread_snapshot = ((self.agent.last_trace.get("thread") or {}).get("current_thread") or {})
+        task_signature = str(thread_snapshot.get("task_signature") or self.agent.last_trace["route"]["task_signature"])
+        task_family = str(thread_snapshot.get("task_family") or task_signature.split("/", 1)[0])
+        thread_id = str(thread_snapshot.get("thread_id") or "") or None
+        failure_class = self.agent.last_trace.get("verification", {}).get("failure_class")
         result = self.learning_manager.learn_from_feedback(
-            task_signature=self.agent.last_trace["route"]["task_signature"],
+            task_signature=task_signature,
             prompt=self.agent.last_prompt,
             answer=self.agent.last_answer,
             feedback=feedback,
             trace=self.agent.last_trace,
             scope="project",
+            thread_id=thread_id,
+            task_family=task_family,
+            failure_class=str(failure_class) if failure_class else None,
         )
         self.refresh_knowledge()
         return result
