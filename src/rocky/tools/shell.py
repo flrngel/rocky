@@ -197,7 +197,6 @@ def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            env=ctx.tool_env(),
         )
         data = {
             'command': command,

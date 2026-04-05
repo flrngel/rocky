@@ -35,31 +35,6 @@ def test_config_defaults_enable_thinking_for_providers(tmp_path: Path) -> None:
     assert config.providers["openai"].thinking is True
 
 
-def test_config_loads_tool_env_and_http_trust_env_settings(tmp_path: Path) -> None:
-    global_root = tmp_path / "global"
-    workspace = tmp_path / "workspace"
-    (workspace / ".rocky").mkdir(parents=True)
-
-    write_text(
-        workspace / ".rocky" / "config.yaml",
-        (
-            "tools:\n"
-            "  http_trust_env: false\n"
-            "  env:\n"
-            "    HTTPS_PROXY: http://proxy.internal:8080\n"
-            "    NO_PROXY: localhost,127.0.0.1\n"
-        ),
-    )
-
-    config = ConfigLoader(global_root, workspace).load()
-
-    assert config.tools.http_trust_env is False
-    assert config.tools.env == {
-        "HTTPS_PROXY": "http://proxy.internal:8080",
-        "NO_PROXY": "localhost,127.0.0.1",
-    }
-
-
 def test_dump_yaml_serializes_enum_values() -> None:
     rendered = dump_yaml({"style": ProviderStyle.OPENAI_CHAT})
 

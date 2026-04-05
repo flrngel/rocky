@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -129,34 +127,6 @@ class ToolContext:
         backup_path = backup_dir / f"{path.name}.bak"
         backup_path.write_bytes(path.read_bytes())
         return backup_path
-
-    def tool_env(self) -> dict[str, str]:
-        env = dict(os.environ)
-        for key, value in (self.config.tools.env or {}).items():
-            env[str(key)] = str(value)
-        return env
-
-    @contextmanager
-    def apply_tool_env(self):
-        overrides = {str(key): str(value) for key, value in (self.config.tools.env or {}).items()}
-        if not overrides:
-            yield
-            return
-        prior: dict[str, str] = {}
-        missing: list[str] = []
-        for key, value in overrides.items():
-            if key in os.environ:
-                prior[key] = os.environ[key]
-            else:
-                missing.append(key)
-            os.environ[key] = value
-        try:
-            yield
-        finally:
-            for key in missing:
-                os.environ.pop(key, None)
-            for key, value in prior.items():
-                os.environ[key] = value
 
 
 @dataclass(slots=True)

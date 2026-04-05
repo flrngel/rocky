@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import httpx
 
 from rocky.app import RockyRuntime
+from rocky.tools.proxy_support import TOOL_PROXY_ENV_VAR
 import rocky.tools.web as web
 
 
@@ -18,13 +18,13 @@ def _tool_context(tmp_path: Path):
 def _install_mock_client(monkeypatch, handler) -> None:
     transport = httpx.MockTransport(handler)
 
-    def make_client(timeout_s: int = 20, *, verify: bool = True, trust_env: bool = True) -> httpx.Client:
+    def make_client(timeout_s: int = 20, *, verify: bool = True) -> httpx.Client:
         return httpx.Client(
             transport=transport,
             headers=web.DEFAULT_HEADERS,
             timeout=timeout_s,
             verify=verify,
-            trust_env=trust_env,
+            trust_env=False,
         )
 
     monkeypatch.setattr(web, "_client", make_client)
@@ -256,7 +256,7 @@ def test_fetch_url_falls_back_to_unverified_tls_on_certificate_errors(tmp_path: 
     ctx = _tool_context(tmp_path)
     requests: list[tuple[bool, str]] = []
 
-    def make_client(timeout_s: int = 20, *, verify: bool = True, trust_env: bool = True) -> httpx.Client:
+    def make_client(timeout_s: int = 20, *, verify: bool = True) -> httpx.Client:
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append((verify, str(request.url)))
             if verify:
@@ -276,7 +276,7 @@ def test_fetch_url_falls_back_to_unverified_tls_on_certificate_errors(tmp_path: 
             headers=web.DEFAULT_HEADERS,
             timeout=timeout_s,
             verify=verify,
-            trust_env=trust_env,
+            trust_env=False,
         )
 
     monkeypatch.setattr(web, "_client", make_client)
@@ -293,79 +293,26 @@ def test_fetch_url_falls_back_to_unverified_tls_on_certificate_errors(tmp_path: 
     ]
 
 
-def test_fetch_url_applies_tool_env_overrides_to_http_client(tmp_path: Path, monkeypatch) -> None:
-    runtime = RockyRuntime.load_from(
-        tmp_path,
-        {"tools": {"env": {"HTTPS_PROXY": "http://proxy.internal:8080"}}},
-    )
-    runtime.permissions.config.mode = "bypass"
-    ctx = runtime.tool_registry.context
+def test_client_uses_explicit_rocky_tool_proxy_env_var(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
-    def make_client(timeout_s: int = 20, *, verify: bool = True, trust_env: bool = True) -> httpx.Client:
-        seen["https_proxy"] = os.environ.get("HTTPS_PROXY")
-        seen["trust_env"] = trust_env
-        return httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(
-                    200,
-                    request=request,
-                    headers={"content-type": "text/html; charset=UTF-8"},
-                    text="<html><head><title>Proxy env</title></head><body>ok</body></html>",
-                )
-            ),
-            headers=web.DEFAULT_HEADERS,
-            timeout=timeout_s,
-            verify=verify,
-            trust_env=trust_env,
-        )
+    def fake_client(**kwargs):
+        seen.update(kwargs)
+        class _DummyClient:
+            pass
+        return _DummyClient()
 
-    monkeypatch.delenv("HTTPS_PROXY", raising=False)
-    monkeypatch.setattr(web, "_client", make_client)
+    monkeypatch.setenv(TOOL_PROXY_ENV_VAR, "http://proxy.internal:8080")
+    monkeypatch.setattr(web.httpx, "Client", fake_client)
 
-    result = web.fetch_url(ctx, {"url": "https://example.com/proxy"})
+    client = web._client(15)
 
-    assert result.success is True
-    assert seen == {
-        "https_proxy": "http://proxy.internal:8080",
-        "trust_env": True,
-    }
-    assert "HTTPS_PROXY" not in os.environ
+    assert isinstance(client, object)
+    assert seen["timeout"] == 15
+    assert seen["proxy"] == "http://proxy.internal:8080"
+    assert seen["trust_env"] is False
 
 
-def test_fetch_url_can_disable_http_trust_env(tmp_path: Path, monkeypatch) -> None:
-    runtime = RockyRuntime.load_from(
-        tmp_path,
-        {"tools": {"http_trust_env": False, "env": {"HTTPS_PROXY": "http://proxy.internal:8080"}}},
-    )
-    runtime.permissions.config.mode = "bypass"
-    ctx = runtime.tool_registry.context
-    seen: list[tuple[str | None, bool]] = []
-
-    def make_client(timeout_s: int = 20, *, verify: bool = True, trust_env: bool = True) -> httpx.Client:
-        seen.append((os.environ.get("HTTPS_PROXY"), trust_env))
-        return httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(
-                    200,
-                    request=request,
-                    headers={"content-type": "text/html; charset=UTF-8"},
-                    text="<html><head><title>No trust env</title></head><body>ok</body></html>",
-                )
-            ),
-            headers=web.DEFAULT_HEADERS,
-            timeout=timeout_s,
-            verify=verify,
-            trust_env=trust_env,
-        )
-
-    monkeypatch.delenv("HTTPS_PROXY", raising=False)
-    monkeypatch.setattr(web, "_client", make_client)
-
-    result = web.fetch_url(ctx, {"url": "https://example.com/no-proxy"})
-
-    assert result.success is True
-    assert seen == [("http://proxy.internal:8080", False)]
 
 
 def test_fetch_url_follows_redirects_and_filters_links(tmp_path: Path, monkeypatch) -> None:

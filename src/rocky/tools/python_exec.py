@@ -32,7 +32,6 @@ def run_python(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            env=ctx.tool_env(),
         )
         data = {
             'script_path': str(script_path),

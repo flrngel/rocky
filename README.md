@@ -82,12 +82,6 @@ providers:
     store: false
 permissions:
   mode: supervised
-tools:
-  http_trust_env: true
-  env:
-    HTTPS_PROXY: http://127.0.0.1:8080
-    HTTP_PROXY: http://127.0.0.1:8080
-    NO_PROXY: localhost,127.0.0.1
 ```
 
 Override at runtime:
@@ -148,7 +142,6 @@ Project:
 - configurable providers with **Ollama** default and **OpenAI** compatibility
 - support for both **OpenAI chat-completions** and **Responses API** styles
 - typed tools for filesystem, shell, python, web, browser, spreadsheets, and git
-- tool-level env overrides via `tools.env` for shells, python snippets, git commands, and HTTP-based tools
 - `SKILL.md` loading from bundled/global/project/learned/compat directories
 - support episodes, query episodes, learned skill generation, rollback, and a slow-learner report
 - verifier hooks and `/why` traceability
@@ -173,6 +166,7 @@ For serious tuning work, start with:
 
 - Browser tools use Playwright. If browser binaries are missing, Rocky degrades cleanly and tells the operator to run `playwright install`.
 - Web search is implemented as a best-effort DuckDuckGo/Brave HTML fallback.
-- HTTP-based tools respect standard proxy env vars when `tools.http_trust_env` is enabled. You can set project-local proxy overrides under `tools.env`.
+- Browser and web tools honor `ROCKY_TOOL_PROXY` for explicit proxy routing.
+- Example: `export ROCKY_TOOL_PROXY=http://127.0.0.1:8080`
 - The slow learner still emits an inspectable heuristic report instead of weight updates.
 - Live agentic tests skip automatically when the configured local provider is unreachable.
