@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from rocky.app import RockyRuntime
+from rocky.tools.python_exec import run_python
 from rocky.tools.shell import inspect_runtime_versions, inspect_shell_environment, read_shell_history, run_shell_command
 
 
@@ -121,3 +122,35 @@ def test_run_shell_command_bootstraps_user_shell_rc_for_shell_functions(tmp_path
 
     assert result.success is True
     assert "nvm-from-rc ls" in result.data["stdout"]
+
+
+def test_run_shell_command_inherits_tool_env_overrides(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(
+        tmp_path / "workspace",
+        {"tools": {"env": {"HTTPS_PROXY": "http://proxy.internal:8080"}}},
+    )
+    runtime.permissions.config.mode = "bypass"
+
+    result = run_shell_command(
+        runtime.tool_registry.context,
+        {"command": "printf '%s' \"$HTTPS_PROXY\""},
+    )
+
+    assert result.success is True
+    assert result.data["stdout"] == "http://proxy.internal:8080"
+
+
+def test_run_python_inherits_tool_env_overrides(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(
+        tmp_path / "workspace",
+        {"tools": {"env": {"HTTPS_PROXY": "http://proxy.internal:8080"}}},
+    )
+    runtime.permissions.config.mode = "bypass"
+
+    result = run_python(
+        runtime.tool_registry.context,
+        {"code": "import os; print(os.environ.get('HTTPS_PROXY', ''))"},
+    )
+
+    assert result.success is True
+    assert result.data["stdout"].strip() == "http://proxy.internal:8080"

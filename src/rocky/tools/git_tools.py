@@ -10,7 +10,7 @@ from rocky.util.text import truncate
 def _git(ctx: ToolContext, args: list[str], cwd: str | None = None) -> ToolResult:
     path, requested_cwd = ctx.resolve_execution_cwd(cwd or '.', fallback_to_workspace=True)
     ctx.require('git', 'read git state', ' '.join(args))
-    proc = subprocess.run(['git', '-C', str(path), *args], capture_output=True, text=True)
+    proc = subprocess.run(['git', '-C', str(path), *args], capture_output=True, text=True, env=ctx.tool_env())
     metadata = {
         'cwd_fallback': True,
         'requested_cwd': requested_cwd,

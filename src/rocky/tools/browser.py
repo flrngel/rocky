@@ -46,7 +46,8 @@ def browser_render_page(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     timeout_ms = int(args.get('timeout_ms', 20000))
     ctx.require('browser', 'render page', url, risky=True)
     try:
-        data = asyncio.run(_render(url, timeout_ms))
+        with ctx.apply_tool_env():
+            data = asyncio.run(_render(url, timeout_ms))
         return ToolResult(True, {
             'title': data['title'],
             'final_url': data['final_url'],
@@ -66,7 +67,8 @@ def browser_screenshot(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     output_path = output_dir / (args.get('filename') or 'screenshot.png')
     ctx.require('browser', 'screenshot page', url, writes=True, risky=True)
     try:
-        data = asyncio.run(_screenshot(url, output_path, timeout_ms, full_page))
+        with ctx.apply_tool_env():
+            data = asyncio.run(_screenshot(url, output_path, timeout_ms, full_page))
         return ToolResult(True, data, f'Saved screenshot to {output_path.name}')
     except Exception as exc:
         return ToolResult(False, {}, str(exc))

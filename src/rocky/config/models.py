@@ -42,6 +42,8 @@ class ToolConfig:
     max_tool_output_chars: int = 12000
     shell_timeout_s: int = 60
     python_timeout_s: int = 60
+    http_trust_env: bool = True
+    env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

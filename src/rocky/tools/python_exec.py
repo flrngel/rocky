@@ -26,7 +26,14 @@ def run_python(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         'requested_cwd': requested_cwd,
     } if requested_cwd else {}
     try:
-        proc = subprocess.run([sys.executable, str(script_path)], cwd=str(cwd), capture_output=True, text=True, timeout=timeout_s)
+        proc = subprocess.run(
+            [sys.executable, str(script_path)],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env=ctx.tool_env(),
+        )
         data = {
             'script_path': str(script_path),
             'cwd': str(cwd.relative_to(ctx.workspace_root)),

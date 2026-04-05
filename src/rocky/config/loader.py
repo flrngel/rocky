@@ -33,6 +33,8 @@ DEFAULT_CONFIG_DICT = {
         'max_tool_output_chars': 12000,
         'shell_timeout_s': 60,
         'python_timeout_s': 60,
+        'http_trust_env': True,
+        'env': {},
     },
     'learning': {
         'enabled': True,

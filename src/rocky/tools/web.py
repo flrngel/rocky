@@ -49,8 +49,8 @@ NO_RESULTS_MARKERS = (
 )
 
 
-def _client(timeout_s: int = 20, *, verify: bool = True) -> httpx.Client:
-    return httpx.Client(timeout=timeout_s, headers=DEFAULT_HEADERS, verify=verify)
+def _client(timeout_s: int = 20, *, verify: bool = True, trust_env: bool = True) -> httpx.Client:
+    return httpx.Client(timeout=timeout_s, headers=DEFAULT_HEADERS, verify=verify, trust_env=trust_env)
 
 
 def _error_result(
@@ -188,27 +188,30 @@ def _get(
 
 
 def _request(
+    ctx: ToolContext,
     url: str,
     *,
     timeout_s: int,
     follow_redirects: bool = True,
 ) -> tuple[httpx.Response | None, ToolResult | None]:
-    with _client(timeout_s) as client:
-        response, error = _get(client, url, follow_redirects=follow_redirects)
-    if response is not None:
-        response.extensions["tls_verified"] = True
-        return response, None
-    if error is None or not error.metadata.get("tls_verification_failed") or urlparse(url).scheme != "https":
-        return None, error
+    trust_env = bool(ctx.config.tools.http_trust_env)
+    with ctx.apply_tool_env():
+        with _client(timeout_s, trust_env=trust_env) as client:
+            response, error = _get(client, url, follow_redirects=follow_redirects)
+        if response is not None:
+            response.extensions["tls_verified"] = True
+            return response, None
+        if error is None or not error.metadata.get("tls_verification_failed") or urlparse(url).scheme != "https":
+            return None, error
 
-    with _client(timeout_s, verify=False) as insecure_client:
-        insecure_response, insecure_error = _get(insecure_client, url, follow_redirects=follow_redirects, attempts=1)
-    if insecure_response is not None:
-        insecure_response.extensions["tls_verified"] = False
-        return insecure_response, None
-    if insecure_error is not None:
-        insecure_error.metadata["tls_verified"] = False
-    return None, insecure_error
+        with _client(timeout_s, verify=False, trust_env=trust_env) as insecure_client:
+            insecure_response, insecure_error = _get(insecure_client, url, follow_redirects=follow_redirects, attempts=1)
+        if insecure_response is not None:
+            insecure_response.extensions["tls_verified"] = False
+            return insecure_response, None
+        if insecure_error is not None:
+            insecure_error.metadata["tls_verified"] = False
+        return None, insecure_error
 
 
 def _normalize_result_url(href: str | None, base_url: str) -> str | None:
@@ -304,7 +307,7 @@ def _response_text_excerpt(response: httpx.Response) -> str:
 def fetch_url(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     url = str(args["url"])
     ctx.require("web", "fetch url", url, risky=True)
-    response, error = _request(url, timeout_s=int(args.get("timeout_s", 20)), follow_redirects=True)
+    response, error = _request(ctx, url, timeout_s=int(args.get("timeout_s", 20)), follow_redirects=True)
     if error is not None:
         return error
     assert response is not None
@@ -342,7 +345,7 @@ def fetch_url(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
 def extract_links(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     url = str(args["url"])
     ctx.require("web", "extract links", url, risky=True)
-    response, error = _request(url, timeout_s=int(args.get("timeout_s", 20)), follow_redirects=True)
+    response, error = _request(ctx, url, timeout_s=int(args.get("timeout_s", 20)), follow_redirects=True)
     if error is not None:
         return error
     assert response is not None
@@ -391,7 +394,7 @@ def search_web(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         attempted_urls.append(url)
         if engine not in engines_tried:
             engines_tried.append(engine)
-        response, error = _request(url, timeout_s=timeout_s, follow_redirects=True)
+        response, error = _request(ctx, url, timeout_s=timeout_s, follow_redirects=True)
         if error is not None:
             errors.append(error.summary)
             continue

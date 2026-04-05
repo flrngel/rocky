@@ -191,7 +191,14 @@ def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             'requested_cwd': requested_cwd,
         }
     try:
-        proc = subprocess.run([shell_program, '-c', shell_command], cwd=str(cwd), capture_output=True, text=True, timeout=timeout_s)
+        proc = subprocess.run(
+            [shell_program, '-c', shell_command],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env=ctx.tool_env(),
+        )
         data = {
             'command': command,
             'cwd': str(cwd.relative_to(ctx.workspace_root)),
