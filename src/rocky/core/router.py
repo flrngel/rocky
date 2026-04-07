@@ -60,6 +60,7 @@ class ContinuationResolver:
         'separate question',
         'another question',
     )
+    CONTINUE_MARKERS = ('continue', 'resume', 'keep going', 'keep working', 'carry on', 'pick up', 'pick back up', 'same task', 'what next', 'next step', 'finish it', 'finish this')
 
     def resolve(
         self,
@@ -72,6 +73,7 @@ class ContinuationResolver:
     ) -> ContinuationDecision:
         text = prompt.strip()
         lowered = text.lower()
+        explicit_continue = any(marker in lowered for marker in self.CONTINUE_MARKERS)
         if not text:
             return ContinuationDecision(action='start_new_thread', confidence=1.0)
         if any(marker in lowered for marker in self.NEW_TASK_MARKERS):
@@ -80,6 +82,7 @@ class ContinuationResolver:
         if not candidates:
             return ContinuationDecision(action='start_new_thread', confidence=0.3)
         scored: list[tuple[float, ActiveTaskThread, list[str]]] = []
+        only_continuable_thread = len(candidates) == 1
         for thread in candidates:
             score, reasons = continuation_signal_score(
                 prompt,
@@ -90,10 +93,20 @@ class ContinuationResolver:
             if thread.status == 'active':
                 score += 1.0
                 reasons.append('thread_active')
+            elif thread.status == 'awaiting_user':
+                score += 0.8
+                reasons.append('thread_awaiting_user')
+            elif thread.status == 'needs_repair':
+                score += 0.7
+                reasons.append('thread_needs_repair')
+            if only_continuable_thread and thread.workspace_root == workspace_root:
+                score += 0.6
+                reasons.append('only_continuable_thread')
             scored.append((score, thread, reasons))
         scored.sort(key=lambda item: (item[0], item[1].updated_at), reverse=True)
         best_score, best_thread, reasons = scored[0]
-        if best_score >= 5.5:
+        threshold = 4.6 if explicit_continue else 5.5
+        if best_score >= threshold:
             return ContinuationDecision(
                 action='continue_active_thread' if best_thread.status == 'active' else 'resume_recent_thread',
                 thread_id=best_thread.thread_id,

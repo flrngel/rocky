@@ -65,6 +65,7 @@ def build_global_config(existing: dict | None, answers: dict[str, str]) -> dict:
             "api_key_env": answers["api_key_env"] or None,
             "model": answers["model"],
             "thinking": bool(answers["thinking"]),
+            "reasoning_effort": answers.get("reasoning_effort") or None,
             "store": False,
         }
     else:
@@ -73,6 +74,8 @@ def build_global_config(existing: dict | None, answers: dict[str, str]) -> dict:
         provider["model"] = answers["model"]
         provider["api_key_env"] = answers["api_key_env"] or None
         provider["thinking"] = bool(answers["thinking"])
+        if answers.get("reasoning_effort") not in {None, ""}:
+            provider["reasoning_effort"] = answers.get("reasoning_effort")
         providers[active_provider] = provider
 
     base["active_provider"] = active_provider
@@ -89,9 +92,12 @@ def config_summary(config: dict) -> str:
     provider = ((config.get("providers") or {}).get(active_provider) or {})
     summary = {
         "active_provider": active_provider,
+        "style": provider.get("style"),
         "base_url": provider.get("base_url"),
         "model": provider.get("model"),
         "thinking": bool(provider.get("thinking", True)),
+        "reasoning_effort": provider.get("reasoning_effort"),
+        "tool_choice": provider.get("tool_choice"),
         "api_key_env": provider.get("api_key_env"),
         "permission_mode": ((config.get("permissions") or {}).get("mode")),
     }
@@ -112,21 +118,30 @@ def run_config_wizard(
     console.print(f"Config path: {config_path}")
     console.print("This runs on first launch and anytime you use `rocky configure` or `/configure`.\n")
 
-    active_default = str(merged.get("active_provider", "ollama"))
+    active_default = str(merged.get("active_provider", "litellm_local"))
     active_choice = _prompt_choice(
         input_func,
         "Provider",
-        [("1", "ollama"), ("2", "openai"), ("3", "compatible")],
-        {"ollama": "1", "openai": "2", "compatible": "3"}.get(active_default, "1"),
+        [("1", "litellm_local"), ("2", "ollama"), ("3", "openai"), ("4", "compatible")],
+        {"litellm_local": "1", "ollama": "2", "openai": "3", "compatible": "4"}.get(active_default, "1"),
     )
-    active_provider = {"1": "ollama", "2": "openai", "3": "compatible"}[active_choice]
+    active_provider = {"1": "litellm_local", "2": "ollama", "3": "openai", "4": "compatible"}[active_choice]
 
-    if active_provider == "ollama":
+    if active_provider == "litellm_local":
+        provider_defaults = _provider_defaults(merged, "litellm_local", DEFAULT_CONFIG_DICT["providers"]["litellm_local"])
+        style = provider_defaults["style"]
+        base_url = _prompt_text(input_func, "LiteLLM proxy URL", str(provider_defaults["base_url"]))
+        model = _prompt_text(input_func, "LiteLLM model", str(provider_defaults["model"]))
+        thinking = _prompt_bool(input_func, "Enable thinking mode", bool(provider_defaults.get("thinking", True)))
+        reasoning_effort = _prompt_text(input_func, "Reasoning effort", str(provider_defaults.get("reasoning_effort") or "medium"))
+        api_key_env = _prompt_text(input_func, "API key env var", str(provider_defaults.get("api_key_env") or "LITELLM_API_KEY"))
+    elif active_provider == "ollama":
         provider_defaults = _provider_defaults(merged, "ollama", DEFAULT_CONFIG_DICT["providers"]["ollama"])
         style = provider_defaults["style"]
         base_url = _prompt_text(input_func, "Ollama base URL", str(provider_defaults["base_url"]))
         model = _prompt_text(input_func, "Ollama model", str(provider_defaults["model"]))
         thinking = _prompt_bool(input_func, "Enable thinking mode", bool(provider_defaults.get("thinking", True)))
+        reasoning_effort = _prompt_text(input_func, "Reasoning effort (optional)", str(provider_defaults.get("reasoning_effort") or ""))
         api_key_env = _prompt_text(input_func, "API key env var", str(provider_defaults.get("api_key_env") or "OLLAMA_API_KEY"))
     elif active_provider == "openai":
         provider_defaults = _provider_defaults(merged, "openai", DEFAULT_CONFIG_DICT["providers"]["openai"])
@@ -134,6 +149,7 @@ def run_config_wizard(
         base_url = _prompt_text(input_func, "OpenAI base URL", str(provider_defaults["base_url"]))
         model = _prompt_text(input_func, "OpenAI model", str(provider_defaults["model"]))
         thinking = _prompt_bool(input_func, "Enable thinking mode", bool(provider_defaults.get("thinking", True)))
+        reasoning_effort = _prompt_text(input_func, "Reasoning effort", str(provider_defaults.get("reasoning_effort") or "medium"))
         api_key_env = _prompt_text(input_func, "API key env var", str(provider_defaults.get("api_key_env") or "OPENAI_API_KEY"))
     else:
         compatible_defaults = _provider_defaults(
@@ -145,18 +161,20 @@ def run_config_wizard(
                 "api_key_env": "COMPATIBLE_API_KEY",
                 "model": "llama3.2",
                 "thinking": True,
+                "reasoning_effort": "",
             },
         )
         style_choice = _prompt_choice(
             input_func,
             "Compatible API style",
-            [("1", "openai_chat"), ("2", "openai_responses")],
-            "2" if compatible_defaults.get("style") == "openai_responses" else "1",
+            [("1", "openai_chat"), ("2", "openai_responses"), ("3", "litellm_chat")],
+            "3" if compatible_defaults.get("style") == "litellm_chat" else "2" if compatible_defaults.get("style") == "openai_responses" else "1",
         )
-        style = "openai_chat" if style_choice == "1" else "openai_responses"
+        style = "openai_chat" if style_choice == "1" else "openai_responses" if style_choice == "2" else "litellm_chat"
         base_url = _prompt_text(input_func, "Compatible base URL", str(compatible_defaults["base_url"]))
         model = _prompt_text(input_func, "Compatible model", str(compatible_defaults["model"]))
         thinking = _prompt_bool(input_func, "Enable thinking mode", bool(compatible_defaults.get("thinking", True)))
+        reasoning_effort = _prompt_text(input_func, "Reasoning effort (optional)", str(compatible_defaults.get("reasoning_effort") or ""))
         api_key_env = _prompt_text(
             input_func,
             "API key env var (leave blank if none)",
@@ -180,6 +198,7 @@ def run_config_wizard(
             "base_url": base_url,
             "model": model,
             "thinking": thinking,
+            "reasoning_effort": reasoning_effort,
             "api_key_env": api_key_env,
             "permission_mode": permission_mode,
         },

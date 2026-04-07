@@ -31,10 +31,11 @@ def test_run_config_wizard_writes_selected_provider(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     answers = iter(
         [
-            "1",
+            "2",
             "http://localhost:11434/v1",
             "qwen3.5:4b",
             "false",
+            "",
             "OLLAMA_API_KEY",
             "1",
         ]

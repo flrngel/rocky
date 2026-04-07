@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import json
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
@@ -146,27 +147,112 @@ class RockyRepl:
         def _newline(event):
             event.current_buffer.insert_text("\n")
 
+        @_kb.add("c-r")
+        def _resume(event):
+            self._dispatch_shortcut(event, "/resume")
+
+        @_kb.add("c-n")
+        def _new(event):
+            self._dispatch_shortcut(event, "/new ")
+
+        @_kb.add("c-t")
+        def _status(event):
+            self._dispatch_shortcut(event, "/status")
+
+        @_kb.add("c-f")
+        def _freeze(event):
+            self._dispatch_shortcut(event, "/freeze")
+
+        @_kb.add("c-g")
+        def _student(event):
+            self._dispatch_shortcut(event, "/student")
+
         self.session = PromptSession(
             history=history,
-            completer=build_completer(runtime.commands.names),
+            completer=build_completer(runtime),
             multiline=True,
             key_bindings=_kb,
             style=self.prompt_style,
             complete_while_typing=True,
-            reserve_space_for_menu=6,
+            reserve_space_for_menu=8,
         )
+
+    def _dispatch_shortcut(self, event, text: str) -> None:
+        buffer = event.current_buffer
+        buffer.document = Document(text, cursor_position=len(text))
+        buffer.validate_and_handle()
 
     def _prompt_message(self) -> HTML:
         if self.runtime.freeze_enabled:
             return HTML("<prompt>rocky</prompt><accent>[freeze]&gt;</accent> ")
         return HTML("<prompt>rocky</prompt><accent>&gt;</accent> ")
 
+    def _safe_session_id(self) -> str:
+        method = getattr(type(self.runtime), "_status_session", None)
+        if method is None:
+            return ""
+        try:
+            current = self.runtime._status_session()
+            session_id = getattr(current, "id", "") if current is not None else ""
+            value = str(session_id or "")
+            return "" if "MagicMock" in value else value
+        except Exception:
+            return ""
+
+    def _safe_provider_label(self) -> str:
+        config = getattr(self.runtime, "config", None)
+        if config is None:
+            return ""
+        provider_name = str(getattr(config, "active_provider", "") or "")
+        if not provider_name or "MagicMock" in provider_name or "<" in provider_name or ">" in provider_name:
+            return ""
+        provider_method = getattr(type(config), "provider", None)
+        if provider_method is None:
+            return provider_name
+        try:
+            provider = config.provider(provider_name)
+            model = str(getattr(provider, "model", "") or "")
+            if "MagicMock" in model or "<" in model or ">" in model:
+                return provider_name
+            return f"{provider_name}:{model}" if provider_name or model else ""
+        except Exception:
+            return provider_name
+
+    def _safe_thread_id(self) -> str:
+        method = getattr(type(self.runtime), "thread_inventory", None)
+        if method is None:
+            return ""
+        try:
+            payload = self.runtime.thread_inventory()
+            thread_id = str((payload or {}).get("current_thread_id") or "")
+            return "" if "MagicMock" in thread_id else thread_id
+        except Exception:
+            return ""
+
     def _toolbar(self) -> HTML:
         freeze_label = "Freeze: ON" if self.runtime.freeze_enabled else "Freeze: OFF"
         verbose_label = "Verbose: ON" if getattr(self.runtime, "verbose_enabled", False) else "Verbose: OFF"
-        return HTML(
-            f"<toolbar> Enter submit  Alt+Enter newline  /help commands  {freeze_label}  {verbose_label} </toolbar>"
-        )
+        parts = [
+            "Enter submit",
+            "Alt+Enter newline",
+            "Ctrl-R resume",
+            "Ctrl-N new",
+            "Ctrl-T status",
+            "Ctrl-F freeze",
+            "Ctrl-G student",
+            freeze_label,
+            verbose_label,
+        ]
+        session_id = self._safe_session_id()
+        if session_id:
+            parts.append(f"Session: {session_id[-8:]}")
+        provider_label = self._safe_provider_label()
+        if provider_label:
+            parts.append(provider_label)
+        thread_id = self._safe_thread_id()
+        if thread_id:
+            parts.append(f"Thread: {thread_id[-8:]}")
+        return HTML("<toolbar> " + "  ".join(parts) + " </toolbar>")
 
     def _continuation(self, width: int, line_number: int, wrap_count: int):
         return [("class:continuation", "... ".rjust(width))]

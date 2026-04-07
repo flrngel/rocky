@@ -10,6 +10,7 @@ import httpx
 from rocky.config.models import ProviderConfig
 from rocky.core.messages import Message
 from rocky.providers.base import ProviderResponse, sanitize_assistant_text
+from rocky.util.text import extract_json_candidate, safe_json
 
 
 class OpenAIChatProvider:
@@ -28,20 +29,59 @@ class OpenAIChatProvider:
     def _client(self) -> httpx.Client:
         return httpx.Client(timeout=self.config.timeout_s, headers=self._headers())
 
+    def _coerce_dict(self, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            try:
+                dumped = model_dump()
+                if isinstance(dumped, dict):
+                    return dumped
+            except Exception:
+                pass
+        dict_method = getattr(value, "dict", None)
+        if callable(dict_method):
+            try:
+                dumped = dict_method()
+                if isinstance(dumped, dict):
+                    return dumped
+            except Exception:
+                pass
+        if hasattr(value, "__dict__"):
+            return {k: v for k, v in vars(value).items() if not k.startswith("_")}
+        return {}
+
     def _message_text(self, content: Any) -> str:
+        if content is None:
+            return ""
         if isinstance(content, str):
             return content
+        if isinstance(content, dict):
+            if content.get("type") in {"text", "output_text"}:
+                return str(content.get("text", ""))
+            if "content" in content:
+                return self._message_text(content.get("content"))
+            if "text" in content:
+                return str(content.get("text", ""))
+            return safe_json(content)
         if isinstance(content, list):
             parts: list[str] = []
             for item in content:
                 if isinstance(item, dict):
                     if item.get("type") in {"text", "output_text"}:
                         parts.append(str(item.get("text", "")))
+                    elif item.get("type") == "refusal":
+                        parts.append(str(item.get("refusal", "")))
                     elif "content" in item:
-                        parts.append(str(item.get("content", "")))
-                else:
+                        parts.append(self._message_text(item.get("content")))
+                    elif "text" in item:
+                        parts.append(str(item.get("text", "")))
+                elif item is not None:
                     parts.append(str(item))
-            return "\n".join(parts)
+            return "\n".join(part for part in parts if part)
         return str(content)
 
     def _convert_messages(self, system_prompt: str, messages: list[Message]) -> list[dict[str, Any]]:
@@ -49,7 +89,7 @@ class OpenAIChatProvider:
         for message in messages:
             payload: dict[str, Any] = {
                 "role": message.role,
-                "content": self._message_text(message.content),
+                "content": None if message.content is None else self._message_text(message.content),
             }
             if message.name:
                 payload["name"] = message.name
@@ -58,38 +98,140 @@ class OpenAIChatProvider:
             converted.append(payload)
         return converted
 
+    def _extract_choice_message(self, payload: dict[str, Any]) -> dict[str, Any]:
+        choices = payload.get("choices") or []
+        if not choices:
+            return {}
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            choice = self._coerce_dict(choice)
+        message = choice.get("message") or {}
+        if not isinstance(message, dict):
+            message = self._coerce_dict(message)
+        return message
+
     def _extract_content(self, message: dict[str, Any]) -> str:
         content = message.get("content", "")
+        if content is None:
+            return ""
         if isinstance(content, str):
             return content
+        if isinstance(content, dict):
+            return self._message_text(content)
         if isinstance(content, list):
             parts: list[str] = []
             for item in content:
                 if not isinstance(item, dict):
-                    parts.append(str(item))
+                    if item is not None:
+                        parts.append(str(item))
                     continue
                 if item.get("type") in {"text", "output_text"}:
                     parts.append(str(item.get("text", "")))
                 elif item.get("type") == "refusal":
                     parts.append(str(item.get("refusal", "")))
+                elif "content" in item:
+                    parts.append(self._message_text(item.get("content")))
+                elif "text" in item:
+                    parts.append(str(item.get("text", "")))
             return "".join(parts)
         return str(content)
 
-    def _parse_json_args(self, raw: str | None) -> dict[str, Any]:
-        if not raw:
+    def _stringify_tool_arguments(self, raw: Any) -> str:
+        if raw in (None, ""):
+            return "{}"
+        if isinstance(raw, (dict, list, tuple, bool, int, float)):
+            return safe_json(raw)
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", errors="replace")
+        if not isinstance(raw, str):
+            dumped = self._coerce_dict(raw)
+            if dumped:
+                return safe_json(dumped)
+            return str(raw)
+        candidate = extract_json_candidate(raw)
+        return candidate or raw.strip() or "{}"
+
+    def _parse_json_args(self, raw: Any) -> dict[str, Any]:
+        if raw in (None, ""):
             return {}
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, list):
+            return {"value": raw}
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", errors="replace")
+        if not isinstance(raw, str):
+            dumped = self._coerce_dict(raw)
+            if dumped:
+                return dumped
+            return {"value": raw}
+        candidate = extract_json_candidate(raw) or raw
         try:
-            data = json.loads(raw)
+            data = json.loads(candidate)
             return data if isinstance(data, dict) else {"value": data}
         except Exception:
             return {"_raw": raw}
 
-    def _tool_success(self, output: str) -> bool:
+    def _normalize_tool_call(self, call: Any, index: int) -> dict[str, Any]:
+        payload = self._coerce_dict(call)
+        function_payload: Any = payload.get("function")
+        if function_payload is None and payload.get("function_call") is not None:
+            function_payload = payload.get("function_call")
+        if function_payload is not None and not isinstance(function_payload, dict):
+            function_payload = self._coerce_dict(function_payload)
+        function_payload = function_payload or {}
+        tool_name = str(function_payload.get("name") or payload.get("name") or "")
+        raw_arguments = function_payload.get("arguments", payload.get("arguments"))
+        tool_call_id = str(
+            payload.get("id")
+            or payload.get("call_id")
+            or payload.get("tool_call_id")
+            or f"call_{index + 1}"
+        )
+        return {
+            "id": tool_call_id,
+            "type": payload.get("type") or "function",
+            "function": {
+                "name": tool_name,
+                "arguments": self._stringify_tool_arguments(raw_arguments),
+            },
+        }
+
+    def _normalize_tool_calls(self, message: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_tool_calls = message.get("tool_calls") or []
+        if isinstance(raw_tool_calls, dict):
+            raw_tool_calls = [raw_tool_calls]
+        calls = [self._normalize_tool_call(call, index) for index, call in enumerate(raw_tool_calls)]
+        if calls:
+            return calls
+        function_call = message.get("function_call")
+        if function_call:
+            return [self._normalize_tool_call({"function": function_call}, 0)]
+        return []
+
+    def _assistant_history_content(self, message: dict[str, Any], tool_calls: list[dict[str, Any]]) -> Any:
+        raw_content = message.get("content", "")
+        if raw_content is None:
+            return None if tool_calls else ""
+        text = self._extract_content({"content": raw_content})
+        if not text and tool_calls:
+            return None
+        return text
+
+    def _prepare_tool_output(self, output: Any) -> str:
+        if output is None:
+            return ""
+        if isinstance(output, str):
+            return output
+        return safe_json(output)
+
+    def _tool_success(self, output: Any) -> bool:
+        text = self._prepare_tool_output(output)
         try:
-            payload = json.loads(output)
-            return bool(payload.get("success", True))
+            payload = json.loads(text)
+            return bool(payload.get("success", True)) if isinstance(payload, dict) else True
         except Exception:
-            return '"success": false' not in output.lower()
+            return '"success": false' not in text.lower()
 
     def _post_chat(self, client: httpx.Client, payload: dict[str, Any]) -> dict[str, Any]:
         attempts = 6
@@ -226,7 +368,7 @@ class OpenAIChatProvider:
             )
             raw_rounds.append(data)
             usage = data.get("usage") or usage
-            message = ((data.get("choices") or [{}])[0]).get("message") or {}
+            message = self._extract_choice_message(data)
             text = sanitize_assistant_text(self._extract_content(message))
             if text:
                 break
@@ -265,7 +407,7 @@ class OpenAIChatProvider:
             )
             response.raise_for_status()
             data = response.json()
-        message = ((data.get("choices") or [{}])[0]).get("message") or {}
+        message = self._extract_choice_message(data)
         text = sanitize_assistant_text(self._extract_content(message))
         if stream and event_handler and text:
             event_handler({"type": "assistant_chunk", "text": text})
@@ -339,15 +481,15 @@ class OpenAIChatProvider:
                 data = self._post_chat(client, payload)
                 raw_rounds.append(data)
                 usage = data.get("usage") or usage
-                message = ((data.get("choices") or [{}])[0]).get("message") or {}
+                message = self._extract_choice_message(data)
+                tool_calls = self._normalize_tool_calls(message)
                 assistant_record: dict[str, Any] = {
                     "role": "assistant",
-                    "content": self._extract_content(message),
+                    "content": self._assistant_history_content(message, tool_calls),
                 }
-                if message.get("tool_calls"):
-                    assistant_record["tool_calls"] = message["tool_calls"]
+                if tool_calls:
+                    assistant_record["tool_calls"] = tool_calls
                 conversation.append(assistant_record)
-                tool_calls = message.get("tool_calls") or []
                 if not tool_calls:
                     text = sanitize_assistant_text(self._extract_content(message))
                     if text:
@@ -364,21 +506,22 @@ class OpenAIChatProvider:
                     function = call.get("function") or {}
                     name = str(function.get("name", ""))
                     arguments = self._parse_json_args(function.get("arguments"))
+                    tool_call_id = str(call.get("id") or "")
+                    call_event = {
+                        "type": "tool_call",
+                        "id": tool_call_id,
+                        "tool_call_id": tool_call_id,
+                        "name": name,
+                        "arguments": arguments,
+                    }
                     if event_handler:
-                        event_handler({"type": "tool_call", "name": name, "arguments": arguments})
-                    tool_events.append(
-                        {
-                            "type": "tool_call",
-                            "id": call.get("id"),
-                            "name": name,
-                            "arguments": arguments,
-                        }
-                    )
-                    tool_output = execute_tool(name, arguments)
+                        event_handler(call_event)
+                    tool_events.append(call_event)
+                    tool_output = self._prepare_tool_output(execute_tool(name, arguments))
                     conversation.append(
                         {
                             "role": "tool",
-                            "tool_call_id": call.get("id"),
+                            "tool_call_id": tool_call_id,
                             "name": name,
                             "content": tool_output,
                         }
@@ -386,7 +529,8 @@ class OpenAIChatProvider:
                     tool_events.append(
                         {
                             "type": "tool_result",
-                            "id": call.get("id"),
+                            "id": tool_call_id,
+                            "tool_call_id": tool_call_id,
                             "name": name,
                             "arguments": arguments,
                             "text": tool_output,

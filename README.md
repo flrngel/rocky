@@ -1,15 +1,23 @@
-# rocky
+# Rocky v1.0.1
 
 Rocky is a CLI-first, file-first, local-model-first general agent for real workspace tasks.
 
-v0.3.0 upgrades Rocky from a prompt-routed tool assistant into a more runtime-grounded agent with:
+`v1.0.1` keeps the student-agent redesign from v1.0.0 and fixes the tool-execution path that was still too fragile with LiteLLM/Ollama and OpenAI-compatible harnesses:
 
-- active task threads for multi-turn continuation
-- evidence/claim tracking with provenance
-- answer contracts that constrain final responses to the current ask
-- candidate-first memory and learned behavior promotion
-- stronger verification around unsupported claims and answer drift
-- generator/oracle harness assets for repeatable capability evaluation
+- **LiteLLM-first provider stack** with Ollama routed through LiteLLM
+- **continuable task threads** that do not disappear after a successful verification
+- **persistent student notebook** for teacher feedback, domain knowledge, patterns, and examples
+- **better TUI UX** with richer slash-command autocomplete, resume/new/status/freeze/student shortcuts, and state-rich toolbar hints
+- **stronger continuation routing** so Rocky can actually keep working on the same task instead of resetting into generic chat
+
+## v1.0.1 patch focus
+
+| Area | v1.0.1 patch | Why it matters |
+|---|---|---|
+| Tool-call parsing | Normalizes `tool_calls`, deprecated `function_call`, dict arguments, and missing IDs | Rocky now executes tools against more real backend response shapes instead of silently stalling |
+| Assistant/tool transcript | Preserves `content: null` on assistant tool-call messages and keeps `tool_call_id` wired through | Matches the message shapes expected by modern tool loops and avoids poisoning the conversation with literal `"None"` |
+| Tool schema hygiene | Sanitizes JSON schema inputs and closes object schemas with `additionalProperties: false` by default | Makes tool contracts clearer and closer to Codex-style strict tool surfaces |
+| Regression coverage | Added provider tests for LiteLLM/OpenAI-compatible edge cases | Prevents this exact class of harness regression from coming back |
 
 ## What Rocky is optimizing for
 
@@ -17,31 +25,19 @@ v0.3.0 upgrades Rocky from a prompt-routed tool assistant into a more runtime-gr
 - practical repo, shell, automation, extraction, and data workflows
 - inspectable state in `.rocky/` instead of opaque hidden services
 - explicit traces, verifiers, and tuning surfaces
-- future tuning by a coding agent or engineer without a rewrite
+- future tuning by a coding agent, Claude Code, Codex, or a human without a rewrite
+- a **teacher → student** operating model where Rocky can become more standalone over time
 
-## v0.3.0 highlights
+## What changed in v1.0.0
 
-- **Thread-aware runtime**: short follow-ups can stay attached to an active artifact-backed workflow instead of collapsing into generic chat.
-- **Evidence-first answering**: Rocky now accumulates provenance-bearing claims from prompts and tool results, then builds an answer contract before finalizing a response.
-- **Safer memory**: project memory capture now prefers supported claims, explicit user corrections, and verified paths over answer prose.
-- **Candidate-first learning**: `/learn` now binds to the best available workflow thread context and publishes learned behaviors as candidates that can later be promoted after verified reuse.
-- **Better retrieval**: memory and learned skill retrieval now factor task/thread relevance, provenance, contradiction state, and verified reuse signals.
-- **Improved debuggability**: traces now include continuation decisions, thread snapshots, answer contracts, and supported claim snapshots.
-
-## High-level runtime architecture
-
-```text
-prompt
-  -> continuation resolver
-  -> thread-aware router
-  -> active task thread + evidence graph update
-  -> context assembly (instructions + durable memory + learned behaviors + handoffs + thread/evidence)
-  -> provider/tool loop
-  -> answer contract build
-  -> structured verification
-  -> memory/learning gating
-  -> trace + session persistence
-```
+| Area | Change | Why it matters |
+|---|---|---|
+| Provider layer | Added `litellm_chat` and a new LiteLLM provider | More robust OpenAI-compatible/Ollama integration and less backend-specific harness fragility |
+| Continuation | Successful verification now moves a thread to `awaiting_user` instead of `completed` | Follow-up prompts like “continue”, “what next”, and “finish it” keep the same task alive |
+| Student memory | Added `.rocky/student/` with `profile.md`, `notebook.jsonl`, `knowledge/`, `patterns/`, `examples/` | Rocky can learn durable operator guidance beyond short chat context |
+| Prompt assembly | Student notes and profile are injected into context | Teacher feedback can shape later runs without hard-coding behaviors |
+| TUI | Better slash autocomplete, keyboard shortcuts, richer toolbar | Faster production use in long-running terminal sessions |
+| Commands | Added `/teach`, `/student`, `/threads` | Easier inspection and correction loops |
 
 ## Quick start
 
@@ -64,11 +60,18 @@ rocky init
 
 ## Provider configuration
 
-Default config is created at `~/.config/rocky/config.yaml` with Ollama active:
+Default config is created at `~/.config/rocky/config.yaml` with **LiteLLM local** active:
 
 ```yaml
-active_provider: ollama
+active_provider: litellm_local
 providers:
+  litellm_local:
+    style: litellm_chat
+    base_url: http://localhost:4000
+    api_key_env: LITELLM_API_KEY
+    model: ollama_chat/qwen3.5:4b
+    thinking: true
+    reasoning_effort: medium
   ollama:
     style: openai_chat
     base_url: http://localhost:11434/v1
@@ -79,51 +82,35 @@ providers:
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY
     model: gpt-5.2
-    store: false
 permissions:
   mode: supervised
 ```
 
-Override at runtime:
+Typical local stack:
 
-```bash
-rocky --provider ollama --base-url http://localhost:11434/v1 "profile data.xlsx"
-rocky --provider openai --model gpt-5.2 "explain this project"
-```
+1. Run Ollama locally.
+2. Point LiteLLM at Ollama.
+3. Point Rocky at LiteLLM.
 
-## Layout
+That keeps Rocky using one provider contract while you still run Ollama underneath.
 
-Global:
+## New student-agent layout
 
-```text
-~/.config/rocky/
-  config.yaml
-  AGENTS.md
-  skills/
-  memories/
-  providers/
-  policies/
-  caches/
-```
-
-Project:
+Project state now includes a dedicated student notebook:
 
 ```text
 .rocky/
-  config.yaml
-  config.local.yaml
   sessions/
   memories/
-    auto/
-    candidates/
-    project_brief.md
   skills/
-    bundled/
-    project/
-    learned/
+  student/
+    README.md
+    profile.md
+    notebook.jsonl
+    knowledge/
+    patterns/
+    examples/
   episodes/
-    support/
-    query/
   policies/
   artifacts/
   traces/
@@ -136,37 +123,39 @@ Project:
 - interactive REPL (`rocky`)
 - one-shot execution (`rocky "task"`)
 - deterministic slash commands:
-  - `/help`, `/tools`, `/skills`, `/harness`, `/memory`, `/learned`, `/permissions`, `/context`, `/status`, `/sessions`, `/resume`, `/new`, `/config`, `/doctor`, `/why`, `/compact`, `/plan`, `/learn`, `/undo`, `/init`, `/trace`
-- workspace discovery and file-first `.rocky/` state
-- global + project + local config precedence
-- configurable providers with **Ollama** default and **OpenAI** compatibility
-- support for both **OpenAI chat-completions** and **Responses API** styles
+  - `/help`, `/tools`, `/skills`, `/harness`, `/memory`, `/student`, `/threads`, `/teach`, `/learned`, `/permissions`, `/context`, `/status`, `/sessions`, `/resume`, `/new`, `/config`, `/doctor`, `/why`, `/compact`, `/freeze`, `/plan`, `/learn`, `/undo`, `/init`, `/trace`
+- richer TUI shortcuts:
+  - `Ctrl-R` resume
+  - `Ctrl-N` new session
+  - `Ctrl-T` status
+  - `Ctrl-F` freeze
+  - `Ctrl-G` student status
+- support for **OpenAI chat**, **OpenAI responses**, and **LiteLLM chat** styles
 - typed tools for filesystem, shell, python, web, browser, spreadsheets, and git
-- `SKILL.md` loading from bundled/global/project/learned/compat directories
-- support episodes, query episodes, learned skill generation, rollback, and a slow-learner report
+- `SKILL.md` loading from bundled/global/project/learned scopes
 - verifier hooks and `/why` traceability
 
-## Learning loop
+## Teacher → student loop
 
-1. Run Rocky on a task.
-2. Correct Rocky with `/learn <feedback>`.
-3. Rocky writes a support episode and a candidate learned `SKILL.md`.
-4. Similar later tasks can retrieve that learned behavior.
-5. Verified successful reuse can promote a candidate skill.
+1. Run Rocky on real tasks.
+2. Correct it with `/teach <feedback>` when you want durable notebook guidance.
+3. Use `/learn <feedback>` when you want both notebook feedback and a learned `SKILL.md`.
+4. Rocky retrieves matching notes, patterns, examples, memories, and learned skills on later runs.
+5. Over time Rocky becomes more standalone for your project style.
 
-## Tuning and handoff docs
+## Recommended docs
 
-For serious tuning work, start with:
-
-- `UPGRADE_REPORT_v0.3.0.md`
-- `ROCKY_TUNING_KNOWLEDGE.md`
-- `RELEASE_v0.3.0.md`
+- `RELEASE_v1.0.1.md`
+- `UPGRADE_REPORT_v1.0.1.md`
+- `docs/TOOL_EXECUTION_NOTES_v1.0.1.md`
+- `docs/STUDENT_AGENT.md`
+- `docs/LITELLM_MIGRATION.md`
+- `docs/RESEARCH_NOTES_2026-04-06.md`
 
 ## Notes
 
 - Browser tools use Playwright. If browser binaries are missing, Rocky degrades cleanly and tells the operator to run `playwright install`.
 - Web search is implemented as a best-effort DuckDuckGo/Brave HTML fallback.
 - Browser and web tools honor `ROCKY_TOOL_PROXY` for explicit proxy routing.
-- Example: `export ROCKY_TOOL_PROXY=http://127.0.0.1:8080`
 - The slow learner still emits an inspectable heuristic report instead of weight updates.
 - Live agentic tests skip automatically when the configured local provider is unreachable.

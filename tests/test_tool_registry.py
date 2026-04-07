@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from rocky.app import RockyRuntime
+from rocky.tools.base import Tool
 
 
 def test_runtime_inspection_prefers_runtime_tools_first(tmp_path: Path) -> None:
@@ -89,3 +90,30 @@ def test_automation_tools_keep_write_and_verify_path(tmp_path: Path) -> None:
 
     assert names[:3] == ["write_file", "read_file", "run_shell_command"]
     assert "glob_paths" not in names
+
+
+
+def test_openai_tool_schema_defaults_to_closed_object_properties() -> None:
+    tool = Tool(
+        name="demo",
+        description="demo",
+        input_schema={
+            "properties": {
+                "path": {"type": "string"},
+                "options": {
+                    "properties": {
+                        "recursive": {"type": "boolean"},
+                    }
+                },
+            },
+            "required": ["path"],
+        },
+        family="filesystem",
+        handler=lambda ctx, args: None,  # type: ignore[arg-type]
+    )
+
+    schema = tool.openai_schema()["function"]["parameters"]
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["options"]["type"] == "object"
+    assert schema["properties"]["options"]["additionalProperties"] is False

@@ -13,6 +13,9 @@ def _append_context_blocks(parts: list[str], context: ContextPackage) -> None:
         unresolved = context.thread_summary.get("unresolved_questions") or []
         if unresolved:
             parts.append("Unresolved questions: " + "; ".join(str(item) for item in unresolved[:6]))
+        recent_tools = context.thread_summary.get("recent_tools") or []
+        if recent_tools:
+            parts.append("Recent tools: " + ", ".join(str(item) for item in recent_tools[:8]))
     if context.evidence_summary:
         parts.append("## Evidence summary")
         for claim in context.evidence_summary.get("claims", [])[:10]:
@@ -36,6 +39,15 @@ def _append_context_blocks(parts: list[str], context: ContextPackage) -> None:
             parts.append("If the answer depends on missing support, say so explicitly instead of sounding certain.")
         if target.get("do_not_repeat_context"):
             parts.append("Delta-answering required: answer the current ask directly and do not replay prior setup unless strictly necessary.")
+    if context.student_profile:
+        parts.append("## Student profile")
+        parts.append(str(context.student_profile.get("text", ""))[:4000])
+    if context.student_notes:
+        parts.append("## Student notebook")
+        for item in context.student_notes[:6]:
+            header = f"### {item.get('title', item.get('id', 'note'))} [{item.get('kind', 'note')}]"
+            parts.append(header)
+            parts.append(str(item.get("text", ""))[:4000])
     if context.handoffs:
         parts.append("## Project handoff")
         for item in context.handoffs:
@@ -72,7 +84,7 @@ def build_system_prompt(
     task_signature: str = "",
 ) -> str:
     parts: list[str] = [
-        "You are Rocky v0.3.0, a CLI-first, file-first, workspace-aware, local-model-first general agent.",
+        "You are Rocky v1.0.1, a CLI-first, file-first, workspace-aware, local-model-first teachable student agent.",
         "Be concise, concrete, and operational.",
         "Observation beats narration: prefer tool-observed facts and explicit user assertions over your own inference.",
         "Do not pretend to remember earlier turns unless they are actually present in the conversation context. If asked about previous questions or messages and they are not available, say that clearly.",
@@ -80,7 +92,8 @@ def build_system_prompt(
         "Unless the user explicitly asked for an external path, keep created, copied, edited, and verified files inside the current workspace. Prefer relative workspace paths and never invent placeholder roots like `/workspace`.",
         "The active execution directory is the default project focus. Favor it for shell commands, reads, and new files unless the user asks for another exact path.",
         "Project handoff summaries come from earlier sessions in the same workspace; use them to continue work, but re-check machine facts with tools before claiming them.",
-        "If the user asks to continue, resume, pick up, or keep working in this workspace, start from any retrieved handoff or learned skill before doing broad exploration. Treat those paths and constraints as the default working context until live tool results prove otherwise.",
+        "If the user asks to continue, resume, pick up, or keep working in this workspace, start from any retrieved handoff, student note, pattern, or learned skill before doing broad exploration. Treat those paths and constraints as the default working context until live tool results prove otherwise.",
+        "Student notes are durable teacher feedback. Reuse them aggressively when they match the task, but verify environment facts live instead of assuming they still hold.",
         "Unsupported deterministic claims are forbidden. If support is missing, gather evidence or state the uncertainty explicitly.",
     ]
     if context.tool_families:
@@ -97,7 +110,7 @@ def build_system_prompt(
         parts.append("If the user asks about shell history, current shell, current directory, user identity, home directory, or environment facts, inspect them with shell tools first. Prefer dedicated shell inspection/history tools over inventing commands.")
         parts.append("If the user asks what software or versions are installed locally, or where a local executable lives, inspect the local runtime with shell tools first. When available, prefer the `inspect_runtime_versions` tool before falling back to raw shell commands. Never claim local versions, paths, or command output from memory.")
         parts.append("For shell execution tasks with follow-up analysis, do not collapse that into one tool call. Run the command, inspect the output, and when the output becomes a produced file or structured result, verify it with another tool step.")
-        parts.append("If the prompt references an existing workspace script such as `x.sh`, execute that workspace file directly. If execution returns permission denied, retry with an interpreter. If the script returns structured text such as JSON, parse or inspect that observed result before deciding. The current command output from this turn is the source of truth. Do not substitute previous traces, memories, or handoff summaries. If the tool output includes an auth, permission, network, or other error payload, acknowledge the failure instead of guessing.")
+        parts.append("If the prompt references an existing workspace script such as `x.sh`, execute that workspace file directly. If execution returns permission denied, retry with an interpreter. If the script returns structured text such as JSON, parse or inspect that observed result before deciding. The current command output from this turn is the source of truth. Do not substitute previous traces, memories, or handoff summaries for fresh command output. Student notes may guide strategy, but they do not replace current tool results. If the tool output includes an auth, permission, network, or other error payload, acknowledge the failure instead of guessing.")
         parts.append("Do not create planning files, setup scripts, or placeholder outputs unless the user explicitly asked for them. If the user did not ask for a result file, do not create one.")
     if task_signature == "local/runtime_inspection":
         parts.append("For local runtime or installed-software questions, start with `inspect_runtime_versions`, then use at least one confirming shell command before answering version or path claims.")

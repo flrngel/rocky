@@ -33,6 +33,9 @@ class CommandRegistry:
             "skills",
             "harness",
             "memory",
+            "student",
+            "threads",
+            "teach",
             "learned",
             "permissions",
             "context",
@@ -66,6 +69,10 @@ class CommandRegistry:
             feedback = stripped[len("learn ") :].strip()
             data = self.runtime.learn(feedback)
             return CommandResult("learn", dump_yaml(data), data)
+        if stripped.startswith("teach "):
+            feedback = stripped[len("teach ") :].strip()
+            data = self.runtime.teach(feedback)
+            return CommandResult("teach", dump_yaml(data), data)
         parts = shlex.split(stripped)
         raw_name = parts[0]
         name = self.aliases.get(raw_name, raw_name)
@@ -88,6 +95,12 @@ class CommandRegistry:
                 "- `/memory add <name> <text>` add global manual memory",
                 "- `/memory set <name> <text>` create or replace global manual memory",
                 "- `/memory remove <name>` remove global manual memory",
+                "- `/student` show student notebook status",
+                "- `/student list [kind]` list notebook entries",
+                "- `/student show <entry_id>` show one student note",
+                "- `/student add <kind> <title> <text>` add knowledge, pattern, or example",
+                "- `/threads` show active and recent task threads",
+                "- `/teach <feedback>` write durable teacher feedback to Rocky's notebook",
                 "- `/learned` list learned skills",
                 "- `/permissions` show permission state",
                 "- `/context` show last assembled context",
@@ -125,6 +138,10 @@ class CommandRegistry:
     def cmd_harness(self, args: list[str]) -> CommandResult:
         data = self.runtime.harness_inventory()
         return CommandResult("harness", dump_yaml(data), data)
+
+    def cmd_threads(self, args: list[str]) -> CommandResult:
+        data = self.runtime.thread_inventory()
+        return CommandResult("threads", dump_yaml(data), data)
 
     def cmd_memory(self, args: list[str]) -> CommandResult:
         if not args or args[0] == "list":
@@ -164,6 +181,33 @@ class CommandRegistry:
 
         text = "Usage: /memory [list|show|add|set|remove]"
         return CommandResult("memory", text, {"ok": False, "reason": text})
+
+    def cmd_student(self, args: list[str]) -> CommandResult:
+        if not args or args[0] in {"status", "show-status"}:
+            data = self.runtime.student_status()
+            return CommandResult("student", dump_yaml(data), data)
+        action = args[0]
+        if action == "list":
+            kind = args[1] if len(args) > 1 else None
+            data = self.runtime.student_inventory(kind)
+            return CommandResult("student", dump_yaml(data), data)
+        if action == "show":
+            if len(args) < 2:
+                text = "Usage: /student show <entry_id>"
+                return CommandResult("student", text, {"ok": False, "reason": text})
+            data = self.runtime.student_show(args[1])
+            return CommandResult("student", dump_yaml(data), data)
+        if action == "add":
+            if len(args) < 4:
+                text = "Usage: /student add <kind> <title> <text>"
+                return CommandResult("student", text, {"ok": False, "reason": text})
+            kind = args[1]
+            title = args[2]
+            text_value = " ".join(args[3:]).strip()
+            data = self.runtime.student_add(kind, title, text_value)
+            return CommandResult("student", dump_yaml(data), data)
+        text = "Usage: /student [status|list|show|add]"
+        return CommandResult("student", text, {"ok": False, "reason": text})
 
     def cmd_learned(self, args: list[str]) -> CommandResult:
         data = {"learned": self.runtime.learning_manager.list_learned()}

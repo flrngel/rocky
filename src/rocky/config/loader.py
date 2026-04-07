@@ -8,8 +8,17 @@ from rocky.util.io import read_yaml, write_yaml
 
 
 DEFAULT_CONFIG_DICT = {
-    'active_provider': 'ollama',
+    'active_provider': 'litellm_local',
     'providers': {
+        'litellm_local': {
+            'style': 'litellm_chat',
+            'base_url': 'http://localhost:4000',
+            'api_key_env': 'LITELLM_API_KEY',
+            'model': 'ollama_chat/qwen3.5:4b',
+            'thinking': True,
+            'reasoning_effort': 'medium',
+            'store': False,
+        },
         'ollama': {
             'style': 'openai_chat',
             'base_url': 'http://localhost:11434/v1',
@@ -24,6 +33,7 @@ DEFAULT_CONFIG_DICT = {
             'api_key_env': 'OPENAI_API_KEY',
             'model': 'gpt-5.2',
             'thinking': True,
+            'reasoning_effort': 'medium',
             'store': False,
         },
     },
@@ -82,13 +92,16 @@ class ConfigLoader:
                 timeout_s=int(data.get('timeout_s', 120)),
                 store=bool(data.get('store', False)),
                 extra_headers=data.get('extra_headers', {}) or {},
+                reasoning_effort=(str(data.get('reasoning_effort')).strip() if data.get('reasoning_effort') not in {None, ''} else None),
+                tool_choice=(str(data.get('tool_choice')).strip() if data.get('tool_choice') not in {None, ''} else None),
+                extra_body=data.get('extra_body', {}) or {},
             )
             for name, data in (merged.get('providers') or {}).items()
         }
         if not providers:
             providers = AppConfig.default().providers
         return AppConfig(
-            active_provider=merged.get('active_provider', 'ollama'),
+            active_provider=merged.get('active_provider', 'litellm_local'),
             providers=providers,
             permissions=PermissionConfig(**(merged.get('permissions') or {})),
             tools=ToolConfig(**(merged.get('tools') or {})),

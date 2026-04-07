@@ -9,6 +9,45 @@ from rocky.core.permissions import PermissionManager, PermissionRequest
 from rocky.util.text import safe_json
 
 
+def _sanitize_input_schema(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_sanitize_input_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    schema = {key: _sanitize_input_schema(item) for key, item in value.items()}
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        schema_type = next(
+            (item for item in schema_type if item in {"object", "array", "string", "number", "integer", "boolean"}),
+            None,
+        )
+    if not schema_type:
+        if any(key in schema for key in ("properties", "required", "additionalProperties")):
+            schema_type = "object"
+        elif any(key in schema for key in ("items", "prefixItems")):
+            schema_type = "array"
+        elif any(key in schema for key in ("enum", "const", "format")):
+            schema_type = "string"
+    if schema_type:
+        schema["type"] = schema_type
+
+    if schema.get("type") == "object":
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            properties = {}
+        schema["properties"] = {key: _sanitize_input_schema(item) for key, item in properties.items()}
+        schema.setdefault("required", [])
+        schema.setdefault("additionalProperties", False)
+    elif schema.get("type") == "array":
+        schema["items"] = _sanitize_input_schema(schema.get("items") or {"type": "string"})
+
+    for key in ("oneOf", "anyOf", "allOf", "prefixItems"):
+        if key in schema:
+            schema[key] = _sanitize_input_schema(schema[key])
+    return schema
+
+
 @dataclass(slots=True)
 class ToolResult:
     success: bool
@@ -143,6 +182,6 @@ class Tool:
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.input_schema,
+                "parameters": _sanitize_input_schema(self.input_schema),
             },
         }

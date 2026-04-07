@@ -13,7 +13,7 @@ from rocky.util.time import utc_iso
 
 CLAIM_WORD_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 PATH_RE = re.compile(r"(?<![A-Za-z0-9])(?:\.{1,2}/)?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+")
-REFERENCE_RE = re.compile(r"\b(?:it|that|those|them|this|these|again|same|continue|resume|rerun|re-run|fix|update|improve)\b", re.I)
+REFERENCE_RE = re.compile(r"\b(?:it|that|those|them|this|these|again|same|continue|resume|rerun|re-run|fix|update|improve|carry on|keep going|keep working|pick up|pick back up|next step|what next|finish it|finish this)\b", re.I)
 
 
 _PROVENANCE_STRENGTH = {
@@ -252,9 +252,11 @@ class ActiveTaskThread:
         self.verification_history.append({"at": utc_iso(), **verification})
         self.touch()
         if verification.get("status") == "pass":
-            self.status = "completed"
+            self.status = "awaiting_user"
         elif verification.get("status") == "fail":
-            self.status = "failed"
+            self.status = "needs_repair"
+        else:
+            self.status = "active"
 
     def summary_text(self) -> str:
         latest_prompt = self.prompt_history[-1]["prompt"] if self.prompt_history else ""
@@ -685,12 +687,20 @@ class EvidenceAccumulator:
 
 
 class ThreadRegistry:
-    SESSION_KEY = "task_threads_v0_3"
-    CURRENT_KEY = "current_thread_id_v0_3"
+    SESSION_KEY = "task_threads_v1_0"
+    LEGACY_SESSION_KEYS = ("task_threads_v1_0", "task_threads_v0_3")
+    CURRENT_KEY = "current_thread_id_v1_0"
+    LEGACY_CURRENT_KEYS = ("current_thread_id_v1_0", "current_thread_id_v0_3")
+    CONTINUABLE_STATUSES = {"active", "awaiting_user", "needs_repair"}
 
     def __init__(self, session) -> None:
         self.session = session
-        payload = dict(session.meta.get(self.SESSION_KEY) or {})
+        payload: dict[str, Any] = {}
+        for key in self.LEGACY_SESSION_KEYS:
+            candidate = session.meta.get(key)
+            if isinstance(candidate, dict) and candidate:
+                payload = dict(candidate)
+                break
         self.threads: dict[str, ActiveTaskThread] = {}
         self.evidence: dict[str, EvidenceGraph] = {}
         for thread_id, item in payload.items():
@@ -706,7 +716,12 @@ class ThreadRegistry:
                 self.evidence[thread_id] = EvidenceGraph.from_record(evidence_payload)
             except Exception:
                 self.evidence[thread_id] = EvidenceGraph(thread_id=thread_id)
-        self.current_thread_id = str(session.meta.get(self.CURRENT_KEY) or "") or None
+        self.current_thread_id = None
+        for key in self.LEGACY_CURRENT_KEYS:
+            current = str(session.meta.get(key) or "") or None
+            if current:
+                self.current_thread_id = current
+                break
 
     def save(self) -> None:
         payload: dict[str, Any] = {}
@@ -716,13 +731,17 @@ class ThreadRegistry:
                 "evidence": self.evidence.get(thread_id, EvidenceGraph(thread_id=thread_id)).as_record(),
             }
         self.session.meta[self.SESSION_KEY] = payload
+        self.session.meta["task_threads_v0_3"] = payload
         if self.current_thread_id:
             self.session.meta[self.CURRENT_KEY] = self.current_thread_id
+            self.session.meta["current_thread_id_v0_3"] = self.current_thread_id
 
     def current(self) -> ActiveTaskThread | None:
         if self.current_thread_id and self.current_thread_id in self.threads:
-            return self.threads[self.current_thread_id]
-        active = [thread for thread in self.threads.values() if thread.status == "active"]
+            thread = self.threads[self.current_thread_id]
+            if thread.status in self.CONTINUABLE_STATUSES:
+                return thread
+        active = [thread for thread in self.threads.values() if thread.status in self.CONTINUABLE_STATUSES]
         if active:
             active.sort(key=lambda item: item.updated_at, reverse=True)
             self.current_thread_id = active[0].thread_id
@@ -736,7 +755,7 @@ class ThreadRegistry:
         return self.evidence.setdefault(current.thread_id, EvidenceGraph(thread_id=current.thread_id))
 
     def active_threads(self) -> list[ActiveTaskThread]:
-        rows = [thread for thread in self.threads.values() if thread.status == "active"]
+        rows = [thread for thread in self.threads.values() if thread.status in self.CONTINUABLE_STATUSES]
         rows.sort(key=lambda item: item.updated_at, reverse=True)
         return rows
 
@@ -774,6 +793,9 @@ class ThreadRegistry:
         task_family: str,
         parent_thread_id: str | None = None,
     ) -> ActiveTaskThread:
+        current = self.current()
+        if current is not None and current.status == "active":
+            current.status = "awaiting_user"
         thread_id = _new_id("thread", task_signature)
         thread = ActiveTaskThread(
             thread_id=thread_id,
@@ -791,6 +813,10 @@ class ThreadRegistry:
     def use_thread(self, thread_id: str) -> ActiveTaskThread | None:
         if thread_id not in self.threads:
             return None
+        if self.current_thread_id and self.current_thread_id in self.threads and self.current_thread_id != thread_id:
+            previous = self.threads[self.current_thread_id]
+            if previous.status == "active":
+                previous.status = "awaiting_user"
         self.current_thread_id = thread_id
         thread = self.threads[thread_id]
         thread.status = "active"
@@ -835,6 +861,7 @@ class ThreadRegistry:
 
 def continuation_signal_score(prompt: str, thread: ActiveTaskThread, *, execution_cwd: str, workspace_root: str) -> tuple[float, list[str]]:
     lowered = prompt.lower().strip()
+    prompt_tokens = tokenize_keywords(prompt)
     reasons: list[str] = []
     score = 0.0
     if thread.workspace_root == workspace_root:
@@ -849,13 +876,20 @@ def continuation_signal_score(prompt: str, thread: ActiveTaskThread, *, executio
     if REFERENCE_RE.search(lowered):
         score += 2.0
         reasons.append("reference_marker")
-    overlap = tokenize_keywords(prompt) & (set(thread.entity_refs) | set(thread.artifact_refs) | tokenize_keywords(thread.summary_text()))
+    if any(phrase in lowered for phrase in ("continue", "resume", "keep going", "keep working", "carry on", "pick up", "pick back up", "same task", "what next", "next step", "finish it", "finish this")):
+        score += 1.4
+        reasons.append("explicit_continuation_phrase")
+    overlap = prompt_tokens & (set(thread.entity_refs) | set(thread.artifact_refs) | tokenize_keywords(thread.summary_text()))
     if overlap:
         score += min(3.0, 0.8 + len(overlap) * 0.6)
         reasons.append("artifact_entity_overlap")
+    task_sig_tokens = tokenize_keywords(thread.task_signature.replace("/", " "))
+    if prompt_tokens & task_sig_tokens:
+        score += 0.8
+        reasons.append("task_signature_overlap")
     if thread.unresolved_questions:
         q_tokens = tokenize_keywords(" ".join(thread.unresolved_questions))
-        if q_tokens & tokenize_keywords(prompt):
+        if q_tokens & prompt_tokens:
             score += 2.0
             reasons.append("matches_unresolved_question")
     if thread.task_signature.startswith("conversation/") and any(word in lowered for word in ("run", "execute", "inspect", "check")):

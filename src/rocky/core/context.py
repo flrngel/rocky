@@ -8,6 +8,7 @@ from rocky.core.runtime_state import ActiveTaskThread, AnswerContract, EvidenceG
 from rocky.memory.retriever import MemoryRetriever
 from rocky.session.store import SessionStore
 from rocky.skills.retriever import SkillRetriever
+from rocky.student.store import StudentStore
 from rocky.util.io import read_text
 
 
@@ -23,6 +24,8 @@ class ContextPackage:
     evidence_summary: dict[str, Any] = field(default_factory=dict)
     contradictions: list[dict[str, Any]] = field(default_factory=list)
     answer_target: dict[str, Any] = field(default_factory=dict)
+    student_profile: dict[str, Any] = field(default_factory=dict)
+    student_notes: list[dict[str, Any]] = field(default_factory=list)
 
     def summary(self) -> dict:
         return {
@@ -64,6 +67,17 @@ class ContextPackage:
             "evidence_summary": self.evidence_summary,
             "contradictions": self.contradictions,
             "answer_target": self.answer_target,
+            "student_profile": self.student_profile,
+            "student_notes": [
+                {
+                    "id": item.get("id"),
+                    "kind": item.get("kind"),
+                    "title": item.get("title"),
+                    "task_signature": item.get("task_signature"),
+                    "thread_id": item.get("thread_id"),
+                }
+                for item in self.student_notes
+            ],
         }
 
 
@@ -76,6 +90,7 @@ class ContextBuilder:
         skill_retriever: SkillRetriever,
         memory_retriever: MemoryRetriever,
         session_store: SessionStore | None = None,
+        student_store: StudentStore | None = None,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.execution_root = execution_root.resolve()
@@ -83,6 +98,7 @@ class ContextBuilder:
         self.skill_retriever = skill_retriever
         self.memory_retriever = memory_retriever
         self.session_store = session_store
+        self.student_store = student_store
 
     def _workspace_focus(self) -> dict[str, str]:
         execution_cwd = "."
@@ -103,6 +119,11 @@ class ContextBuilder:
             return {}
         latest_prompt = thread.prompt_history[-1]["prompt"] if thread.prompt_history else ""
         latest_answer = thread.answer_history[-1]["answer"] if thread.answer_history else ""
+        recent_tools = [
+            event.get("name")
+            for event in thread.tool_history[-8:]
+            if isinstance(event, dict) and event.get("type") == "tool_result" and event.get("name")
+        ]
         return {
             "thread_id": thread.thread_id,
             "task_family": thread.task_family,
@@ -114,6 +135,7 @@ class ContextBuilder:
             "unresolved_questions": thread.unresolved_questions[:6],
             "latest_prompt": latest_prompt[:500],
             "latest_answer": latest_answer[:500],
+            "recent_tools": recent_tools,
             "text": thread.summary_text(),
         }
 
@@ -152,6 +174,18 @@ class ContextBuilder:
             "corrections": evidence_graph.corrections[:8],
         }
         return summary, contradictions[:8]
+
+    def _student_context(
+        self,
+        prompt: str,
+        task_signature: str,
+        thread: ActiveTaskThread | None,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        if self.student_store is None:
+            return {}, []
+        profile = self.student_store.profile()
+        notes = self.student_store.retrieve(prompt, task_signature=task_signature, thread=thread, limit=5)
+        return profile, notes
 
     def build(
         self,
@@ -245,6 +279,7 @@ class ContextBuilder:
         thread_summary = self._thread_summary(active_thread)
         evidence_summary, contradictions = self._evidence_summary(evidence_graph)
         answer_target = answer_contract.as_record() if answer_contract is not None else {}
+        student_profile, student_notes = self._student_context(prompt, task_signature, active_thread)
         return ContextPackage(
             instructions=instructions,
             memories=memories,
@@ -256,4 +291,6 @@ class ContextBuilder:
             evidence_summary=evidence_summary,
             contradictions=contradictions,
             answer_target=answer_target,
+            student_profile=student_profile,
+            student_notes=student_notes,
         )

@@ -11,6 +11,7 @@ from rocky.core.agent import AgentCore, AgentResponse
 from rocky.core.context import ContextBuilder
 from rocky.core.permissions import PermissionManager
 from rocky.core.router import Lane, Router
+from rocky.core.runtime_state import ThreadRegistry
 from rocky.core.verifiers import VerifierRegistry
 from rocky.harness import DEFAULT_PHASES, harness_inventory as harness_catalog, scenarios_by_phase
 from rocky.learning.manager import LearningManager
@@ -20,6 +21,7 @@ from rocky.providers.registry import ProviderRegistry
 from rocky.session.store import SessionStore
 from rocky.skills.loader import SkillLoader
 from rocky.skills.retriever import SkillRetriever
+from rocky.student.store import StudentStore
 from rocky.tools.base import ToolContext
 from rocky.tools.registry import ToolRegistry
 from rocky.util.io import read_yaml, write_text
@@ -44,6 +46,7 @@ class RockyRuntime:
         provider_registry: ProviderRegistry,
         learning_manager: LearningManager,
         agent: AgentCore,
+        student_store: StudentStore,
         *,
         freeze_enabled: bool = False,
         verbose_enabled: bool = False,
@@ -62,6 +65,7 @@ class RockyRuntime:
         self.provider_registry = provider_registry
         self.learning_manager = learning_manager
         self.agent = agent
+        self.student_store = student_store
         self.freeze_enabled = freeze_enabled
         self.verbose_enabled = verbose_enabled
         self.freeze_session_seed = sessions.peek_current() if freeze_enabled else None
@@ -91,6 +95,7 @@ class RockyRuntime:
         skill_retriever = SkillRetriever(skill_loader.load_all())
         memory_store = MemoryStore(workspace.memories_dir, global_root / "memories", create_layout=not freeze)
         memory_retriever = MemoryRetriever(memory_store.load_all())
+        student_store = StudentStore(workspace.student_dir, create_layout=not freeze)
         instruction_candidates = workspace.instruction_candidates + [global_root / "AGENTS.md"]
         context_builder = ContextBuilder(
             workspace.root,
@@ -99,6 +104,7 @@ class RockyRuntime:
             skill_retriever,
             memory_retriever,
             sessions,
+            student_store,
         )
         tool_context = ToolContext(
             workspace.root,
@@ -146,6 +152,7 @@ class RockyRuntime:
             provider_registry=provider_registry,
             learning_manager=learning_manager,
             agent=agent,
+            student_store=student_store,
             freeze_enabled=freeze,
             verbose_enabled=verbose,
         )
@@ -163,6 +170,7 @@ class RockyRuntime:
             self.skill_retriever,
             self.memory_retriever,
             self.sessions,
+            self.student_store,
         )
         self.agent.context_builder = self.context_builder
 
@@ -258,6 +266,10 @@ class RockyRuntime:
             return dump_yaml(self.config_dict())
         if "permission" in lowered:
             return dump_yaml(self.permissions.explain())
+        if "student" in lowered or "teach" in lowered:
+            return dump_yaml(self.student_status())
+        if "thread" in lowered:
+            return dump_yaml(self.thread_inventory())
         if "memory" in lowered:
             return dump_yaml({"memory": self.memory_inventory()})
         if "status" in lowered:
@@ -295,6 +307,7 @@ class RockyRuntime:
             },
             "skills": len(self.skill_retriever.skills),
             "memories": len(self.memory_retriever.notes),
+            "student": self.student_store.status(),
             "learned_generation": self.learning_manager.current_generation(),
             "global_settings": self._config_source_snapshot("global", self.global_root / "config.yaml"),
             "project_settings": {
@@ -315,6 +328,8 @@ class RockyRuntime:
                 "execution_cwd": self.workspace.execution_relative,
             },
             "handoffs": [],
+            "student_profile": {},
+            "student_notes": [],
         }
 
     def why(self) -> dict[str, Any]:
@@ -328,6 +343,36 @@ class RockyRuntime:
 
     def memory_inventory(self) -> list[dict[str, Any]]:
         return self.memory_store.inventory()
+
+    def thread_inventory(self) -> dict[str, Any]:
+        current = self._status_session()
+        registry = ThreadRegistry(current) if current is not None else None
+        if registry is None:
+            return {"current_thread_id": None, "threads": []}
+        return {
+            "current_thread_id": registry.current_thread_id,
+            "threads": registry.thread_summary_records(limit=20),
+        }
+
+    def student_status(self) -> dict[str, Any]:
+        return self.student_store.status()
+
+    def student_inventory(self, kind: str | None = None) -> dict[str, Any]:
+        return self.student_store.inventory(kind)
+
+    def student_show(self, entry_id: str) -> dict[str, Any]:
+        note = self.student_store.get(entry_id)
+        if note is None:
+            return {"ok": False, "reason": f"student note not found: {entry_id}"}
+        return {"ok": True, "student": note}
+
+    def student_add(self, kind: str, title: str, text: str) -> dict[str, Any]:
+        if self.freeze_enabled:
+            return self._freeze_blocked_result("student add")
+        result = self.student_store.add(kind, title, text)
+        if result.get("ok"):
+            self.refresh_knowledge()
+        return result
 
     def memory_list(self) -> dict[str, Any]:
         rows = self.memory_inventory()
@@ -424,6 +469,14 @@ class RockyRuntime:
         task_family = str(thread_snapshot.get("task_family") or task_signature.split("/", 1)[0])
         thread_id = str(thread_snapshot.get("thread_id") or "") or None
         failure_class = self.agent.last_trace.get("verification", {}).get("failure_class")
+        note_result = self.student_store.record_feedback(
+            feedback,
+            prompt=self.agent.last_prompt,
+            answer=self.agent.last_answer,
+            task_signature=task_signature,
+            thread_id=thread_id,
+            failure_class=str(failure_class) if failure_class else None,
+        )
         result = self.learning_manager.learn_from_feedback(
             task_signature=task_signature,
             prompt=self.agent.last_prompt,
@@ -435,8 +488,28 @@ class RockyRuntime:
             task_family=task_family,
             failure_class=str(failure_class) if failure_class else None,
         )
+        result["student"] = note_result.get("entry")
         self.refresh_knowledge()
         return result
+
+    def teach(self, feedback: str) -> dict[str, Any]:
+        if self.freeze_enabled:
+            return self._freeze_blocked_result("teach", key="ok")
+        if not feedback.strip():
+            return {"ok": False, "reason": "feedback is required"}
+        if self.agent.last_prompt and self.agent.last_answer and self.agent.last_trace:
+            result = self.learn(feedback)
+            result["teachable"] = True
+            return result
+        note_result = self.student_store.record_feedback(feedback)
+        self.refresh_knowledge()
+        return {
+            "ok": bool(note_result.get("ok")),
+            "published": False,
+            "teachable": True,
+            "student": note_result.get("entry"),
+            "reason": note_result.get("reason") or None,
+        }
 
     def undo(self) -> dict[str, Any]:
         if self.freeze_enabled:
@@ -456,6 +529,7 @@ class RockyRuntime:
             "tool_count": len(self.tool_registry.tools),
             "skill_count": len(self.skill_retriever.skills),
             "memory_count": len(self.memory_retriever.notes),
+            "student_count": self.student_store.status().get("count", 0),
         }
 
     def compact_session(self) -> dict[str, Any]:
@@ -513,6 +587,7 @@ class RockyRuntime:
 
     def init_scaffold(self) -> dict[str, Any]:
         self.workspace.ensure_layout()
+        self.student_store.ensure_layout()
         if not (self.workspace.root / "AGENTS.md").exists():
             write_text(
                 self.workspace.root / "AGENTS.md",
@@ -525,4 +600,8 @@ class RockyRuntime:
             )
         if not self.workspace.config_path.exists():
             write_text(self.workspace.config_path, dump_yaml({"permissions": {"mode": "supervised"}}))
-        return {"initialized": True, "workspace_root": str(self.workspace.root)}
+        return {
+            "initialized": True,
+            "workspace_root": str(self.workspace.root),
+            "student_root": str(self.workspace.student_dir),
+        }

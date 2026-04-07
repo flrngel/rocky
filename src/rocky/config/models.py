@@ -9,6 +9,7 @@ from typing import Any
 class ProviderStyle(str, Enum):
     OPENAI_CHAT = 'openai_chat'
     OPENAI_RESPONSES = 'openai_responses'
+    LITELLM_CHAT = 'litellm_chat'
 
 
 @dataclass(slots=True)
@@ -24,6 +25,9 @@ class ProviderConfig:
     timeout_s: int = 120
     store: bool = False
     extra_headers: dict[str, str] = field(default_factory=dict)
+    reasoning_effort: str | None = None
+    tool_choice: str | None = None
+    extra_body: dict[str, Any] = field(default_factory=dict)
 
     def resolve_api_key(self) -> str | None:
         return self.api_key or (os.getenv(self.api_key_env) if self.api_key_env else None)
@@ -53,7 +57,7 @@ class LearningConfig:
 
 @dataclass(slots=True)
 class AppConfig:
-    active_provider: str = 'ollama'
+    active_provider: str = 'litellm_local'
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
     permissions: PermissionConfig = field(default_factory=PermissionConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)
@@ -68,8 +72,18 @@ class AppConfig:
     @staticmethod
     def default() -> 'AppConfig':
         return AppConfig(
-            active_provider='ollama',
+            active_provider='litellm_local',
             providers={
+                'litellm_local': ProviderConfig(
+                    name='litellm_local',
+                    style=ProviderStyle.LITELLM_CHAT,
+                    base_url='http://localhost:4000',
+                    api_key_env='LITELLM_API_KEY',
+                    model='ollama_chat/qwen3.5:4b',
+                    thinking=True,
+                    reasoning_effort='medium',
+                    store=False,
+                ),
                 'ollama': ProviderConfig(
                     name='ollama',
                     style=ProviderStyle.OPENAI_CHAT,
@@ -86,6 +100,7 @@ class AppConfig:
                     api_key_env='OPENAI_API_KEY',
                     model='gpt-5.2',
                     thinking=True,
+                    reasoning_effort='medium',
                     store=False,
                 ),
             },

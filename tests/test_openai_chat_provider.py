@@ -375,3 +375,128 @@ def test_complete_avoids_ollama_think_field_for_non_ollama_chat_endpoint() -> No
     )
 
     assert "think" not in fake_client.calls[0]["json"]
+
+
+
+def test_run_with_tools_parses_dict_arguments_and_keeps_null_assistant_content() -> None:
+    provider = OpenAIChatProvider(ProviderConfig(name="ollama"))
+    captured_arguments: list[dict] = []
+    fake_client = _FakeClient(
+        [
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "function": {
+                                        "name": "read_file",
+                                        "arguments": {"path": "README.md"},
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Read it.",
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+            },
+        ]
+    )
+    provider._client = lambda: fake_client  # type: ignore[method-assign]
+
+    response = provider.run_with_tools(
+        system_prompt="You are Rocky.",
+        messages=[Message(role="user", content="read the readme")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read file",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        execute_tool=lambda name, arguments: captured_arguments.append(arguments) or json.dumps({"success": True, "data": {"path": "README.md"}}),
+        max_rounds=1,
+    )
+
+    assert response.text == "Read it."
+    assert captured_arguments == [{"path": "README.md"}]
+    replay_messages = fake_client.calls[1]["json"]["messages"]
+    assistant_message = next(message for message in replay_messages if message.get("role") == "assistant" and message.get("tool_calls"))
+    tool_message = next(message for message in replay_messages if message.get("role") == "tool")
+    assert assistant_message["content"] is None
+    assert assistant_message["tool_calls"][0]["id"] == "call_1"
+    assert tool_message["tool_call_id"] == "call_1"
+
+
+
+def test_run_with_tools_supports_deprecated_function_call_shape() -> None:
+    provider = OpenAIChatProvider(ProviderConfig(name="ollama"))
+    captured_arguments: list[dict] = []
+    fake_client = _FakeClient(
+        [
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "function_call": {
+                                "name": "run_python",
+                                "arguments": {"code": "print(1)"},
+                            },
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Done.",
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+            },
+        ]
+    )
+    provider._client = lambda: fake_client  # type: ignore[method-assign]
+
+    response = provider.run_with_tools(
+        system_prompt="You are Rocky.",
+        messages=[Message(role="user", content="run the code")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_python",
+                    "description": "Run python",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        execute_tool=lambda name, arguments: captured_arguments.append(arguments) or json.dumps({"success": True, "data": {"stdout": "1\n"}}),
+        max_rounds=1,
+    )
+
+    assert response.text == "Done."
+    assert captured_arguments == [{"code": "print(1)"}]
+    replay_messages = fake_client.calls[1]["json"]["messages"]
+    assistant_message = next(message for message in replay_messages if message.get("role") == "assistant" and message.get("tool_calls"))
+    tool_message = next(message for message in replay_messages if message.get("role") == "tool")
+    assert assistant_message["tool_calls"][0]["function"]["name"] == "run_python"
+    assert tool_message["tool_call_id"] == "call_1"
