@@ -118,6 +118,74 @@ class ContinuationResolver:
 
 
 class Router:
+    TASK_SIGNATURE_PROFILES: dict[str, dict[str, Any]] = {
+        'meta/runtime': {
+            'lane': Lane.META,
+            'task_class': TaskClass.META,
+            'risk': 'low',
+            'tool_families': [],
+        },
+        'repo/shell_execution': {
+            'lane': Lane.STANDARD,
+            'task_class': TaskClass.REPO,
+            'risk': 'medium',
+            'tool_families': ['filesystem', 'shell', 'python', 'git'],
+        },
+        'repo/shell_inspection': {
+            'lane': Lane.STANDARD,
+            'task_class': TaskClass.REPO,
+            'risk': 'medium',
+            'tool_families': ['shell', 'filesystem'],
+        },
+        'local/runtime_inspection': {
+            'lane': Lane.STANDARD,
+            'task_class': TaskClass.REPO,
+            'risk': 'medium',
+            'tool_families': ['shell'],
+        },
+        'site/understanding/general': {
+            'lane': Lane.STANDARD,
+            'task_class': TaskClass.SITE,
+            'risk': 'medium',
+            'tool_families': ['web', 'browser', 'filesystem'],
+        },
+        'research/live_compare/general': {
+            'lane': Lane.STANDARD,
+            'task_class': TaskClass.RESEARCH,
+            'risk': 'medium',
+            'tool_families': ['web', 'browser'],
+        },
+        'extract/general': {
+            'lane': Lane.STANDARD,
+            'task_class': TaskClass.EXTRACTION,
+            'risk': 'low',
+            'tool_families': ['filesystem', 'python', 'data'],
+        },
+        'data/spreadsheet/analysis': {
+            'lane': Lane.STANDARD,
+            'task_class': TaskClass.DATA,
+            'risk': 'medium',
+            'tool_families': ['filesystem', 'data', 'python'],
+        },
+        'repo/general': {
+            'lane': Lane.STANDARD,
+            'task_class': TaskClass.REPO,
+            'risk': 'medium',
+            'tool_families': ['filesystem', 'shell', 'git', 'python'],
+        },
+        'automation/general': {
+            'lane': Lane.STANDARD,
+            'task_class': TaskClass.AUTOMATION,
+            'risk': 'medium',
+            'tool_families': ['filesystem', 'shell', 'python'],
+        },
+        'conversation/general': {
+            'lane': Lane.STANDARD,
+            'task_class': TaskClass.CONVERSATION,
+            'risk': 'low',
+            'tool_families': [],
+        },
+    }
     META_EXACT = {
         'status',
         'help',
@@ -295,6 +363,28 @@ class Router:
                 'what model', 'which model', 'active model', 'provider am i using', 'model am i using', 'show permissions',
                 'show memory', 'show sessions', 'permission mode', 'session id',
             )
+        )
+
+    def decision_for_task_signature(
+        self,
+        task_signature: str,
+        *,
+        reasoning: str,
+        confidence: float = 0.78,
+        source: str = 'project_context',
+    ) -> RouteDecision | None:
+        profile = self.TASK_SIGNATURE_PROFILES.get(task_signature)
+        if profile is None:
+            return None
+        return RouteDecision(
+            lane=profile['lane'],
+            task_class=profile['task_class'],
+            risk=str(profile['risk']),
+            reasoning=reasoning,
+            tool_families=list(profile['tool_families']),
+            task_signature=task_signature,
+            confidence=confidence,
+            source=source,
         )
 
     def _lexical_route(self, prompt: str) -> RouteDecision:

@@ -21,7 +21,8 @@ from rocky.providers.base import ProviderResponse
 from rocky.providers.registry import ProviderRegistry
 from rocky.session.store import Session, SessionStore
 from rocky.tools.registry import ToolRegistry
-from rocky.util.text import extract_json_candidate, safe_json
+from rocky.util.io import read_text
+from rocky.util.text import extract_json_candidate, safe_json, tokenize_keywords
 from rocky.util.time import utc_iso
 
 
@@ -42,6 +43,58 @@ class ExecutionOptions:
 
 
 class AgentCore:
+    _BACKCHANNEL_TOKENS = {
+        "bye",
+        "cool",
+        "goodbye",
+        "great",
+        "hello",
+        "hey",
+        "hi",
+        "kk",
+        "nice",
+        "no",
+        "nope",
+        "ok",
+        "okay",
+        "sure",
+        "thanks",
+        "thank",
+        "thx",
+        "yep",
+        "yes",
+    }
+    _TASK_SIGNATURE_DEFAULTS = {
+        "repo/*": "repo/general",
+        "automation/*": "automation/general",
+        "extract/*": "extract/general",
+        "data/*": "data/spreadsheet/analysis",
+        "local/*": "local/runtime_inspection",
+        "research/*": "research/live_compare/general",
+        "site/*": "site/understanding/general",
+    }
+    _TASK_SIGNATURE_BIAS = {
+        "repo/shell_execution": 4,
+        "automation/general": 3,
+        "data/spreadsheet/analysis": 3,
+        "extract/general": 2,
+        "repo/general": 2,
+        "repo/shell_inspection": 2,
+        "local/runtime_inspection": 2,
+        "research/live_compare/general": 1,
+        "site/understanding/general": 1,
+    }
+    _SHELLISH_MARKERS = (
+        "```bash",
+        "available tools",
+        "print json",
+        "print output",
+        "run_shell_command",
+        "stdout",
+        "uv run ",
+        "workflow",
+    )
+
     def __init__(
         self,
         router: Router,
@@ -75,6 +128,138 @@ class AgentCore:
         self.last_context: dict[str, Any] | None = None
         self.answer_contract_builder = AnswerContractBuilder()
         self.evidence_accumulator = EvidenceAccumulator()
+
+    def _looks_like_backchannel_prompt(self, prompt: str) -> bool:
+        words = re.findall(r"[a-z0-9_.+-]+", prompt.lower())
+        if not words or len(words) > 4:
+            return False
+        return all(word in self._BACKCHANNEL_TOKENS for word in words)
+
+    def _looks_like_atomic_workspace_task(self, prompt: str) -> bool:
+        text = prompt.strip()
+        if not text or text.startswith("/") or len(text) > 80:
+            return False
+        if "\n" in text or "```" in text:
+            return False
+        if self._looks_like_backchannel_prompt(text):
+            return False
+        words = re.findall(r"[a-z0-9_.+-]+", text.lower())
+        return 0 < len(words) <= 8
+
+    def _resolve_project_task_signature(self, raw_signature: str) -> str | None:
+        signature = raw_signature.strip()
+        if not signature or signature == "conversation/general":
+            return None
+        if signature.endswith("*"):
+            return self._TASK_SIGNATURE_DEFAULTS.get(signature)
+        return signature
+
+    def _preview_instruction_texts(self) -> list[str]:
+        texts: list[str] = []
+        for path in self.context_builder.instruction_candidates:
+            if not path.exists():
+                continue
+            try:
+                text = read_text(path)[:6000]
+            except Exception:
+                continue
+            if text.strip():
+                texts.append(text)
+        return texts
+
+    def _instruction_shell_bias(self, instruction_texts: list[str]) -> int:
+        score = 0
+        for text in instruction_texts:
+            lowered = text.lower()
+            score += sum(1 for marker in self._SHELLISH_MARKERS if marker in lowered)
+            if "json array" in lowered or "valid json" in lowered:
+                score += 2
+            if "your job is to" in lowered or "given product name" in lowered or "for a given" in lowered:
+                score += 1
+        return min(score, 8)
+
+    def _maybe_upgrade_route_from_project_context(
+        self,
+        prompt: str,
+        route: RouteDecision,
+    ) -> RouteDecision:
+        if route.lane == Lane.META or route.tool_families:
+            return route
+        if not route.task_signature.startswith("conversation/"):
+            return route
+        if not self._looks_like_atomic_workspace_task(prompt):
+            return route
+
+        prompt_lower = prompt.lower()
+        prompt_tokens = tokenize_keywords(prompt)
+        instruction_texts = self._preview_instruction_texts()
+        instruction_shell_bias = self._instruction_shell_bias(instruction_texts)
+        retrieved_skills = self.context_builder.skill_retriever.retrieve(prompt, route.task_signature, limit=6)
+        best_candidate: tuple[int, str, str] | None = None
+
+        for skill in retrieved_skills:
+            candidate_signatures = [
+                resolved
+                for resolved in (self._resolve_project_task_signature(item) for item in skill.task_signatures)
+                if resolved is not None
+            ]
+            if not candidate_signatures:
+                continue
+
+            skill_text = skill.body.lower()
+            shellish_skill = instruction_shell_bias >= 3 or any(marker in skill_text for marker in self._SHELLISH_MARKERS)
+            retrieval_tokens = tokenize_keywords(skill.name) | tokenize_keywords(skill.description)
+            for trigger in skill.triggers:
+                retrieval_tokens |= tokenize_keywords(trigger)
+            for keyword in skill.retrieval_keywords:
+                retrieval_tokens |= tokenize_keywords(keyword)
+            overlap = prompt_tokens & retrieval_tokens
+
+            skill_score = 0
+            if skill.scope == "project":
+                skill_score += 4
+            if skill.origin in {"project", "project_bundled", "compat", "learned"}:
+                skill_score += 1
+            if skill.origin == "learned":
+                skill_score += 2
+            if any(trigger.lower() in prompt_lower for trigger in skill.triggers if trigger.strip()):
+                skill_score += 6
+            skill_score += min(len(overlap), 4) * 2
+            if shellish_skill:
+                skill_score += 2
+
+            for signature in candidate_signatures:
+                signature_score = skill_score + self._TASK_SIGNATURE_BIAS.get(signature, 0)
+                if signature == "repo/shell_execution" and not shellish_skill:
+                    signature_score -= 2
+                if best_candidate is None or signature_score > best_candidate[0]:
+                    best_candidate = (signature_score, signature, skill.name)
+
+        if best_candidate is not None and best_candidate[0] >= 9:
+            upgraded = self.router.decision_for_task_signature(
+                best_candidate[1],
+                reasoning=f"Project skill `{best_candidate[2]}` maps this short workspace prompt to {best_candidate[1]}",
+                confidence=min(0.93, 0.55 + best_candidate[0] / 20),
+                source="project_context",
+            )
+            if upgraded is not None:
+                upgraded.continuation_decision = route.continuation_decision
+                upgraded.continued_thread_id = route.continued_thread_id
+                return upgraded
+
+        if instruction_shell_bias >= 6:
+            upgraded = self.router.decision_for_task_signature(
+                "repo/shell_execution",
+                reasoning="Project instructions define a shell-backed workflow for terse workspace inputs",
+                confidence=0.76,
+                source="project_context",
+            )
+            if upgraded is not None:
+                upgraded.continuation_decision = route.continuation_decision
+                upgraded.continued_thread_id = route.continued_thread_id
+                return upgraded
+
+        return route
 
     def _wants_prior_turn_context(self, prompt: str) -> bool:
         lowered = prompt.lower()
@@ -382,6 +567,14 @@ class AgentCore:
                 )
             )
         )
+        if (
+            route.source == "project_context"
+            and route.task_signature == "repo/shell_execution"
+            and self._looks_like_atomic_workspace_task(prompt)
+        ):
+            candidate = extract_json_candidate(text)
+            if candidate:
+                return candidate
         if route.task_signature == "repo/shell_execution" and tool_events:
             if self.verifier_registry._is_current_price_prompt(prompt) and not self.verifier_registry._has_successful_price_lookup(tool_events):
                 if (
@@ -906,6 +1099,7 @@ class AgentCore:
             workspace_root=workspace_root,
             execution_cwd=execution_cwd,
         )
+        route = self._maybe_upgrade_route_from_project_context(prompt, route)
         if route.lane == Lane.META:
             text = self.meta_handler(prompt)
             if stream and event_handler and text:

@@ -38,6 +38,52 @@ class _OkProvider:
         )
 
 
+class _ShellJsonProvider:
+    def __init__(self) -> None:
+        self.complete_calls: list[list[Message]] = []
+        self.tool_calls: list[dict] = []
+
+    def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
+        self.complete_calls.append(messages)
+        return ProviderResponse(text="chat")
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        shell_result = execute_tool("run_shell_command", {"command": "printf '[]\\n'", "timeout_s": 5})
+        return ProviderResponse(
+            text="[]",
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "printf '[]\\n'", "timeout_s": 5},
+                    "text": shell_result,
+                    "success": True,
+                }
+            ],
+        )
+
+
+class _FencedShellJsonProvider(_ShellJsonProvider):
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        shell_result = execute_tool("run_shell_command", {"command": "printf '[]\\n'", "timeout_s": 5})
+        return ProviderResponse(
+            text="```json\n[]\n```",
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "printf '[]\\n'", "timeout_s": 5},
+                    "text": shell_result,
+                    "success": True,
+                }
+            ],
+        )
+
+
 class _ExtractionProvider:
     def __init__(self) -> None:
         self.tool_calls: list[dict] = []
@@ -468,12 +514,16 @@ class _ProviderRegistry:
         return self.provider
 
 
-def test_runtime_trace_uses_no_tools_for_direct_prompt(tmp_path: Path) -> None:
-    runtime = RockyRuntime.load_from(tmp_path)
-    provider = _OkProvider()
+def _set_provider(runtime: RockyRuntime, provider) -> None:
     registry = _ProviderRegistry(provider)
     runtime.provider_registry = registry
     runtime.agent.provider_registry = registry
+
+
+def test_runtime_trace_uses_no_tools_for_direct_prompt(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    provider = _OkProvider()
+    _set_provider(runtime, provider)
 
     response = runtime.run_prompt("hello")
 
@@ -493,9 +543,7 @@ def test_freeze_load_does_not_create_internal_layout(tmp_path: Path, monkeypatch
 
 def test_runtime_returns_failure_response_when_provider_errors(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
-    registry = _ProviderRegistry(_FailingProvider())
-    runtime.provider_registry = registry
-    runtime.agent.provider_registry = registry
+    _set_provider(runtime, _FailingProvider())
 
     response = runtime.run_prompt("hello")
 
@@ -507,9 +555,7 @@ def test_runtime_returns_failure_response_when_provider_errors(tmp_path: Path) -
 def test_runtime_retries_transient_provider_failures(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
     provider = _FlakyProvider()
-    registry = _ProviderRegistry(provider)
-    runtime.provider_registry = registry
-    runtime.agent.provider_registry = registry
+    _set_provider(runtime, provider)
 
     response = runtime.run_prompt("hello")
 
@@ -520,9 +566,7 @@ def test_runtime_retries_transient_provider_failures(tmp_path: Path) -> None:
 
 def test_runtime_ignores_learning_record_failures(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
-    registry = _ProviderRegistry(_LearningFailingProvider())
-    runtime.provider_registry = registry
-    runtime.agent.provider_registry = registry
+    _set_provider(runtime, _LearningFailingProvider())
 
     def _boom(*args, **kwargs):
         raise RuntimeError("learning write failed")
@@ -544,9 +588,7 @@ def test_isolated_run_does_not_include_previous_session_messages(tmp_path: Path)
     runtime.sessions.save(current)
 
     provider = _OkProvider()
-    registry = _ProviderRegistry(provider)
-    runtime.provider_registry = registry
-    runtime.agent.provider_registry = registry
+    _set_provider(runtime, provider)
 
     response = runtime.run_prompt("new task", continue_session=False)
 
@@ -564,9 +606,7 @@ def test_session_run_can_still_include_previous_messages(tmp_path: Path) -> None
     runtime.sessions.save(current)
 
     provider = _OkProvider()
-    registry = _ProviderRegistry(provider)
-    runtime.provider_registry = registry
-    runtime.agent.provider_registry = registry
+    _set_provider(runtime, provider)
 
     runtime.run_prompt("new task", continue_session=True)
 
@@ -582,9 +622,7 @@ def test_freeze_continue_session_reads_existing_messages_without_persisting(tmp_
 
     frozen = RockyRuntime.load_from(tmp_path, freeze=True)
     provider = _OkProvider()
-    registry = _ProviderRegistry(provider)
-    frozen.provider_registry = registry
-    frozen.agent.provider_registry = registry
+    _set_provider(frozen, provider)
 
     sessions_before = list(runtime.workspace.sessions_dir.glob("ses_*.json"))
     traces_before = list(runtime.workspace.traces_dir.glob("trace_*.json"))
@@ -610,14 +648,144 @@ def test_isolated_run_refuses_to_invent_previous_turns(tmp_path: Path) -> None:
     runtime.sessions.save(current)
 
     provider = _OkProvider()
-    registry = _ProviderRegistry(provider)
-    runtime.provider_registry = registry
-    runtime.agent.provider_registry = registry
+    _set_provider(runtime, provider)
 
     response = runtime.run_prompt("what was my previous question?", continue_session=False)
 
     assert "don't have any earlier turn context" in response.text
     assert provider.calls == []
+
+
+def test_short_workspace_prompt_uses_project_skill_to_expose_shell_tools(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / ".rocky" / "skills" / "project" / "product-catalog"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        """---
+name: product-catalog-duplicate-check
+description: Resolve duplicate product lookups for short catalog prompts.
+task_signatures:
+  - repo/shell_execution
+  - conversation/general
+retrieval:
+  triggers:
+    - macallan
+    - laphroaig
+    - sherry
+  keywords:
+    - product catalog
+    - duplicate products
+---
+
+Interpret a short product name in this workspace as a duplicate-check request.
+
+When shell tools are exposed:
+1. Run `uv run python -m product_catalog_manager memory-load`.
+2. Return a JSON array only.
+""",
+        encoding="utf-8",
+    )
+    runtime = RockyRuntime.load_from(workspace)
+    provider = _ShellJsonProvider()
+    _set_provider(runtime, provider)
+
+    response = runtime.run_prompt("macallan 15 sherry", continue_session=False)
+
+    assert response.route.task_signature == "repo/shell_execution"
+    assert provider.complete_calls == []
+    assert provider.tool_calls
+    assert "run_shell_command" in response.trace["selected_tools"]
+
+
+def test_project_context_shell_prompt_normalizes_fenced_json(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / ".rocky" / "skills" / "project" / "product-catalog"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        """---
+name: product-catalog-duplicate-check
+description: Resolve duplicate product lookups for short catalog prompts.
+task_signatures:
+  - repo/shell_execution
+  - conversation/general
+retrieval:
+  triggers:
+    - macallan
+---
+
+Return a JSON array only.
+""",
+        encoding="utf-8",
+    )
+    runtime = RockyRuntime.load_from(workspace)
+    provider = _FencedShellJsonProvider()
+    _set_provider(runtime, provider)
+
+    response = runtime.run_prompt("macallan 15 sherry", continue_session=False)
+
+    assert response.route.task_signature == "repo/shell_execution"
+    assert response.text == "[]"
+
+
+def test_short_workspace_prompt_uses_project_instructions_to_expose_shell_tools(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    workspace.joinpath("AGENTS.md").write_text(
+        """You are a product catalog manager agent. Your job is to find duplicate products for a given product name.
+
+Your final deliverable is a JSON array printed to stdout.
+
+## Available tools
+
+```bash
+uv run python -m product_catalog_manager memory-load
+uv run python -m product_catalog_manager search "<query>"
+```
+
+## Workflow
+
+1. Load memory.
+2. Search at most 3 times.
+3. Print JSON array output.
+""",
+        encoding="utf-8",
+    )
+    runtime = RockyRuntime.load_from(workspace)
+    provider = _ShellJsonProvider()
+    _set_provider(runtime, provider)
+
+    response = runtime.run_prompt("laphroaig 15", continue_session=False)
+
+    assert response.route.task_signature == "repo/shell_execution"
+    assert provider.complete_calls == []
+    assert provider.tool_calls
+
+
+def test_shellish_project_instructions_do_not_upgrade_backchannel_prompt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    workspace.joinpath("AGENTS.md").write_text(
+        """Your job is to handle workspace tasks with shell commands.
+
+```bash
+uv run python -m product_catalog_manager search "<query>"
+```
+""",
+        encoding="utf-8",
+    )
+    runtime = RockyRuntime.load_from(workspace)
+    provider = _ShellJsonProvider()
+    _set_provider(runtime, provider)
+
+    response = runtime.run_prompt("thanks", continue_session=False)
+
+    assert response.route.task_signature == "conversation/general"
+    assert provider.tool_calls == []
+    assert provider.complete_calls
 
 
 def test_runtime_inspection_prompt_uses_tool_capable_provider(tmp_path: Path, monkeypatch) -> None:
