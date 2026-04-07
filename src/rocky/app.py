@@ -469,13 +469,36 @@ class RockyRuntime:
         task_family = str(thread_snapshot.get("task_family") or task_signature.split("/", 1)[0])
         thread_id = str(thread_snapshot.get("thread_id") or "") or None
         failure_class = self.agent.last_trace.get("verification", {}).get("failure_class")
+        analysis = self.learning_manager.synthesizer.analyze_feedback(
+            task_signature=task_signature,
+            feedback=feedback,
+            last_prompt=self.agent.last_prompt,
+            last_answer=self.agent.last_answer,
+            trace=self.agent.last_trace,
+            task_family=task_family,
+            thread_id=thread_id,
+            failure_class=str(failure_class) if failure_class else None,
+        )
         note_result = self.student_store.record_feedback(
             feedback,
             prompt=self.agent.last_prompt,
             answer=self.agent.last_answer,
             task_signature=task_signature,
             thread_id=thread_id,
-            failure_class=str(failure_class) if failure_class else None,
+            failure_class=analysis.failure_class,
+        )
+        pattern_result = self.student_store.add(
+            "pattern",
+            analysis.title,
+            analysis.pattern_text(),
+            prompt=self.agent.last_prompt,
+            answer=self.agent.last_answer,
+            feedback=feedback,
+            task_signature=task_signature,
+            thread_id=thread_id,
+            failure_class=analysis.failure_class,
+            tags=analysis.triggers[:8],
+            origin="learned_feedback",
         )
         result = self.learning_manager.learn_from_feedback(
             task_signature=task_signature,
@@ -486,9 +509,11 @@ class RockyRuntime:
             scope="project",
             thread_id=thread_id,
             task_family=task_family,
-            failure_class=str(failure_class) if failure_class else None,
+            failure_class=analysis.failure_class,
         )
+        result["analysis"] = analysis.as_record()
         result["student"] = note_result.get("entry")
+        result["student_pattern"] = pattern_result.get("entry")
         self.refresh_knowledge()
         return result
 

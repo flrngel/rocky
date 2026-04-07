@@ -90,3 +90,51 @@ def test_teach_records_single_notebook_entry_when_last_answer_exists(tmp_path: P
     assert len(notebook_lines) == 1
     payload = json.loads(notebook_lines[0])
     assert payload["feedback"] == "Do not merge products when edition text differs."
+
+
+def test_learn_creates_structured_pattern_memory_from_feedback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runtime = RockyRuntime.load_from(tmp_path / "workspace")
+    runtime.agent.last_prompt = "review the catalog and save inferred merge defaults to memory"
+    runtime.agent.last_answer = "I stored the likely defaults in memory without checking the evidence."
+    runtime.agent.last_trace = {
+        "route": {"task_signature": "repo/shell_execution"},
+        "thread": {
+            "current_thread": {
+                "thread_id": "thread_456",
+                "task_signature": "repo/shell_execution",
+                "task_family": "repo",
+            }
+        },
+        "verification": {},
+        "selected_tools": ["run_shell_command", "read_file"],
+    }
+
+    captured: dict[str, object] = {}
+
+    def fake_learn_from_feedback(**kwargs):
+        captured.update(kwargs)
+        return {"published": True, "skill": "dummy"}
+
+    monkeypatch.setattr(runtime.learning_manager, "learn_from_feedback", fake_learn_from_feedback)
+
+    result = runtime.learn("Do not save unsupported guesses to memory. Inspect the failure first and verify the evidence.")
+
+    assert result["published"] is True
+    assert result["analysis"]["failure_class"] == "project_memory_promotion_from_unsupported_inference"
+    assert captured["failure_class"] == "project_memory_promotion_from_unsupported_inference"
+    pattern_entry = result["student_pattern"]
+    assert pattern_entry["kind"] == "pattern"
+    pattern_path = Path(pattern_entry["path"])
+    assert pattern_path.exists()
+    pattern_text = pattern_path.read_text(encoding="utf-8")
+    assert "## Do this" in pattern_text
+    assert "## Evidence to gather" in pattern_text
+
+    retrieved = runtime.student_store.retrieve(
+        "save unsupported memory guesses",
+        task_signature="repo/shell_execution",
+    )
+    assert retrieved
+    assert retrieved[0]["kind"] == "pattern"
+    assert retrieved[0]["failure_class"] == "project_memory_promotion_from_unsupported_inference"
