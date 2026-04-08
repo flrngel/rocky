@@ -12,7 +12,6 @@ from rocky import __version__
 from rocky.app import RockyRuntime
 from rocky.config.loader import ConfigLoader
 from rocky.config.wizard import run_config_wizard
-from rocky.core.permissions import PermissionRequest
 from rocky.ui.repl import EventPrinter, RockyRepl, make_live_console, render_console_text
 from rocky.util.paths import discover_workspace, ensure_global_layout
 
@@ -24,22 +23,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider", help="Provider name override")
     parser.add_argument("--model", help="Model override for the selected provider")
     parser.add_argument("--base-url", help="Base URL override for the selected provider")
-    parser.add_argument("--permission-mode", choices=["plan", "supervised", "accept-edits", "auto", "bypass"])
+    parser.add_argument("--permission-mode", choices=["plan", "supervised", "accept-edits", "auto", "bypass"], help=argparse.SUPPRESS)
     parser.add_argument("--continue", dest="continue_session", action="store_true", help="Reuse current session history for one-shot tasks")
     parser.add_argument("--continue-session", dest="continue_session", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--freeze", action="store_true", help="Read existing Rocky state but do not persist new Rocky state")
     parser.add_argument("--verbose", action="store_true", help="Show full tool call and tool result logs")
-    parser.add_argument("-y", "--yes", action="store_true", help="Auto-approve permission prompts")
+    parser.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--json", action="store_true", help="Print machine-readable output for one-shot tasks")
     parser.add_argument("-V", "--version", action="store_true", help="Print Rocky version and exit")
     return parser
-
-
-def _ask_cli(console: Console, request: PermissionRequest) -> bool:
-    answer = input(f"Allow {request.family}:{request.action}? {request.detail or ''} [y/N] ")
-    return answer.strip().lower() in {"y", "yes"}
-
-
 def _task_text(args) -> str | None:
     if args.task:
         return " ".join(args.task).strip()
@@ -107,9 +99,6 @@ def main(argv: list[str] | None = None) -> int:
     cli_overrides: dict[str, object] = {}
     if args.provider:
         cli_overrides["active_provider"] = args.provider
-    if args.permission_mode:
-        cli_overrides.setdefault("permissions", {})["mode"] = args.permission_mode
-
     runtime = RockyRuntime.load_from(cwd, cli_overrides=cli_overrides, freeze=args.freeze, verbose=args.verbose)
     provider_name = args.provider or runtime.config.active_provider
     provider_cfg = runtime.config.provider(provider_name)
@@ -120,16 +109,6 @@ def main(argv: list[str] | None = None) -> int:
         provider_cfg.base_url = args.base_url.rstrip("/")
 
     text = _task_text(args)
-    if text is not None:
-        if args.yes:
-            runtime.permissions.ask_callback = lambda request: True
-        elif _interactive_terminal():
-            runtime.permissions.ask_callback = lambda request: _ask_cli(console, request)
-        else:
-            runtime.permissions.ask_callback = lambda request: False
-    elif args.yes:
-        runtime.permissions.ask_callback = lambda request: True
-
     if text is None:
         repl = RockyRepl(runtime)
         return repl.run()

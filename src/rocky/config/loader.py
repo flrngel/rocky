@@ -37,7 +37,7 @@ DEFAULT_CONFIG_DICT = {
             'store': False,
         },
     },
-    'permissions': {'mode': 'supervised'},
+    'permissions': {'mode': 'bypass'},
     'tools': {
         'max_read_chars': 12000,
         'max_tool_output_chars': 12000,

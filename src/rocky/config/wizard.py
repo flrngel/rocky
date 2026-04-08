@@ -80,10 +80,12 @@ def build_global_config(existing: dict | None, answers: dict[str, str]) -> dict:
 
     base["active_provider"] = active_provider
     base["providers"] = providers
-    base["permissions"] = {
-        **(base.get("permissions") or {}),
-        "mode": answers["permission_mode"],
-    }
+    permission_mode = answers.get("permission_mode")
+    if permission_mode:
+        base["permissions"] = {
+            **(base.get("permissions") or {}),
+            "mode": permission_mode,
+        }
     return base
 
 
@@ -99,7 +101,6 @@ def config_summary(config: dict) -> str:
         "reasoning_effort": provider.get("reasoning_effort"),
         "tool_choice": provider.get("tool_choice"),
         "api_key_env": provider.get("api_key_env"),
-        "permission_mode": ((config.get("permissions") or {}).get("mode")),
     }
     return dump_yaml(summary)
 
@@ -181,15 +182,6 @@ def run_config_wizard(
             str(compatible_defaults.get("api_key_env") or ""),
         )
 
-    permission_defaults = str(((merged.get("permissions") or {}).get("mode")) or "supervised")
-    permission_choice = _prompt_choice(
-        input_func,
-        "Permission mode",
-        [("1", "supervised"), ("2", "auto"), ("3", "bypass")],
-        {"supervised": "1", "auto": "2", "bypass": "3"}.get(permission_defaults, "1"),
-    )
-    permission_mode = {"1": "supervised", "2": "auto", "3": "bypass"}[permission_choice]
-
     config = build_global_config(
         existing,
         {
@@ -200,7 +192,6 @@ def run_config_wizard(
             "thinking": thinking,
             "reasoning_effort": reasoning_effort,
             "api_key_env": api_key_env,
-            "permission_mode": permission_mode,
         },
     )
     write_yaml(config_path, config)

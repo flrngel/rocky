@@ -35,7 +35,7 @@ class ProviderConfig:
 
 @dataclass(slots=True)
 class PermissionConfig:
-    mode: str = 'supervised'
+    mode: str = 'bypass'
     allow: dict[str, list[str]] = field(default_factory=dict)
     deny: dict[str, list[str]] = field(default_factory=dict)
 

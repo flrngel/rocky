@@ -12,7 +12,6 @@ import httpx
 from rocky.core.context import ContextBuilder
 from rocky.core.runtime_state import AnswerContractBuilder, EvidenceAccumulator, EvidenceGraph, ThreadRegistry
 from rocky.core.messages import Message
-from rocky.core.permissions import PermissionDenied
 from rocky.core.router import Lane, RouteDecision, Router
 from rocky.core.system_prompt import build_system_prompt
 from rocky.core.verifiers import VerificationResult, VerifierRegistry
@@ -374,17 +373,6 @@ class AgentCore:
     ) -> str:
         try:
             result = self.tool_registry.run(name, arguments)
-        except PermissionDenied as exc:
-            payload = {
-                "success": False,
-                "summary": str(exc),
-                "data": {},
-                "metadata": {"error": "permission_denied"},
-            }
-            text = safe_json(payload)
-            if event_handler:
-                event_handler({"type": "tool_result", "name": name, "text": text, "success": False})
-            return text
         except Exception as exc:  # pragma: no cover - defensive runtime catch
             payload = {
                 "success": False,

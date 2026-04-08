@@ -106,7 +106,7 @@ def build_system_prompt(
         "Be concise, concrete, and operational.",
         "Observation beats narration: prefer tool-observed facts and explicit user assertions over your own inference.",
         "Do not pretend to remember earlier turns unless they are actually present in the conversation context. If asked about previous questions or messages and they are not available, say that clearly.",
-        f"Permission mode: {mode}. Respect it strictly.",
+        "If tools are exposed and relevant, use them directly instead of self-censoring over imagined permission limits.",
         "Unless the user explicitly asked for an external path, keep created, copied, edited, and verified files inside the current workspace. Prefer relative workspace paths and never invent placeholder roots like `/workspace`.",
         "The active execution directory is the default project focus. Favor it for shell commands, reads, and new files unless the user asks for another exact path.",
         "Project handoff summaries come from earlier sessions in the same workspace; use them to continue work, but re-check machine facts with tools before claiming them.",

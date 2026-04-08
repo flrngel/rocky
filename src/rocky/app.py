@@ -302,7 +302,8 @@ class RockyRuntime:
                 "model": provider.model,
                 "base_url": provider.base_url,
                 "style": provider.style,
-                "permission_mode": self.config.permissions.mode,
+                "tool_permission_enforcement": "disabled",
+                "legacy_permission_mode": self.config.permissions.mode,
                 "freeze_mode": self.freeze_enabled,
                 "verbose_mode": self.verbose_enabled,
             },
@@ -454,9 +455,13 @@ class RockyRuntime:
         return {"resumed": True, "session_id": session.id, "title": session.title}
 
     def set_plan_mode(self, enabled: bool) -> dict[str, Any]:
-        self.config.permissions.mode = "plan" if enabled else "supervised"
+        self.config.permissions.mode = "plan" if enabled else "bypass"
         self.permissions.config.mode = self.config.permissions.mode
-        return {"permission_mode": self.config.permissions.mode}
+        return {
+            "plan_mode": enabled,
+            "tool_permission_enforcement": "disabled",
+            "legacy_permission_mode": self.config.permissions.mode,
+        }
 
     def _last_turn_from_session(self, session) -> tuple[str | None, str | None]:
         prompt: str | None = None
@@ -784,8 +789,6 @@ class RockyRuntime:
                 self.workspace.root / "ROCKY.md",
                 "# Rocky workspace note\n\nAdd operator notes that Rocky should load at startup.\n",
             )
-        if not self.workspace.config_path.exists():
-            write_text(self.workspace.config_path, dump_yaml({"permissions": {"mode": "supervised"}}))
         return {
             "initialized": True,
             "workspace_root": str(self.workspace.root),

@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.keys import Keys
 
-from rocky.core.permissions import PermissionRequest
 from rocky.ui.repl import RockyRepl
 
 
@@ -72,7 +71,7 @@ def test_alt_enter_newline(tmp_path):
     assert repl.session.default_buffer.multiline() is True
 
 
-# --- P1-3: Permission prompt and session wiring ---
+# --- P1-3: Session wiring ---
 
 def test_session_wiring(tmp_path):
     repl = RockyRepl(_make_runtime(tmp_path))
@@ -85,17 +84,6 @@ def test_session_wiring(tmp_path):
 
     # History is FileHistory
     assert isinstance(repl.session.history, FileHistory)
-
-    # Permission prompt: mock session.prompt, verify multiline=False kwarg
-    request = PermissionRequest(family="shell", action="run", detail="ls -la")
-    with patch.object(repl.session, "prompt", return_value="y") as mock_prompt:
-        result = repl.ask_permission(request)
-        assert result is True
-        mock_prompt.assert_called_once()
-        call_kwargs = mock_prompt.call_args
-        assert call_kwargs.kwargs.get("multiline") is False, (
-            "ask_permission must pass multiline=False to prevent Alt+Enter requirement"
-        )
 
 
 def test_freeze_repl_uses_in_memory_history_and_toolbar(tmp_path):

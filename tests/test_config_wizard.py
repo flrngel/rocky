@@ -37,7 +37,6 @@ def test_run_config_wizard_writes_selected_provider(tmp_path: Path) -> None:
             "false",
             "",
             "OLLAMA_API_KEY",
-            "1",
         ]
     )
 
@@ -47,4 +46,4 @@ def test_run_config_wizard_writes_selected_provider(tmp_path: Path) -> None:
     assert config["active_provider"] == "ollama"
     assert config["providers"]["ollama"]["model"] == "qwen3.5:4b"
     assert config["providers"]["ollama"]["thinking"] is False
-    assert config["permissions"]["mode"] == "supervised"
+    assert config["permissions"]["mode"] == "bypass"

@@ -19,7 +19,6 @@ from rich.text import Text
 from rocky.commands.registry import CommandResult
 from rocky.config.loader import ConfigLoader
 from rocky.config.wizard import run_config_wizard
-from rocky.core.permissions import PermissionRequest
 from rocky.ui.completion import build_completer
 from rocky.util.text import safe_json
 
@@ -328,13 +327,6 @@ class RockyRepl:
     def _continuation(self, width: int, line_number: int, wrap_count: int):
         return [("class:continuation", "... ".rjust(width))]
 
-    def ask_permission(self, request: PermissionRequest) -> bool:
-        label = f"Allow {request.family}:{request.action}?"
-        if request.detail:
-            label += f"\n{request.detail}"
-        answer = self.session.prompt(f"{label} [y/N] ", multiline=False)
-        return answer.strip().lower() in {"y", "yes"}
-
     def print_text(self, text: str) -> None:
         render_console_text(self.console, text)
 
@@ -356,8 +348,6 @@ class RockyRepl:
 
     def run(self) -> int:
         self.console.print("[bold green]Rocky[/] ready. Type /help for controls.")
-        if self.runtime.permissions.ask_callback is None:
-            self.runtime.permissions.ask_callback = self.ask_permission
         while True:
             try:
                 line = self.session.prompt(

@@ -12,6 +12,7 @@ def test_system_prompt_warns_against_inventing_prior_turns() -> None:
     )
 
     assert "Do not pretend to remember earlier turns" in prompt
+    assert "imagined permission limits" in prompt
     assert "keep created, copied, edited, and verified files inside the current workspace" in prompt
 
 
