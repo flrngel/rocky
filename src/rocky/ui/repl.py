@@ -57,6 +57,7 @@ class EventPrinter:
     verbose: bool = field(default=False)
     streamed_text: bool = field(default=False)
     _stream_open: bool = field(default=False)
+    _last_status_text: str = field(default="")
 
     def _ensure_stream_line(self) -> None:
         if not self._stream_open:
@@ -82,6 +83,77 @@ class EventPrinter:
                 return summary
         return text.splitlines()[0][:160]
 
+    def _tool_call_message(self, name: str) -> str:
+        messages = {
+            "search_web": "Searching the web...",
+            "fetch_url": "Opening the source...",
+            "extract_links": "Scanning page links...",
+            "browser_render_page": "Opening the page...",
+            "browser_screenshot": "Capturing the page...",
+            "run_shell_command": "Running a command...",
+            "inspect_runtime_versions": "Checking installed runtimes...",
+            "inspect_shell_environment": "Checking the local shell...",
+            "read_shell_history": "Checking recent shell history...",
+            "list_files": "Scanning the workspace...",
+            "glob_paths": "Scanning the workspace...",
+            "grep_files": "Searching project files...",
+            "read_file": "Reading files...",
+            "write_file": "Updating files...",
+            "replace_in_file": "Updating files...",
+            "move_path": "Organizing files...",
+            "copy_path": "Copying files...",
+            "delete_path": "Removing files...",
+            "run_python": "Analyzing with Python...",
+            "inspect_spreadsheet": "Inspecting the spreadsheet...",
+            "read_sheet_range": "Reading spreadsheet rows...",
+            "git_status": "Checking git status...",
+            "git_diff": "Checking git changes...",
+            "git_recent_commits": "Checking recent commits...",
+        }
+        return messages.get(name, "Working...")
+
+    def _tool_failure_message(self, event: dict) -> str:
+        name = str(event.get("name", "") or "")
+        summary = self._tool_summary(event)
+        if '"error": "tool_not_exposed"' in str(event.get("text", "")):
+            return "Rocky hit an internal workflow mismatch while trying to continue."
+        messages = {
+            "search_web": "Couldn't search the web.",
+            "fetch_url": "Couldn't open that source.",
+            "extract_links": "Couldn't scan links from that page.",
+            "browser_render_page": "Couldn't open that page.",
+            "browser_screenshot": "Couldn't capture that page.",
+            "run_shell_command": "Couldn't run that command.",
+            "inspect_runtime_versions": "Couldn't inspect installed runtimes.",
+            "inspect_shell_environment": "Couldn't inspect the local shell.",
+            "read_shell_history": "Couldn't read recent shell history.",
+            "list_files": "Couldn't inspect the workspace.",
+            "glob_paths": "Couldn't inspect the workspace.",
+            "grep_files": "Couldn't search the project files.",
+            "read_file": "Couldn't read that file.",
+            "write_file": "Couldn't update the file.",
+            "replace_in_file": "Couldn't update the file.",
+            "move_path": "Couldn't move that file.",
+            "copy_path": "Couldn't copy that file.",
+            "delete_path": "Couldn't delete that file.",
+            "run_python": "Couldn't analyze the result.",
+            "inspect_spreadsheet": "Couldn't inspect the spreadsheet.",
+            "read_sheet_range": "Couldn't read the spreadsheet rows.",
+            "git_status": "Couldn't inspect git status.",
+            "git_diff": "Couldn't inspect git changes.",
+            "git_recent_commits": "Couldn't inspect recent commits.",
+        }
+        base = messages.get(name, "A step failed.")
+        if not summary or summary == "done":
+            return base
+        return f"{base} {summary}"
+
+    def _print_status(self, text: str, *, style: str) -> None:
+        if text == self._last_status_text:
+            return
+        self.console.print(Text(text, style=style))
+        self._last_status_text = text
+
     def __call__(self, event: dict) -> None:
         kind = event.get("type")
         if kind == "assistant_chunk":
@@ -91,7 +163,7 @@ class EventPrinter:
         elif kind == "tool_call":
             self._close_stream_line()
             if not self.verbose:
-                self.console.print(Text(f"tool: {event.get('name', '')}", style="cyan"))
+                self._print_status(self._tool_call_message(str(event.get("name", ""))), style="cyan")
                 return
             body = Text()
             body.append(str(event.get("name", "")), style="bold cyan")
@@ -101,10 +173,9 @@ class EventPrinter:
         elif kind == "tool_result":
             self._close_stream_line()
             if not self.verbose:
-                status = "ok" if event.get("success") else "fail"
-                summary = self._tool_summary(event)
-                style = "green" if event.get("success") else "red"
-                self.console.print(Text(f"{status}: {event.get('name', '')} - {summary}", style=style))
+                if event.get("success"):
+                    return
+                self._print_status(self._tool_failure_message(event), style="red")
                 return
             self.console.print(
                 Panel(

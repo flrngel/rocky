@@ -59,10 +59,28 @@ def test_short_tool_logs_are_compact_by_default() -> None:
         }
     )
 
+    assert len(printer.console.print.call_args_list) == 1
+    first = printer.console.print.call_args_list[0].args[0]
+    assert first.plain == "Running a command..."
+
+
+def test_default_tool_logs_show_refined_failure_message() -> None:
+    printer = EventPrinter(console=MagicMock())
+
+    printer({"type": "tool_call", "name": "fetch_url", "arguments": {"url": "https://example.com"}})
+    printer(
+        {
+            "type": "tool_result",
+            "name": "fetch_url",
+            "success": False,
+            "text": '{"success": false, "summary": "HTTP 403 while fetching https://example.com", "data": {}}',
+        }
+    )
+
     first = printer.console.print.call_args_list[0].args[0]
     second = printer.console.print.call_args_list[1].args[0]
-    assert first.plain == "tool: run_shell_command"
-    assert second.plain == "ok: run_shell_command - Command exited with 0"
+    assert first.plain == "Opening the source..."
+    assert second.plain == "Couldn't open that source. HTTP 403 while fetching https://example.com"
 
 
 def test_verbose_tool_logs_use_panels() -> None:
