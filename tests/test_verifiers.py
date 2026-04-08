@@ -97,6 +97,70 @@ def test_verifier_requires_live_tools_for_people_research_prompts() -> None:
     assert "live evidence" in result.message.lower() or "no tools were used" in result.message.lower()
 
 
+def test_verifier_rejects_claimed_knowledge_without_reference_when_evidence_is_missing() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="Research request",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    result = verifier.verify(
+        prompt="who is the leader of QUEEN BEE right now",
+        route=route,
+        task_class=route.task_class,
+        output="Avu-chan is the leader of QUEEN BEE.\n\nSources: https://example.test",
+        tool_events=[
+            {"type": "tool_result", "name": "search_web", "success": True, "text": '{"success": true, "data": []}'},
+            {"type": "tool_result", "name": "fetch_url", "success": True, "text": '{"success": true, "data": {"url": "https://example.test"}}'},
+        ],
+        answer_contract=AnswerContract(
+            current_question="who is the leader of QUEEN BEE right now",
+            target_scope="research",
+            missing_evidence=["No supported evidence-bearing claims were collected for this task yet."],
+            uncertainty_required=True,
+        ),
+    )
+
+    assert result.status == "fail"
+    assert result.failure_class == "answer_claimed_knowledge_without_reference"
+    assert "supporting evidence is still missing" in result.message.lower()
+
+
+def test_verifier_accepts_uncertainty_when_evidence_is_missing() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="Research request",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    result = verifier.verify(
+        prompt="who is the leader of QUEEN BEE right now",
+        route=route,
+        task_class=route.task_class,
+        output="I cannot determine who leads QUEEN BEE from evidence yet. I need to open a source before making that claim.\n\nSources: https://example.test",
+        tool_events=[
+            {"type": "tool_result", "name": "search_web", "success": True, "text": '{"success": true, "data": []}'},
+            {"type": "tool_result", "name": "fetch_url", "success": True, "text": '{"success": true, "data": {"url": "https://example.test"}}'},
+        ],
+        answer_contract=AnswerContract(
+            current_question="who is the leader of QUEEN BEE right now",
+            target_scope="research",
+            missing_evidence=["No supported evidence-bearing claims were collected for this task yet."],
+            uncertainty_required=True,
+        ),
+    )
+
+    assert result.status == "pass"
+
+
 def test_verifier_rejects_empty_final_answer_even_without_tools() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(

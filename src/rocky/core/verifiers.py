@@ -94,6 +94,20 @@ class VerifierRegistry:
         "forbidden",
         "script returned an error",
     )
+    MISSING_EVIDENCE_ACKNOWLEDGEMENT_PHRASES = FAILURE_ACKNOWLEDGEMENT_PHRASES + (
+        "i don't know",
+        "do not know",
+        "don't know",
+        "not verified",
+        "haven't verified",
+        "have not verified",
+        "without evidence",
+        "need to inspect",
+        "need to check",
+        "need to search",
+        "need to look up",
+        "need to verify",
+    )
     LIVE_RESEARCH_DISCOVERY_PHRASES = (
         "search for",
         "search the web",
@@ -397,6 +411,42 @@ class VerifierRegistry:
         lowered = output.lower()
         return any(marker in lowered for marker in self.FAILURE_ACKNOWLEDGEMENT_PHRASES)
 
+    def _acknowledges_missing_evidence(self, output: str) -> bool:
+        lowered = output.lower()
+        return any(marker in lowered for marker in self.MISSING_EVIDENCE_ACKNOWLEDGEMENT_PHRASES)
+
+    def _is_knowledge_request(self, route: RouteDecision, prompt: str) -> bool:
+        lowered = prompt.lower().strip()
+        if route.task_signature in {
+            "research/live_compare/general",
+            "site/understanding/general",
+        }:
+            return True
+        if route.task_signature.startswith("repo/"):
+            return any(
+                phrase in lowered
+                for phrase in (
+                    "what ",
+                    "which ",
+                    "show ",
+                    "find ",
+                    "where ",
+                    "who ",
+                    "list ",
+                    "tell me",
+                    "current ",
+                    "latest ",
+                    "status",
+                    "version",
+                    "versions",
+                    "installed",
+                    "history",
+                    "commit",
+                    "commits",
+                )
+            )
+        return False
+
     def _mentions_shell_command(self, output: str, command: str) -> bool:
         lowered_output = output.lower()
         if command.lower() in lowered_output:
@@ -572,6 +622,27 @@ class VerifierRegistry:
             return VerificationResult("answer_discipline_v1", "pass", "", answer_drift_score=drift)
         return VerificationResult("answer_discipline_v1", "pass", "", answer_drift_score=drift)
 
+    def _evidence_discipline(
+        self,
+        prompt: str,
+        route: RouteDecision,
+        output: str,
+        answer_contract: AnswerContract | None,
+    ) -> VerificationResult:
+        if answer_contract is None or not answer_contract.missing_evidence or not answer_contract.uncertainty_required:
+            return VerificationResult("evidence_discipline_v1", "pass", "")
+        if not self._is_knowledge_request(route, prompt):
+            return VerificationResult("evidence_discipline_v1", "pass", "")
+        if self._acknowledges_missing_evidence(output):
+            return VerificationResult("evidence_discipline_v1", "pass", "")
+        return VerificationResult(
+            "evidence_discipline_v1",
+            "fail",
+            "Rocky answered as if the requested facts were known, but supporting evidence is still missing. Rocky must use tools to gather references first, or explicitly say it cannot determine the answer from evidence yet.",
+            failure_class="answer_claimed_knowledge_without_reference",
+            missing_evidence_ids=list(answer_contract.missing_evidence),
+        )
+
     def verify(
         self,
         prompt: str,
@@ -608,6 +679,11 @@ class VerifierRegistry:
         if result.status != "pass":
             return result
         result = self._non_empty_output(prompt, output)
+        if result.status != "pass":
+            result.memory_promotion_allowed = False
+            result.learning_promotion_allowed = False
+            return result
+        result = self._evidence_discipline(prompt, route, output, answer_contract)
         if result.status != "pass":
             result.memory_promotion_allowed = False
             result.learning_promotion_allowed = False

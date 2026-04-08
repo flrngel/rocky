@@ -417,6 +417,76 @@ class _ResearchRetryProvider:
         )
 
 
+class _GitHubResearchRetryProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        if len(self.tool_calls) == 1:
+            return ProviderResponse(
+                text="",
+                raw={"rounds": ["initial"]},
+                tool_events=[],
+            )
+        return ProviderResponse(
+            text=(
+                "Current GitHub trending repositories include microsoft/typescript, rust-lang/rust, and "
+                "vercel/next.js.\n\n"
+                "Sources:\n"
+                "https://github.com/trending\n"
+                "https://github.com/microsoft/TypeScript"
+            ),
+            raw={"rounds": ["retry"]},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "search_web",
+                    "arguments": {"query": "github trending repositories right now"},
+                    "text": json.dumps(
+                        {
+                            "success": True,
+                            "data": [
+                                {
+                                    "title": "GitHub Trending",
+                                    "url": "https://github.com/trending",
+                                    "snippet": "Trending repositories on GitHub right now.",
+                                },
+                                {
+                                    "title": "TypeScript - GitHub",
+                                    "url": "https://github.com/microsoft/TypeScript",
+                                    "snippet": "TypeScript is a language for application-scale JavaScript.",
+                                },
+                            ],
+                            "summary": "Search returned 2 result(s)",
+                        }
+                    ),
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "fetch_url",
+                    "arguments": {"url": "https://github.com/trending"},
+                    "text": json.dumps(
+                        {
+                            "success": True,
+                            "data": {
+                                "url": "https://github.com/trending",
+                                "status_code": 200,
+                                "title": "GitHub Trending",
+                                "text_excerpt": "Trending repositories include microsoft/typescript, rust-lang/rust, and vercel/next.js.",
+                                "links": [],
+                                "content_type": "text/html",
+                            },
+                            "summary": "Fetched https://github.com/trending",
+                        }
+                    ),
+                    "success": True,
+                },
+            ],
+        )
+
+
 class _AutomationOutputRepairProvider:
     def __init__(self) -> None:
         self.tool_calls: list[dict] = []
@@ -1211,7 +1281,7 @@ Use web search tools for live queries.
     runtime = RockyRuntime.load_from(workspace)
     runtime.permissions.config.mode = "bypass"
 
-    provider = _ResearchRetryProvider()
+    provider = _GitHubResearchRetryProvider()
     _set_provider(runtime, provider)
 
     response = runtime.run_prompt("github repos right now", continue_session=False)

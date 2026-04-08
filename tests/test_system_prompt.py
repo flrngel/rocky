@@ -12,6 +12,8 @@ def test_system_prompt_warns_against_inventing_prior_turns() -> None:
     )
 
     assert "Do not pretend to remember earlier turns" in prompt
+    assert "Assume you know nothing until a fact is supported" in prompt
+    assert "internal model memory is not evidence" in prompt
     assert "imagined permission limits" in prompt
     assert "keep created, copied, edited, and verified files inside the current workspace" in prompt
 
@@ -25,6 +27,8 @@ def test_system_prompt_pushes_multi_step_tool_use() -> None:
     )
 
     assert "decompose the request into enough tool calls" in prompt
+    assert "do not answer from parametric memory" in prompt
+    assert "cannot determine the answer from evidence yet" in prompt
     assert "After each tool result, decide whether another tool is needed" in prompt
     assert "start with `inspect_runtime_versions`, then use at least one confirming shell command" in prompt
 
