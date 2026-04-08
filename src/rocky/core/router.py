@@ -236,6 +236,40 @@ class Router:
     BUILD_ARTIFACT_HINTS = (
         '.py', '.sh', '.md', '.txt', '.json', '.jsonl', '.csv', 'readme', 'script', 'project', 'cli', 'app', 'tool', 'utility',
     )
+    RESEARCH_ACTION_PHRASES = (
+        'search for',
+        'search the web',
+        'look up',
+        'lookup ',
+        'find out',
+        'find information about',
+        'find info about',
+        'gather sources on',
+        'check sources for',
+        'verify from sources',
+        'research ',
+    )
+    RESEARCH_PROFILE_TOKENS = {
+        'biography',
+        'biographies',
+        'bio',
+        'leader',
+        'leaders',
+        'member',
+        'members',
+        'founder',
+        'founders',
+        'ceo',
+        'president',
+        'owner',
+        'owners',
+    }
+    RESEARCH_PROFILE_PHRASES = (
+        'tell me about',
+        'who is ',
+        'who are ',
+        'background on',
+    )
 
     def __init__(self) -> None:
         self.continuation_resolver = ContinuationResolver()
@@ -343,6 +377,12 @@ class Router:
         if self._looks_like_repo_task(lowered) or self._looks_like_shell_inspection_task(lowered) or self._looks_like_runtime_inspection_task(prompt):
             return False
         tokens = self._tokens(lowered)
+        if any(phrase in lowered for phrase in self.RESEARCH_ACTION_PHRASES):
+            return True
+        if tokens & self.RESEARCH_PROFILE_TOKENS and any(
+            phrase in lowered for phrase in self.RESEARCH_PROFILE_PHRASES
+        ):
+            return True
         if 'compare sources' in lowered:
             return True
         if tokens & {'forecast', 'probability', 'market', 'weather', 'research'}:

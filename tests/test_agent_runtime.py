@@ -290,6 +290,96 @@ class _RepairingToolExpectationProvider:
         )
 
 
+class _ResearchRetryProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        if len(self.tool_calls) == 1:
+            return ProviderResponse(
+                text="",
+                raw={"rounds": ["initial"]},
+                tool_events=[],
+            )
+        return ProviderResponse(
+            text=(
+                "Queen Bee members include Avu-chan, Yashi-chan, and Hibari-kun. "
+                "Avu-chan is the frontperson and leader.\n\n"
+                "Sources:\n"
+                "https://www.queenbee-ztf.jp/profile\n"
+                "https://en.wikipedia.org/wiki/Queen_Bee_(band)"
+            ),
+            raw={"rounds": ["retry"]},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "search_web",
+                    "arguments": {"query": "QUEEN BEE members leader biography"},
+                    "text": json.dumps(
+                        {
+                            "success": True,
+                            "data": [
+                                {
+                                    "title": "QUEEN BEE official profile",
+                                    "url": "https://www.queenbee-ztf.jp/profile",
+                                    "snippet": "Avu-chan, Yashi-chan, and Hibari-kun are the current members of Queen Bee.",
+                                },
+                                {
+                                    "title": "Queen Bee (band) - Wikipedia",
+                                    "url": "https://en.wikipedia.org/wiki/Queen_Bee_(band)",
+                                    "snippet": "Queen Bee is a Japanese band led by Avu-chan.",
+                                },
+                            ],
+                            "summary": "Search returned 2 result(s)",
+                        }
+                    ),
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "fetch_url",
+                    "arguments": {"url": "https://www.queenbee-ztf.jp/profile"},
+                    "text": json.dumps(
+                        {
+                            "success": True,
+                            "data": {
+                                "url": "https://www.queenbee-ztf.jp/profile",
+                                "status_code": 200,
+                                "title": "QUEEN BEE Profile",
+                                "text_excerpt": "Avu-chan is the vocalist and bassist. Yashi-chan is the guitarist. Hibari-kun is the drummer.",
+                                "links": [],
+                                "content_type": "text/html",
+                            },
+                            "summary": "Fetched https://www.queenbee-ztf.jp/profile",
+                        }
+                    ),
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "fetch_url",
+                    "arguments": {"url": "https://en.wikipedia.org/wiki/Queen_Bee_(band)"},
+                    "text": json.dumps(
+                        {
+                            "success": True,
+                            "data": {
+                                "url": "https://en.wikipedia.org/wiki/Queen_Bee_(band)",
+                                "status_code": 200,
+                                "title": "Queen Bee (band) - Wikipedia",
+                                "text_excerpt": "Queen Bee is a Japanese band formed in Kobe in 2009 and led by Avu-chan.",
+                                "links": [],
+                                "content_type": "text/html",
+                            },
+                            "summary": "Fetched https://en.wikipedia.org/wiki/Queen_Bee_(band)",
+                        }
+                    ),
+                    "success": True,
+                },
+            ],
+        )
+
+
 class _AutomationOutputRepairProvider:
     def __init__(self) -> None:
         self.tool_calls: list[dict] = []
@@ -1020,6 +1110,29 @@ def test_runtime_inspection_prompt_uses_tool_capable_provider(tmp_path: Path, mo
     assert len(provider.tool_calls) == 1
     tool_names = {tool["function"]["name"] for tool in provider.tool_calls[0]["tools"]}
     assert "inspect_runtime_versions" in tool_names
+
+
+def test_live_research_prompt_retries_after_no_op_and_uses_web_tools(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _ResearchRetryProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt(
+        "search for all QUEEN BEE members and find out who's the leader, and tell me about their biography",
+        continue_session=False,
+    )
+
+    assert response.route.task_signature == "research/live_compare/general"
+    assert response.verification["status"] == "pass"
+    assert len(provider.tool_calls) == 2
+    assert "Avu-chan" in response.text
+    assert "https://www.queenbee-ztf.jp/profile" in response.text
+    assert "search_web" in response.trace["selected_tools"]
+    assert any(event["name"] == "search_web" for event in response.trace["tool_events"])
 
 
 def test_extraction_route_normalizes_json_fence_output(tmp_path: Path) -> None:

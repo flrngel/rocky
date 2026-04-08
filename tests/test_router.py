@@ -153,6 +153,16 @@ def test_router_does_not_treat_report_as_repo_keyword() -> None:
     assert route.task_signature == 'automation/general'
 
 
+def test_router_treats_explicit_people_search_as_research() -> None:
+    router = Router()
+
+    route = router.route('search for all QUEEN BEE members and find out who is the leader and tell me about their biography')
+
+    assert route.task_class == TaskClass.RESEARCH
+    assert route.task_signature == 'research/live_compare/general'
+    assert 'web' in route.tool_families
+
+
 def test_router_prefers_automation_for_empty_workspace_python_project() -> None:
     router = Router()
 

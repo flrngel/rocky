@@ -436,7 +436,8 @@ class EvidenceAccumulator:
             arguments = event.get("arguments") or {}
             success = bool(event.get("success", True))
             payload = self._tool_payload(event)
-            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            payload_data = payload.get("data")
+            data = payload_data if isinstance(payload_data, dict) else {}
             if not success:
                 summary = str(payload.get("summary") or "tool failed")
                 graph.add_claim(f"Tool {name} failed: {summary}", "tool_observed", name, confidence=0.6, status="provisional")
@@ -661,11 +662,63 @@ class EvidenceAccumulator:
                             name,
                             confidence=0.75,
                         )
-            elif name in {"fetch_url", "search_web", "browser_render_page"}:
-                url = str(arguments.get("url") or data.get("url") or "").strip()
+            elif name == "search_web" and isinstance(payload_data, list):
+                query = str(arguments.get("query") or "").strip()
+                for item in payload_data[:6]:
+                    if not isinstance(item, dict):
+                        continue
+                    url = str(item.get("url") or "").strip()
+                    title = " ".join(str(item.get("title") or "").split())[:240]
+                    snippet = " ".join(str(item.get("snippet") or "").split())[:240]
+                    if url:
+                        graph.add_artifact("url", url, source=name)
+                        graph.add_claim(f"Consulted live source {url}", "tool_observed", name, confidence=0.8)
+                    if title:
+                        prefix = f'Search result for "{query}": ' if query else "Search result: "
+                        graph.add_claim(
+                            f"{prefix}{title}",
+                            "tool_observed",
+                            name,
+                            confidence=0.8,
+                        )
+                    if title and snippet:
+                        graph.add_claim(
+                            f'Search snippet for "{title}": {snippet}',
+                            "tool_observed",
+                            name,
+                            confidence=0.72,
+                            status="provisional",
+                        )
+            elif name in {"fetch_url", "browser_render_page"}:
+                url = str(arguments.get("url") or data.get("url") or data.get("final_url") or "").strip()
+                title = " ".join(str(data.get("title") or "").split())[:240]
+                excerpt = " ".join(str(data.get("text_excerpt") or "").split())[:280]
                 if url:
                     graph.add_artifact("url", url, source=name)
                     graph.add_claim(f"Consulted live source {url}", "tool_observed", name, confidence=0.8)
+                if title and url:
+                    graph.add_claim(
+                        f'Fetched page "{title}" from {url}',
+                        "tool_observed",
+                        name,
+                        confidence=0.82,
+                    )
+                elif title:
+                    graph.add_claim(
+                        f'Fetched page "{title}"',
+                        "tool_observed",
+                        name,
+                        confidence=0.82,
+                    )
+                if excerpt:
+                    label = title or url or "live source"
+                    graph.add_claim(
+                        f'Page excerpt from "{label}": {excerpt}',
+                        "tool_observed",
+                        name,
+                        confidence=0.74,
+                        status="provisional",
+                    )
             elif name == "grep_files" and isinstance(payload.get("data"), list):
                 for item in payload["data"][:10]:
                     if not isinstance(item, dict):

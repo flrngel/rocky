@@ -74,6 +74,52 @@ def test_verifier_requires_tools_for_runtime_inspection_prompts() -> None:
     assert "inspect the local runtime" in result.message.lower()
 
 
+def test_verifier_requires_live_tools_for_people_research_prompts() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="Research request",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    result = verifier.verify(
+        prompt="search for all QUEEN BEE members and find out who's the leader, and tell me about their biography",
+        route=route,
+        task_class=route.task_class,
+        output="Avu-chan leads the band.",
+        tool_events=[],
+    )
+
+    assert result.status == "fail"
+    assert "live evidence" in result.message.lower() or "no tools were used" in result.message.lower()
+
+
+def test_verifier_rejects_empty_final_answer_even_without_tools() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.CONVERSATION,
+        risk="low",
+        reasoning="General conversation",
+        tool_families=[],
+        task_signature="conversation/general",
+    )
+
+    result = verifier.verify(
+        prompt="search for all QUEEN BEE members and find out who's the leader, and tell me about their biography",
+        route=route,
+        task_class=route.task_class,
+        output="",
+        tool_events=[],
+    )
+
+    assert result.status == "fail"
+    assert result.failure_class == "empty_final_answer"
+
+
 def test_verifier_requires_shell_tool_for_shell_execution() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(

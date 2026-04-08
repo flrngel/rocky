@@ -142,6 +142,12 @@ def build_system_prompt(
             term in lowered_prompt for term in ("today", "current", "latest")
         ):
             parts.append("For current company-price lookups, interpret the request as a stock quote unless the user explicitly asked for a product price. Prefer machine-readable CLI sources. Quote URLs that contain `?` or `&` so the shell does not misparse them. If multiple live sources fail because of rate limits, auth, or network errors, say you could not retrieve the live quote instead of inventing one.")
+    if task_signature == "research/live_compare/general":
+        parts.append("For live research tasks, start by discovering sources with `search_web` unless the user already gave a concrete URL. Then open at least one source with `fetch_url` or `browser_render_page` before concluding.")
+        parts.append("If the user asks for people, members, leaders, biographies, ownership, or role relationships, verify each requested claim from live source content instead of answering from memory or from search-result titles alone.")
+        parts.append("Return a real answer, not an empty placeholder, and include source URLs or a clear Sources section.")
+    if task_signature == "site/understanding/general":
+        parts.append("For site-understanding work, browse the page or site first. Use at least one retrieval step and one reading step before summarizing what you found.")
     if task_signature == "data/spreadsheet/analysis":
         parts.append("For spreadsheet analysis, the first tool call must be `inspect_spreadsheet`; `inspect_spreadsheet` works for CSV files too. Do not use `run_python` as your first spreadsheet step. If the prompt names a file, use that exact path first instead of searching or guessing. Do not stop after `inspect_spreadsheet` alone; follow with `read_sheet_range` or `run_python` before concluding.")
     if task_signature == "extract/general":

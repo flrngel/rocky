@@ -94,6 +94,24 @@ class VerifierRegistry:
         "forbidden",
         "script returned an error",
     )
+    LIVE_RESEARCH_DISCOVERY_PHRASES = (
+        "search for",
+        "search the web",
+        "look up",
+        "lookup ",
+        "find out",
+        "find information about",
+        "find info about",
+        "tell me about",
+        "who is ",
+        "who are ",
+        "biography",
+        "biographies",
+        "leader",
+        "leaders",
+        "member",
+        "members",
+    )
 
     def _successful_tool_names(self, tool_events: list[dict]) -> list[str]:
         return [
@@ -589,6 +607,11 @@ class VerifierRegistry:
         result = self._citations(task_class, output, tool_events)
         if result.status != "pass":
             return result
+        result = self._non_empty_output(prompt, output)
+        if result.status != "pass":
+            result.memory_promotion_allowed = False
+            result.learning_promotion_allowed = False
+            return result
         result = self._claim_support(output, evidence_graph, answer_contract, route)
         if result.status != "pass":
             result.memory_promotion_allowed = False
@@ -729,6 +752,41 @@ class VerifierRegistry:
                     "tool_expectation_v1",
                     "fail",
                     "Expected Rocky to confirm runtime version or path claims with a shell inspection step after `inspect_runtime_versions`",
+                )
+        if route.task_signature in {"research/live_compare/general", "site/understanding/general"}:
+            if not used_tools:
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to gather live evidence with web or browser tools, but no tools were used",
+                )
+            live_research_names = result_names & {
+                "search_web",
+                "fetch_url",
+                "extract_links",
+                "browser_render_page",
+                "browser_screenshot",
+            }
+            if not live_research_names:
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to use at least one live research tool before answering",
+                )
+            if any(phrase in lowered for phrase in self.LIVE_RESEARCH_DISCOVERY_PHRASES) and len(successful_names) < 2:
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to take at least two live research steps before answering this request",
+                )
+            if any(
+                phrase in lowered
+                for phrase in ("tell me about", "who is ", "who are ", "biography", "biographies", "leader", "leaders", "member", "members")
+            ) and not (result_names & {"fetch_url", "browser_render_page"}):
+                return VerificationResult(
+                    "tool_expectation_v1",
+                    "fail",
+                    "Expected Rocky to open at least one retrieved live source before making people or role claims",
                 )
         if route.task_signature == "data/spreadsheet/analysis":
             if "inspect_spreadsheet" not in result_names:
@@ -958,6 +1016,18 @@ class VerifierRegistry:
                     "Requested structured output but response is not valid JSON",
                 )
         return VerificationResult("structured_output_v1", "pass", "")
+
+    def _non_empty_output(self, prompt: str, output: str) -> VerificationResult:
+        if not prompt.strip():
+            return VerificationResult("non_empty_output_v1", "pass", "")
+        if output.strip():
+            return VerificationResult("non_empty_output_v1", "pass", "")
+        return VerificationResult(
+            "non_empty_output_v1",
+            "fail",
+            "Assistant returned an empty final answer and did not address the user's request.",
+            failure_class="empty_final_answer",
+        )
 
     def _citations(
         self,
