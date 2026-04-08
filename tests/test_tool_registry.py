@@ -34,8 +34,8 @@ def test_shell_execution_tools_focus_on_shell_not_filesystem_shortcuts(tmp_path:
     ]
 
     assert names[0] == "run_shell_command"
-    assert "copy_path" not in names
-    assert "list_files" not in names
+    assert "copy_path" in names
+    assert names.index("list_files") < names.index("copy_path")
 
 
 def test_data_tasks_prefer_spreadsheet_tools_and_hide_writers(tmp_path: Path) -> None:
@@ -51,9 +51,9 @@ def test_data_tasks_prefer_spreadsheet_tools_and_hide_writers(tmp_path: Path) ->
     ]
 
     assert names[:3] == ["inspect_spreadsheet", "read_sheet_range", "run_python"]
-    assert "stat_path" not in names
-    assert "write_file" not in names
-    assert "replace_in_file" not in names
+    assert "stat_path" in names
+    assert "write_file" in names
+    assert "replace_in_file" in names
 
 
 def test_extraction_tasks_are_read_only_and_keep_python(tmp_path: Path) -> None:
@@ -71,9 +71,9 @@ def test_extraction_tasks_are_read_only_and_keep_python(tmp_path: Path) -> None:
     assert names[:3] == ["glob_paths", "stat_path", "run_python"]
     assert "run_python" in names
     assert "read_file" in names
-    assert "inspect_spreadsheet" not in names
-    assert "write_file" not in names
-    assert "delete_path" not in names
+    assert "inspect_spreadsheet" in names
+    assert "write_file" in names
+    assert "delete_path" in names
 
 
 def test_automation_tools_keep_write_and_verify_path(tmp_path: Path) -> None:
@@ -88,8 +88,9 @@ def test_automation_tools_keep_write_and_verify_path(tmp_path: Path) -> None:
         )
     ]
 
-    assert names[:3] == ["write_file", "read_file", "run_shell_command"]
-    assert "glob_paths" not in names
+    assert names[:2] == ["write_file", "read_file"]
+    assert names.index("stat_path") < names.index("run_shell_command")
+    assert "glob_paths" in names
 
 
 

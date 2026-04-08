@@ -92,7 +92,7 @@ def _append_context_blocks(parts: list[str], context: ContextPackage) -> None:
             )
     if context.tool_families:
         parts.append("## Tool exposure")
-        parts.append("Only use tools from these families if needed: " + ", ".join(context.tool_families))
+        parts.append("All tools are available. Prioritize these families first when relevant: " + ", ".join(context.tool_families))
 
 
 def build_system_prompt(

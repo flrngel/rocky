@@ -27,74 +27,6 @@ READ_ONLY_TOOL_NAMES = {
     "git_recent_commits",
 }
 
-SAFE_UNEXPOSED_TOOL_FALLBACKS = {
-    "list_files",
-    "stat_path",
-    "glob_paths",
-    "read_file",
-    "grep_files",
-    "git_status",
-    "git_diff",
-    "git_recent_commits",
-}
-
-READ_ONLY_TASK_SIGNATURES = {
-    "repo/general",
-    "repo/shell_inspection",
-    "local/runtime_inspection",
-    "data/spreadsheet/analysis",
-    "extract/general",
-}
-
-TASK_ALLOWED_TOOL_NAMES: dict[str, set[str]] = {
-    "repo/shell_execution": {
-        "run_shell_command",
-        "run_python",
-        "write_file",
-        "inspect_runtime_versions",
-        "list_files",
-        "glob_paths",
-        "grep_files",
-        "read_file",
-        "stat_path",
-        "git_status",
-        "git_diff",
-        "git_recent_commits",
-    },
-    "repo/shell_inspection": {
-        "inspect_shell_environment",
-        "read_shell_history",
-        "inspect_runtime_versions",
-        "run_shell_command",
-        "read_file",
-        "stat_path",
-    },
-    "local/runtime_inspection": {
-        "inspect_runtime_versions",
-        "run_shell_command",
-        "inspect_shell_environment",
-        "read_shell_history",
-    },
-    "data/spreadsheet/analysis": {
-        "inspect_spreadsheet",
-        "read_sheet_range",
-        "run_python",
-        "list_files",
-        "glob_paths",
-        "read_file",
-        "stat_path",
-    },
-    "automation/general": {
-        "write_file",
-        "list_files",
-        "glob_paths",
-        "read_file",
-        "stat_path",
-        "run_shell_command",
-        "run_python",
-    },
-}
-
 TASK_TOOL_PRIORITY: dict[str, list[str]] = {
     "repo/shell_execution": [
         "run_shell_command",
@@ -208,34 +140,20 @@ class ToolRegistry:
         task_signature: str,
         user_prompt: str = "",
     ) -> list[Tool]:
-        selected = self.select(families)
-        allowed = TASK_ALLOWED_TOOL_NAMES.get(task_signature)
-        if allowed is not None:
-            selected = [tool for tool in selected if tool.name in allowed]
-        lowered = user_prompt.lower()
-        if task_signature == "repo/shell_execution" and "shell environment" in lowered:
-            selected.extend(
-                tool
-                for tool in self.select(families)
-                if tool.name == "inspect_shell_environment" and tool not in selected
-            )
-        if task_signature in READ_ONLY_TASK_SIGNATURES:
-            selected = [tool for tool in selected if tool.name in READ_ONLY_TOOL_NAMES]
-        if task_signature == "extract/general":
-            spreadsheetish = any(token in lowered for token in (".csv", ".xlsx", "spreadsheet", "sheet"))
-            if not spreadsheetish:
-                selected = [
-                    tool
-                    for tool in selected
-                    if tool.name not in {"inspect_spreadsheet", "read_sheet_range"}
-                ]
-
+        selected = list(self.tools.values())
         priority = TASK_TOOL_PRIORITY.get(task_signature, [])
         order = {name: index for index, name in enumerate(priority)}
         fallback = len(order) + 100
+        preferred_families = set(families or [])
         return sorted(
             selected,
-            key=lambda tool: (order.get(tool.name, fallback), tool.family, tool.name),
+            key=lambda tool: (
+                0 if tool.name in order else 1,
+                order.get(tool.name, fallback),
+                0 if preferred_families and tool.family in preferred_families else 1,
+                tool.family,
+                tool.name,
+            ),
         )
 
     def get(self, name: str) -> Tool | None:

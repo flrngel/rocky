@@ -114,8 +114,6 @@ class EventPrinter:
     def _tool_failure_message(self, event: dict) -> str:
         name = str(event.get("name", "") or "")
         summary = self._tool_summary(event)
-        if '"error": "tool_not_exposed"' in str(event.get("text", "")):
-            return "Rocky hit an internal workflow mismatch while trying to continue."
         messages = {
             "search_web": "Couldn't search the web.",
             "fetch_url": "Couldn't open that source.",

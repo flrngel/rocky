@@ -19,7 +19,7 @@ from rocky.learning.manager import LearningManager
 from rocky.providers.base import ProviderResponse
 from rocky.providers.registry import ProviderRegistry
 from rocky.session.store import Session, SessionStore
-from rocky.tools.registry import SAFE_UNEXPOSED_TOOL_FALLBACKS, ToolRegistry
+from rocky.tools.registry import ToolRegistry
 from rocky.util.io import read_text
 from rocky.util.text import extract_json_candidate, safe_json, tokenize_keywords
 from rocky.util.time import utc_iso
@@ -397,29 +397,6 @@ class AgentCore:
         arguments: dict[str, Any],
         event_handler: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
-        if name not in allowed_names:
-            tool = self.tool_registry.get(name)
-            if (
-                tool is not None
-                and tool.family in set(route.tool_families)
-                and name in SAFE_UNEXPOSED_TOOL_FALLBACKS
-            ):
-                return self._run_tool(name, arguments, event_handler=event_handler)
-            payload = {
-                "success": False,
-                "summary": f"Requested tool is not exposed on this task route: {name}",
-                "data": {},
-                "metadata": {
-                    "error": "tool_not_exposed",
-                    "task_signature": route.task_signature,
-                    "requested_family": tool.family if tool is not None else None,
-                    "available_tools": sorted(allowed_names),
-                },
-            }
-            text = safe_json(payload)
-            if event_handler:
-                event_handler({"type": "tool_result", "name": name, "text": text, "success": False})
-            return text
         return self._run_tool(name, arguments, event_handler=event_handler)
 
     def _finalize(
@@ -1560,12 +1537,12 @@ class AgentCore:
             }
             return self._finalize(session, prompt, text, route, verification, {}, trace, options=options)
         messages = [*recent_messages, Message(role="user", content=prompt)]
-        provider = self.provider_registry.provider_for_task(needs_tools=bool(route.tool_families))
         selected_tool_objects = self.tool_registry.select_for_task(
             route.tool_families,
             route.task_signature,
             prompt,
         )
+        provider = self.provider_registry.provider_for_task(needs_tools=bool(selected_tool_objects))
         selected_tools = [tool.name for tool in selected_tool_objects]
         selected_tool_names = set(selected_tools)
         selected_skills = [item["name"] for item in context.skills]
@@ -1614,7 +1591,7 @@ class AgentCore:
                 return text
 
             try:
-                if route.tool_families:
+                if selected_tool_objects:
                     provider_response = provider.run_with_tools(
                         system_prompt=system_prompt,
                         messages=messages,

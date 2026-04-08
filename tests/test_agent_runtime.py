@@ -39,6 +39,20 @@ class _OkProvider:
         )
 
 
+class _ConversationalToolProvider:
+    def __init__(self) -> None:
+        self.calls: list[list[Message]] = []
+        self.tool_calls: list[dict] = []
+
+    def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
+        self.calls.append(messages)
+        return ProviderResponse(text="ok")
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        return ProviderResponse(text="ok", raw={"rounds": []}, tool_events=[])
+
+
 class _ShellJsonProvider:
     def __init__(self) -> None:
         self.complete_calls: list[list[Message]] = []
@@ -772,10 +786,16 @@ class _FailingProvider:
     def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
         raise RuntimeError("provider offline")
 
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        raise RuntimeError("provider offline")
+
 
 class _LearningFailingProvider:
     def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
         return ProviderResponse(text="ok")
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        return ProviderResponse(text="ok", raw={"rounds": []}, tool_events=[])
 
 
 class _FlakyProvider:
@@ -789,6 +809,14 @@ class _FlakyProvider:
             response = httpx.Response(500, request=request, json={"error": "temporary"})
             raise httpx.HTTPStatusError("temporary", request=request, response=response)
         return ProviderResponse(text="ok after retry")
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.calls += 1
+        if self.calls == 1:
+            request = httpx.Request("POST", "http://example.test/chat/completions")
+            response = httpx.Response(500, request=request, json={"error": "temporary"})
+            raise httpx.HTTPStatusError("temporary", request=request, response=response)
+        return ProviderResponse(text="ok after retry", raw={"rounds": []}, tool_events=[])
 
 
 class _ProviderRegistry:
@@ -807,14 +835,15 @@ def _set_provider(runtime: RockyRuntime, provider) -> None:
 
 def test_runtime_trace_uses_no_tools_for_direct_prompt(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
-    provider = _OkProvider()
+    provider = _ConversationalToolProvider()
     _set_provider(runtime, provider)
 
     response = runtime.run_prompt("hello")
 
     assert response.text == "ok"
-    assert response.trace["selected_tools"] == []
-    assert [message.content for message in provider.calls[0]] == ["hello"]
+    assert response.trace["selected_tools"]
+    assert provider.calls == []
+    assert [message.content for message in provider.tool_calls[0]["messages"]] == ["hello"]
 
 
 def test_freeze_load_does_not_create_internal_layout(tmp_path: Path, monkeypatch) -> None:
@@ -872,13 +901,14 @@ def test_isolated_run_does_not_include_previous_session_messages(tmp_path: Path)
     current.append("assistant", "old answer")
     runtime.sessions.save(current)
 
-    provider = _OkProvider()
+    provider = _ConversationalToolProvider()
     _set_provider(runtime, provider)
 
     response = runtime.run_prompt("new task", continue_session=False)
 
     assert response.text == "ok"
-    assert [message.content for message in provider.calls[0]] == ["new task"]
+    assert provider.calls == []
+    assert [message.content for message in provider.tool_calls[0]["messages"]] == ["new task"]
     assert runtime.sessions.ensure_current().id == current.id
     assert runtime.sessions.ensure_current().messages[-1]["content"] == "old answer"
 
@@ -890,12 +920,13 @@ def test_session_run_can_still_include_previous_messages(tmp_path: Path) -> None
     current.append("assistant", "old answer")
     runtime.sessions.save(current)
 
-    provider = _OkProvider()
+    provider = _ConversationalToolProvider()
     _set_provider(runtime, provider)
 
     runtime.run_prompt("new task", continue_session=True)
 
-    assert [message.content for message in provider.calls[0]] == ["old task", "old answer", "new task"]
+    assert provider.calls == []
+    assert [message.content for message in provider.tool_calls[0]["messages"]] == ["old task", "old answer", "new task"]
 
 
 def test_freeze_continue_session_reads_existing_messages_without_persisting(tmp_path: Path) -> None:
@@ -906,7 +937,7 @@ def test_freeze_continue_session_reads_existing_messages_without_persisting(tmp_
     runtime.sessions.save(current)
 
     frozen = RockyRuntime.load_from(tmp_path, freeze=True)
-    provider = _OkProvider()
+    provider = _ConversationalToolProvider()
     _set_provider(frozen, provider)
 
     sessions_before = list(runtime.workspace.sessions_dir.glob("ses_*.json"))
@@ -916,7 +947,8 @@ def test_freeze_continue_session_reads_existing_messages_without_persisting(tmp_
     response = frozen.run_prompt("new task", continue_session=True)
 
     assert response.text == "ok"
-    assert [message.content for message in provider.calls[0]] == ["old task", "old answer", "new task"]
+    assert provider.calls == []
+    assert [message.content for message in provider.tool_calls[0]["messages"]] == ["old task", "old answer", "new task"]
     reloaded = runtime.sessions.load(current.id)
     assert [message["content"] for message in reloaded.messages[-2:]] == ["old task", "old answer"]
     assert list(runtime.workspace.sessions_dir.glob("ses_*.json")) == sessions_before
@@ -1183,14 +1215,14 @@ uv run python -m product_catalog_manager search "<query>"
         encoding="utf-8",
     )
     runtime = RockyRuntime.load_from(workspace)
-    provider = _ShellJsonProvider()
+    provider = _ConversationalToolProvider()
     _set_provider(runtime, provider)
 
     response = runtime.run_prompt("thanks", continue_session=False)
 
     assert response.route.task_signature == "conversation/general"
-    assert provider.tool_calls == []
-    assert provider.complete_calls
+    assert provider.calls == []
+    assert provider.tool_calls
 
 
 def test_runtime_inspection_prompt_uses_tool_capable_provider(tmp_path: Path, monkeypatch) -> None:
@@ -1412,7 +1444,7 @@ def test_spreadsheet_route_exposes_file_inspection_tools(tmp_path: Path) -> None
     assert "glob_paths" in selected
 
 
-def test_runtime_refuses_unexposed_tools_from_provider(tmp_path: Path) -> None:
+def test_runtime_allows_cross_route_tools_from_provider(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
     runtime.permissions.config.mode = "bypass"
 
@@ -1426,7 +1458,8 @@ def test_runtime_refuses_unexposed_tools_from_provider(tmp_path: Path) -> None:
     assert response.verification["status"] == "fail"
     tool_result = response.trace["tool_events"][0]
     assert tool_result["name"] == "write_file"
-    assert "\"tool_not_exposed\"" in tool_result["text"]
+    assert "\"tool_not_exposed\"" not in tool_result["text"]
+    assert (tmp_path / "oops.txt").exists()
 
 
 def test_runtime_allows_safe_hidden_inspection_tool_within_route_family(tmp_path: Path) -> None:
@@ -1447,7 +1480,7 @@ def test_runtime_allows_safe_hidden_inspection_tool_within_route_family(tmp_path
 
 def test_runtime_recreates_internal_state_dirs_if_deleted_mid_run(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
-    provider = _OkProvider()
+    provider = _ConversationalToolProvider()
     registry = _ProviderRegistry(provider)
     runtime.provider_registry = registry
     runtime.agent.provider_registry = registry
@@ -1465,7 +1498,7 @@ def test_runtime_recreates_internal_state_dirs_if_deleted_mid_run(tmp_path: Path
 
 def test_freeze_run_does_not_recreate_internal_state_dirs(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path, freeze=True)
-    provider = _OkProvider()
+    provider = _ConversationalToolProvider()
     registry = _ProviderRegistry(provider)
     runtime.provider_registry = registry
     runtime.agent.provider_registry = registry
