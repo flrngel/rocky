@@ -50,6 +50,8 @@ class FeedbackAnalysis:
     should_publish_skill: bool = True
     reflection_source: str = "heuristic_fallback"
     confidence: float = 0.0
+    observed_failure: bool = True
+    mismatch_confirmed: bool = False
 
     def memory_text(self) -> str:
         heading = {
@@ -69,6 +71,7 @@ class FeedbackAnalysis:
                 f"- Failure class: `{self.failure_class}`",
                 f"- Reflection source: `{self.reflection_source}`",
                 f"- Confidence: `{self.confidence:.2f}`",
+                f"- Observed failure: `{self.observed_failure}`",
             ]
         )
         path_text = "\n".join(f"- `{item}`" for item in self.path_hints[:6]) or "- none captured"
@@ -124,6 +127,7 @@ class FeedbackAnalysis:
             "should_publish_skill": self.should_publish_skill,
             "reflection_source": self.reflection_source,
             "confidence": self.confidence,
+            "observed_failure": self.observed_failure,
             "required_behavior": list(self.required_behavior),
             "prohibited_behavior": list(self.prohibited_behavior),
             "evidence_requirements": list(self.evidence_requirements),
@@ -236,6 +240,216 @@ class SkillSynthesizer:
             summary_parts.append(self._truncate(text_body.replace("\n", " | "), 360))
         return f"{name} [{status}]: " + "; ".join(part for part in summary_parts if part)
 
+    def _answer_json_payload(self, answer: str) -> Any:
+        candidate = extract_json_candidate(answer)
+        if not candidate:
+            return None
+        try:
+            return json.loads(candidate)
+        except Exception:
+            return None
+
+    def _answer_object_keys(self, answer: str) -> set[str]:
+        payload = self._answer_json_payload(answer)
+        objects: list[dict[str, Any]] = []
+        if isinstance(payload, dict):
+            objects = [payload]
+        elif isinstance(payload, list):
+            objects = [item for item in payload if isinstance(item, dict)]
+        if not objects:
+            return set()
+        keys: set[str] = set()
+        for item in objects:
+            keys.update(str(key) for key in item.keys())
+        return keys
+
+    def _answer_field_values(self, answer: str, field: str) -> list[str]:
+        payload = self._answer_json_payload(answer)
+        if isinstance(payload, dict):
+            values = [payload.get(field)] if field in payload else []
+        elif isinstance(payload, list):
+            values = [item.get(field) for item in payload if isinstance(item, dict) and field in item]
+        else:
+            values = []
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            text = str(value).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            ordered.append(text)
+        return ordered
+
+    def _trace_json_documents(self, trace: dict[str, Any]) -> list[Any]:
+        documents: list[Any] = []
+        for event in trace.get("tool_events") or []:
+            if event.get("type") != "tool_result" or not event.get("success", True):
+                continue
+            raw_text = str(event.get("text") or "")
+            try:
+                payload = json.loads(raw_text)
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            data = payload.get("data")
+            if isinstance(data, dict):
+                stdout = str(data.get("stdout") or "").strip()
+                if stdout:
+                    try:
+                        documents.append(json.loads(stdout))
+                    except Exception:
+                        pass
+                documents.append(data)
+        return documents
+
+    def _trace_primary_field_value(self, trace: dict[str, Any], field: str) -> str:
+        for document in self._trace_json_documents(trace):
+            if isinstance(document, dict):
+                products = document.get("products")
+                if isinstance(products, list):
+                    for product in products:
+                        if isinstance(product, dict) and field in product:
+                            value = str(product.get(field) or "").strip()
+                            if value:
+                                return value
+                if field in document:
+                    value = str(document.get(field) or "").strip()
+                    if value:
+                        return value
+        return ""
+
+    def _feedback_required_fields(self, feedback: str) -> list[str]:
+        if "only" not in feedback.lower():
+            return []
+        match = re.search(r"\bonly\b(?P<segment>[^.\n;:]*)", feedback, flags=re.IGNORECASE)
+        segment = match.group("segment") if match else feedback
+        fields = re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", segment)
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for field in fields:
+            if field in seen:
+                continue
+            seen.add(field)
+            ordered.append(field)
+        return ordered
+
+    def _feedback_boundary_field(self, feedback: str) -> str:
+        lowered = feedback.lower()
+        if "hard boundary" not in lowered and "matches the product" not in lowered:
+            return ""
+        identifier_matches = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", feedback)
+        counts: dict[str, int] = {}
+        stopwords = {
+            "the",
+            "and",
+            "but",
+            "have",
+            "with",
+            "when",
+            "keep",
+            "only",
+            "same",
+            "core",
+            "name",
+            "age",
+            "values",
+            "value",
+            "product",
+            "candidates",
+            "candidate",
+            "different",
+            "from",
+            "observed",
+            "output",
+            "hard",
+            "boundary",
+            "matches",
+            "match",
+            "use",
+            "whose",
+            "this",
+            "workspace",
+        }
+        for item in identifier_matches:
+            lowered_item = item.lower()
+            if lowered_item in stopwords:
+                continue
+            counts[lowered_item] = counts.get(lowered_item, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        if not ranked:
+            return ""
+        best_field, count = ranked[0]
+        return best_field if count >= 2 else ""
+
+    def _feedback_already_satisfied(
+        self,
+        *,
+        feedback: str,
+        last_answer: str,
+        trace: dict[str, Any],
+    ) -> tuple[bool, str]:
+        required_fields = self._feedback_required_fields(feedback)
+        answer_keys = self._answer_object_keys(last_answer)
+        if required_fields and answer_keys:
+            required_set = set(required_fields)
+            if answer_keys <= required_set and all(field in answer_keys for field in required_set):
+                return (
+                    True,
+                    "The prior answer already matched the requested output schema, so no new failure was observed.",
+                )
+
+        boundary_field = self._feedback_boundary_field(feedback)
+        if boundary_field:
+            product_value = self._trace_primary_field_value(trace, boundary_field)
+            answer_values = self._answer_field_values(last_answer, boundary_field)
+            if product_value and answer_values and all(value == product_value for value in answer_values):
+                return (
+                    True,
+                    f"The prior answer already respected `{boundary_field}` as a hard boundary, so no new failure was observed.",
+                )
+
+        return False, ""
+
+    def _feedback_concrete_mismatch(
+        self,
+        *,
+        feedback: str,
+        last_answer: str,
+        trace: dict[str, Any],
+    ) -> tuple[bool, str]:
+        required_fields = self._feedback_required_fields(feedback)
+        answer_keys = self._answer_object_keys(last_answer)
+        if required_fields and answer_keys:
+            required_set = set(required_fields)
+            if answer_keys != required_set:
+                extra_fields = sorted(answer_keys - required_set)
+                missing_fields = sorted(required_set - answer_keys)
+                parts: list[str] = []
+                if extra_fields:
+                    parts.append(f"extra fields present: {', '.join(extra_fields)}")
+                if missing_fields:
+                    parts.append(f"missing required fields: {', '.join(missing_fields)}")
+                reason = "; ".join(parts) or "the prior answer did not match the requested output schema"
+                return (
+                    True,
+                    f"The prior answer violated the requested output schema ({reason}).",
+                )
+
+        boundary_field = self._feedback_boundary_field(feedback)
+        if boundary_field:
+            product_value = self._trace_primary_field_value(trace, boundary_field)
+            answer_values = self._answer_field_values(last_answer, boundary_field)
+            mismatched_values = sorted({value for value in answer_values if value != product_value}) if product_value else []
+            if product_value and mismatched_values:
+                return (
+                    True,
+                    f"The prior answer included `{boundary_field}` values that did not match the product's `{boundary_field}` ({', '.join(mismatched_values)} vs {product_value}).",
+                )
+
+        return False, ""
+
     def _trace_snapshot(self, trace: dict[str, Any]) -> dict[str, Any]:
         route = trace.get("route") or {}
         verification = trace.get("verification") or {}
@@ -300,8 +514,10 @@ class SkillSynthesizer:
             "Rules:\n"
             "- Use only the provided prompt, answer, feedback, and trace evidence.\n"
             "- Do not invent commands, files, outputs, or hidden reasoning.\n"
+            "- First decide whether the previous answer actually violated the feedback. If the previous answer already satisfies the feedback, set `observed_failure` to false.\n"
             "- Prefer generalized lessons over product-specific wording.\n"
             "- If the lesson does not clearly generalize beyond this exact case, choose `example` or `lesson` and set `should_publish_skill` to false.\n"
+            "- If `observed_failure` is false, choose `lesson` and set `should_publish_skill` to false.\n"
             "- Keep `debug_steps` high-signal and concise. They should explain the reasoning flow without hidden chain-of-thought.\n"
             "- Return valid JSON only.\n\n"
             "Return exactly these keys:\n"
@@ -309,6 +525,7 @@ class SkillSynthesizer:
             '"title": str, '
             '"summary": str, '
             '"failure_class": str, '
+            '"observed_failure": bool, '
             '"root_cause": str, '
             '"corrected_outcome": str, '
             '"generalization_rationale": str, '
@@ -476,11 +693,56 @@ class SkillSynthesizer:
         feedback_keywords = sorted(tokenize_keywords(feedback))
         prompt_keywords = sorted(tokenize_keywords(last_prompt))
         path_hints = self._path_hints(last_prompt, last_answer, feedback, json.dumps(trace, ensure_ascii=False))
+        already_satisfied, no_failure_reason = self._feedback_already_satisfied(
+            feedback=feedback,
+            last_answer=last_answer,
+            trace=trace,
+        )
+        if already_satisfied:
+            summary = no_failure_reason or "The prior answer already satisfied the teacher feedback."
+            return FeedbackAnalysis(
+                failure_class="no_new_failure_observed",
+                task_signature=task_signature,
+                task_family=task_family,
+                title=self._analysis_title(task_signature, "no_new_failure_observed"),
+                summary=summary,
+                required_behavior=["Keep the teacher guidance available as a notebook reminder for future work."],
+                prohibited_behavior=["Do not publish a new reusable corrective skill when the prior answer already complied with the feedback."],
+                evidence_requirements=["Only publish a corrective skill when the prior answer and feedback show a concrete mismatch."],
+                triggers=[task_signature, task_family, *path_hints[:4], *tool_names[:4], *prompt_keywords[:4]],
+                keywords=feedback_keywords[:16],
+                path_hints=path_hints[:8],
+                tool_names=tool_names[:8],
+                prompt_excerpt=last_prompt[:1200].strip(),
+                answer_excerpt=last_answer[:1200].strip(),
+                feedback_excerpt=feedback.strip()[:2000],
+                root_cause="The feedback described a rule that the previous answer already followed.",
+                corrected_outcome="No output change is required; keep this as a notebook lesson instead of a reusable corrective skill.",
+                generalization_rationale="Publishing another reusable skill here would be redundant because the previous answer already complied.",
+                evidence=[summary],
+                debug_steps=[
+                    "Recovered the prior prompt, answer, and trace evidence.",
+                    "Compared the feedback against the prior answer and trace.",
+                    "Detected no concrete mismatch that would justify a new corrective skill.",
+                ],
+                memory_kind="lesson",
+                should_publish_skill=False,
+                reflection_source="heuristic_fallback",
+                confidence=0.3,
+                observed_failure=False,
+            )
+        confirmed_mismatch, mismatch_reason = self._feedback_concrete_mismatch(
+            feedback=feedback,
+            last_answer=last_answer,
+            trace=trace,
+        )
         resolved_failure_class = failure_class or self._failure_class(feedback, trace)
         required_behavior = self._required_behavior(task_signature, feedback, trace)
         prohibited_behavior = self._prohibited_behavior(feedback)
         evidence_requirements = self._evidence_requirements(task_signature)
         evidence = (self._trace_snapshot(trace).get("tool_evidence") or [])[:6]
+        if confirmed_mismatch and mismatch_reason:
+            evidence = [mismatch_reason, *evidence][:6]
         triggers: list[str] = []
         for item in [
             task_signature,
@@ -524,7 +786,9 @@ class SkillSynthesizer:
             memory_kind="pattern",
             should_publish_skill=True,
             reflection_source="heuristic_fallback",
-            confidence=0.35,
+            confidence=0.55 if confirmed_mismatch else 0.35,
+            observed_failure=True,
+            mismatch_confirmed=confirmed_mismatch,
         )
 
     def _analysis_from_payload(
@@ -534,10 +798,54 @@ class SkillSynthesizer:
         heuristic: FeedbackAnalysis,
     ) -> FeedbackAnalysis:
         memory_kind = self._memory_kind(payload.get("memory_kind"), heuristic.memory_kind)
+        payload_observed_failure = self._bool_value(payload.get("observed_failure"), heuristic.observed_failure)
+        observed_failure = payload_observed_failure
+        if not heuristic.observed_failure:
+            observed_failure = False
+        locked_to_heuristic = heuristic.mismatch_confirmed and not payload_observed_failure
+        if locked_to_heuristic:
+            observed_failure = True
+        if not observed_failure:
+            memory_kind = "lesson"
+        elif locked_to_heuristic:
+            memory_kind = heuristic.memory_kind
         should_publish_skill = self._bool_value(
             payload.get("should_publish_skill"),
             heuristic.should_publish_skill if memory_kind == "pattern" else False,
         )
+        if not observed_failure:
+            should_publish_skill = False
+        elif locked_to_heuristic:
+            should_publish_skill = heuristic.should_publish_skill
+        if locked_to_heuristic:
+            return FeedbackAnalysis(
+                failure_class=heuristic.failure_class,
+                task_signature=heuristic.task_signature,
+                task_family=heuristic.task_family,
+                title=heuristic.title,
+                summary=heuristic.summary,
+                required_behavior=heuristic.required_behavior,
+                prohibited_behavior=heuristic.prohibited_behavior,
+                evidence_requirements=heuristic.evidence_requirements,
+                triggers=heuristic.triggers,
+                keywords=heuristic.keywords,
+                path_hints=heuristic.path_hints,
+                tool_names=heuristic.tool_names,
+                prompt_excerpt=heuristic.prompt_excerpt,
+                answer_excerpt=heuristic.answer_excerpt,
+                feedback_excerpt=heuristic.feedback_excerpt,
+                root_cause=heuristic.root_cause,
+                corrected_outcome=heuristic.corrected_outcome,
+                generalization_rationale=heuristic.generalization_rationale,
+                evidence=heuristic.evidence,
+                debug_steps=heuristic.debug_steps,
+                memory_kind=heuristic.memory_kind,
+                should_publish_skill=heuristic.should_publish_skill,
+                reflection_source="heuristic_locked",
+                confidence=max(heuristic.confidence, self._float_value(payload.get("confidence"), 0.0)),
+                observed_failure=True,
+                mismatch_confirmed=heuristic.mismatch_confirmed,
+            )
         triggers = []
         for item in [*self._string_list(payload.get("triggers"), limit=12), *heuristic.triggers]:
             if item and item not in triggers:
@@ -552,6 +860,8 @@ class SkillSynthesizer:
         evidence = self._string_list(payload.get("evidence"), limit=8) or heuristic.evidence
         debug_steps = self._string_list(payload.get("debug_steps"), limit=8)
         failure_class = str(payload.get("failure_class") or heuristic.failure_class).strip() or heuristic.failure_class
+        if not observed_failure:
+            failure_class = "no_new_failure_observed"
         title = str(payload.get("title") or heuristic.title).strip() or heuristic.title
         summary = str(payload.get("summary") or heuristic.summary).strip() or heuristic.summary
         root_cause = str(payload.get("root_cause") or heuristic.root_cause or summary).strip() or summary
@@ -586,6 +896,8 @@ class SkillSynthesizer:
             should_publish_skill=should_publish_skill,
             reflection_source="model_reflection",
             confidence=self._float_value(payload.get("confidence"), 0.7),
+            observed_failure=observed_failure,
+            mismatch_confirmed=heuristic.mismatch_confirmed,
         )
 
     def analyze_feedback(

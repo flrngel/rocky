@@ -153,6 +153,183 @@ def test_learn_creates_structured_pattern_memory_from_feedback(tmp_path: Path, m
     assert retrieved[0]["failure_class"] == "project_memory_promotion_from_unsupported_inference"
 
 
+def test_learn_does_not_publish_skill_when_feedback_is_already_satisfied(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runtime = RockyRuntime.load_from(tmp_path / "workspace")
+    runtime.agent.last_prompt = "brindle 10"
+    runtime.agent.last_answer = (
+        '[{"id":"B10-001","product_name":"Brindle 10 Orchard Edition","lineage_code":"A1"},'
+        '{"id":"B10-002","product_name":"Brindle 10 Orchard Edition Gift Tin","lineage_code":"A1"}]'
+    )
+    runtime.agent.last_trace = {
+        "route": {"task_signature": "repo/shell_execution"},
+        "thread": {
+            "current_thread": {
+                "thread_id": "thread_lineage_ok",
+                "task_signature": "repo/shell_execution",
+                "task_family": "repo",
+            }
+        },
+        "verification": {},
+        "selected_tools": ["run_shell_command"],
+        "tool_events": [
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": json.dumps(
+                    {
+                        "summary": "Command exited with 0",
+                        "data": {
+                            "command": 'sh catalog.sh "brindle 10"',
+                            "stdout": json.dumps(
+                                {
+                                    "query": "brindle 10",
+                                    "products": [{"product_id": "P-BRINDLE-10", "lineage_code": "A1"}],
+                                    "candidates": [
+                                        {"id": "B10-001", "lineage_code": "A1"},
+                                        {"id": "B10-002", "lineage_code": "A1"},
+                                        {"id": "B10-003", "lineage_code": "N4"},
+                                    ],
+                                }
+                            ),
+                        },
+                    }
+                ),
+            }
+        ],
+    }
+    runtime.provider_registry.primary = lambda: _FakeReflectionProvider(  # type: ignore[method-assign]
+        {
+            "title": "No new failure observed",
+            "summary": "The prior answer already respected lineage_code as a hard boundary, so there is no new corrective failure to publish.",
+            "failure_class": "filtering_logic_error",
+            "observed_failure": False,
+            "root_cause": "The feedback restates a rule that the prior answer already followed.",
+            "corrected_outcome": "No answer change is required.",
+            "generalization_rationale": "Keep this as a notebook lesson only.",
+            "evidence": [
+                "The prior answer only contains candidates with lineage_code A1.",
+                "The product lineage_code in the observed tool output is also A1.",
+            ],
+            "debug_steps": [
+                "Compared the teacher feedback against the prior answer.",
+                "Checked the product lineage_code in the tool output.",
+                "Found that the prior answer already followed the requested rule.",
+            ],
+            "memory_kind": "lesson",
+            "should_publish_skill": False,
+            "confidence": 0.94,
+            "required_behavior": [
+                "Keep this as a notebook reminder only.",
+            ],
+            "prohibited_behavior": [
+                "Do not publish a reusable corrective skill when there is no mismatch.",
+            ],
+            "evidence_requirements": [
+                "Verify that the prior answer actually violated the feedback before publishing a skill.",
+            ],
+            "triggers": ["repo/shell_execution", "lineage_code"],
+            "keywords": ["lineage_code", "already satisfied"],
+        }
+    )
+
+    result = runtime.learn(
+        "When duplicate-review candidates share the same core name and age but have different lineage_code values, use the product lineage_code from the observed output as a hard boundary. Keep only candidates whose lineage_code matches the product lineage_code."
+    )
+
+    assert result["published"] is False
+    assert result["analysis"]["observed_failure"] is False
+    assert result["analysis"]["memory_kind"] == "lesson"
+    assert result["student_memory"] is None
+    assert result["student_pattern"] is None
+
+
+def test_learn_heuristic_does_not_publish_when_answer_already_matches_output_schema(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runtime = RockyRuntime.load_from(tmp_path / "workspace")
+    runtime.agent.last_prompt = "marlow 14"
+    runtime.agent.last_answer = (
+        '[{"id":"M14-001","product_name":"Marlow 14 Riverside Batch"},'
+        '{"id":"M14-002","product_name":"Marlow 14 Riverside Batch Gift Set"}]'
+    )
+    runtime.agent.last_trace = {
+        "route": {"task_signature": "repo/shell_execution"},
+        "thread": {
+            "current_thread": {
+                "thread_id": "thread_schema_ok",
+                "task_signature": "repo/shell_execution",
+                "task_family": "repo",
+            }
+        },
+        "verification": {},
+        "selected_tools": ["run_shell_command"],
+    }
+    runtime.provider_registry.primary = lambda: None  # type: ignore[method-assign]
+
+    result = runtime.learn(
+        "For duplicate-review answers in this workspace, the final JSON should contain only `id` and `product_name`. Treat helper fields like `same_core_name`, `same_age_statement`, `lineage_code`, and `duplicate_signal` as internal evidence, not deliverable output."
+    )
+
+    assert result["published"] is False
+    assert result["analysis"]["observed_failure"] is False
+    assert result["analysis"]["memory_kind"] == "lesson"
+    assert result["student_memory"] is None
+    assert result["student_pattern"] is None
+
+
+def test_learn_locks_in_evidence_backed_schema_failure_when_reflection_denies_it(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runtime = RockyRuntime.load_from(tmp_path / "workspace")
+    runtime.agent.last_prompt = "brindle 10"
+    runtime.agent.last_answer = (
+        '[{"id":"B10-001","product_name":"Brindle 10 Orchard Edition","same_core_name":true,"lineage_code":"A1"}]'
+    )
+    runtime.agent.last_trace = {
+        "route": {"task_signature": "repo/shell_execution"},
+        "thread": {
+            "current_thread": {
+                "thread_id": "thread_schema_mismatch",
+                "task_signature": "repo/shell_execution",
+                "task_family": "repo",
+            }
+        },
+        "verification": {},
+        "selected_tools": ["run_shell_command"],
+    }
+    runtime.provider_registry.primary = lambda: _FakeReflectionProvider(  # type: ignore[method-assign]
+        {
+            "title": "Restrict JSON output fields for duplicate-review tasks",
+            "summary": "Only return id and product_name for duplicate-review output.",
+            "failure_class": "output_format_violation",
+            "observed_failure": False,
+            "root_cause": "The answer already satisfies the requested schema.",
+            "corrected_outcome": "No change required.",
+            "generalization_rationale": "Keep it as a lesson only.",
+            "evidence": ["The answer already matches the expected schema."],
+            "debug_steps": ["Reviewed the previous answer against the feedback."],
+            "memory_kind": "lesson",
+            "should_publish_skill": False,
+            "confidence": 0.95,
+            "required_behavior": ["Keep only notebook memory."],
+            "prohibited_behavior": ["Do not publish a skill."],
+            "evidence_requirements": ["None."],
+            "triggers": ["repo/shell_execution"],
+            "keywords": ["schema"],
+        }
+    )
+
+    result = runtime.learn(
+        "For duplicate-review answers in this workspace, the final JSON should contain only `id` and `product_name`."
+    )
+
+    assert result["published"] is True
+    assert result["analysis"]["observed_failure"] is True
+    assert result["analysis"]["reflection_source"] == "heuristic_locked"
+    assert result["analysis"]["memory_kind"] == "pattern"
+    assert result["student_pattern"] is not None
+
+
 def test_learn_model_reflection_creates_variant_pattern(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runtime = RockyRuntime.load_from(tmp_path / "workspace")
