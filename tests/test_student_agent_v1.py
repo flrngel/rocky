@@ -153,19 +153,19 @@ def test_learn_creates_structured_pattern_memory_from_feedback(tmp_path: Path, m
     assert retrieved[0]["failure_class"] == "project_memory_promotion_from_unsupported_inference"
 
 
-def test_learn_product_feedback_creates_expression_variant_pattern(tmp_path: Path, monkeypatch) -> None:
+def test_learn_model_reflection_creates_variant_pattern(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runtime = RockyRuntime.load_from(tmp_path / "workspace")
-    runtime.agent.last_prompt = "oban 15"
+    runtime.agent.last_prompt = "series alpha 15"
     runtime.agent.last_answer = (
-        '[{"id":"1","product_name":"Oban Port Cask 15 Years","confidence":"confirmed"},'
-        '{"id":"2","product_name":"Oban Cask Strength 15 Years","confidence":"uncertain"}]'
+        '[{"id":"1","product_name":"Series Alpha 15","confidence":"confirmed"},'
+        '{"id":"2","product_name":"Series Alpha Reserve 15","confidence":"uncertain"}]'
     )
     runtime.agent.last_trace = {
         "route": {"task_signature": "repo/shell_execution"},
         "thread": {
             "current_thread": {
-                "thread_id": "thread_oban",
+                "thread_id": "thread_series_alpha",
                 "task_signature": "repo/shell_execution",
                 "task_family": "repo",
             }
@@ -173,35 +173,64 @@ def test_learn_product_feedback_creates_expression_variant_pattern(tmp_path: Pat
         "verification": {},
         "selected_tools": ["run_shell_command"],
     }
-
-    monkeypatch.setattr(
-        runtime.learning_manager,
-        "learn_from_feedback",
-        lambda **kwargs: {"published": True, "skill": "dummy"},
+    runtime.provider_registry.primary = lambda: _FakeReflectionProvider(  # type: ignore[method-assign]
+        {
+            "title": "Entity Variant Isolation",
+            "summary": "When the observed results establish one clear item family, Rocky should keep that family and exclude different variants.",
+            "failure_class": "entity_variant_misclassified",
+            "root_cause": "The answer treated a distinct variant as a fallback candidate instead of isolating the established family.",
+            "corrected_outcome": "Keep the established family and exclude different variants unless the query explicitly asks for them.",
+            "generalization_rationale": "This is a reusable catalog-matching rule about variant isolation, not a one-off product detail.",
+            "evidence": [
+                "The prior answer mixed a base item with a distinct variant.",
+                "The feedback says to exclude different variants unless the query names them.",
+            ],
+            "debug_steps": [
+                "Compared the prior answer against the teacher feedback.",
+                "Identified that the error came from mixing one item family with a distinct variant.",
+                "Generalized the correction into a reusable variant-isolation rule.",
+            ],
+            "memory_kind": "pattern",
+            "should_publish_skill": True,
+            "confidence": 0.92,
+            "required_behavior": [
+                "Identify the established item family from the observed results.",
+                "Keep only that family in the final answer unless the query explicitly names a different variant.",
+            ],
+            "prohibited_behavior": [
+                "Do not include distinct variants as fallback candidates once the item family is established.",
+            ],
+            "evidence_requirements": [
+                "Use the observed results from the current run to determine the established family.",
+            ],
+            "triggers": ["repo/shell_execution", "catalog matching", "variant isolation"],
+            "keywords": ["variant", "family", "catalog"],
+        }
     )
 
     result = runtime.learn(
-        "Return valid JSON only. For duplicate matching, treat cask strength, single barrel, and different cask finishes as different expressions unless the query explicitly names that variant."
+        "Return valid JSON only. For duplicate matching, exclude different variants unless the query explicitly asks for that specific variant."
     )
 
-    assert result["analysis"]["failure_class"] == "product_expression_variant_misclassified"
+    assert result["analysis"]["failure_class"] == "entity_variant_misclassified"
+    assert result["analysis"]["reflection_source"] == "model_reflection"
     pattern_path = Path(result["student_pattern"]["path"])
     pattern_text = pattern_path.read_text(encoding="utf-8")
-    assert "valid JSON only" in pattern_text
-    assert "distinct expression variants" in pattern_text
+    assert "variant-isolation rule" in pattern_text
+    assert "exclude different variants" in pattern_text
     assert "## Evidence observed" in pattern_text
 
 
-def test_learn_empty_result_feedback_records_clear_base_family_rule(tmp_path: Path, monkeypatch) -> None:
+def test_learn_model_reflection_captures_clear_family_rule(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runtime = RockyRuntime.load_from(tmp_path / "workspace")
-    runtime.agent.last_prompt = "oban 15"
+    runtime.agent.last_prompt = "series alpha 15"
     runtime.agent.last_answer = "[]"
     runtime.agent.last_trace = {
         "route": {"task_signature": "repo/shell_execution"},
         "thread": {
             "current_thread": {
-                "thread_id": "thread_oban_empty",
+                "thread_id": "thread_series_alpha_empty",
                 "task_signature": "repo/shell_execution",
                 "task_family": "repo",
             }
@@ -209,23 +238,49 @@ def test_learn_empty_result_feedback_records_clear_base_family_rule(tmp_path: Pa
         "verification": {},
         "selected_tools": ["run_shell_command"],
     }
-
-    monkeypatch.setattr(
-        runtime.learning_manager,
-        "learn_from_feedback",
-        lambda **kwargs: {"published": True, "skill": "dummy"},
+    runtime.provider_registry.primary = lambda: _FakeReflectionProvider(  # type: ignore[method-assign]
+        {
+            "title": "Established Family Should Not Collapse To Empty",
+            "summary": "If the observed results already show a clear matching family, Rocky should not collapse to an empty answer.",
+            "failure_class": "over_pruned_established_family",
+            "root_cause": "The answer over-pruned and discarded the established matching family instead of keeping it.",
+            "corrected_outcome": "Keep the established family in the final answer and exclude unrelated variants.",
+            "generalization_rationale": "This is a reusable lesson about over-pruning when the evidence already establishes a matching family.",
+            "evidence": [
+                "The prior answer was empty.",
+                "The feedback says there were confirmed matches for the relevant family.",
+            ],
+            "debug_steps": [
+                "Noted that the prior answer collapsed to an empty list.",
+                "Used the teacher feedback to identify over-pruning as the failure.",
+                "Generalized a reusable rule about established families and over-pruning.",
+            ],
+            "memory_kind": "pattern",
+            "should_publish_skill": True,
+            "confidence": 0.9,
+            "required_behavior": [
+                "Keep the established matching family when the evidence already supports it.",
+            ],
+            "prohibited_behavior": [
+                "Do not collapse to an empty answer after identifying an established matching family.",
+            ],
+            "evidence_requirements": [
+                "Check whether the observed results already establish a matching family before pruning.",
+            ],
+            "triggers": ["repo/shell_execution", "over-pruning", "matching family"],
+            "keywords": ["empty", "pruning", "family"],
+        }
     )
 
     result = runtime.learn(
-        "Your last catalog answer over-pruned and returned an empty array even though the search results contained matching 15-year products. "
-        "For duplicate matching, do not collapse to [] when there are confirmed matches for the relevant base expression family. "
-        "Treat cask strength and other distinct expressions as separate products, but keep the non-cask-strength 15-year expression variants when they are the clear matching family for the query."
+        "Your last catalog answer over-pruned and returned an empty array even though the evidence contained confirmed matches for the relevant family. Do not collapse to [] when the matching family is already established."
     )
 
     analysis = result["analysis"]
-    assert analysis["failure_class"] == "product_expression_variant_misclassified"
-    assert any("clear base-expression family" in item for item in analysis["required_behavior"])
-    assert any("fallback uncertainty" in item for item in analysis["prohibited_behavior"])
+    assert analysis["failure_class"] == "over_pruned_established_family"
+    assert analysis["reflection_source"] == "model_reflection"
+    assert any("established matching family" in item for item in analysis["required_behavior"])
+    assert any("empty answer" in item for item in analysis["prohibited_behavior"])
 
 
 def test_learn_model_reflection_can_keep_case_specific_feedback_as_example(tmp_path: Path, monkeypatch) -> None:

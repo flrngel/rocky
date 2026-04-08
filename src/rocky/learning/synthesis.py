@@ -189,28 +189,6 @@ class SkillSynthesizer:
             return lowered
         return default
 
-    @staticmethod
-    def _mentions_expression_variants(lowered: str) -> bool:
-        return any(term in lowered for term in ("cask strength", "single barrel", "barrel proof", "finish", "expression", "variant"))
-
-    @staticmethod
-    def _mentions_clear_base_family(lowered: str) -> bool:
-        return any(
-            term in lowered
-            for term in (
-                "empty array",
-                "collapse to []",
-                "confirmed matches",
-                "matching 15-year",
-                "matching products",
-                "clear matching family",
-                "base expression",
-                "base query",
-                "non-cask-strength",
-                "over-pruned",
-            )
-        )
-
     def _path_hints(self, *texts: str) -> list[str]:
         path_re = re.compile(r"(?<![A-Za-z0-9])(?:\.{1,2}/)?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+")
         seen: set[str] = set()
@@ -411,19 +389,6 @@ class SkillSynthesizer:
 
     def _failure_class(self, feedback: str, trace: dict[str, Any] | None = None) -> str:
         lowered = feedback.lower()
-        if self._mentions_expression_variants(lowered) and any(
-            term in lowered
-            for term in (
-                "different product",
-                "different expression",
-                "distinct release",
-                "do not include",
-                "don't include",
-                "exclude",
-                "variant",
-            )
-        ):
-            return "product_expression_variant_misclassified"
         if any(term in lowered for term in ("continue", "follow-up", "resume", "continuation")):
             return "continuation_lost_after_tool_backed_work"
         if any(term in lowered for term in ("memory", "poison", "stored", "saved", "save")) and any(
@@ -444,8 +409,6 @@ class SkillSynthesizer:
         lowered = feedback.lower()
         tool_names = [str(name) for name in ((trace or {}).get("selected_tools") or []) if str(name)]
         items: list[str] = []
-        expression_variants = self._mentions_expression_variants(lowered)
-        clear_base_family = self._mentions_clear_base_family(lowered)
         if task_signature.startswith("repo/"):
             items.append("Stay inside the active repo/task thread across short follow-up turns.")
             items.append("Ground file, shell, and git claims in fresh tool evidence from this run.")
@@ -459,14 +422,6 @@ class SkillSynthesizer:
             items.append("Use a locate-or-read step before parsing, then return valid JSON only.")
         if any(term in lowered for term in ("json", "json array", "valid json", "stdout")):
             items.append("Return the final deliverable as valid JSON only with no markdown fences, prose, or malformed keys.")
-        if expression_variants:
-            items.append(
-                "When matching product duplicates, treat cask strength, single barrel, barrel proof, and distinct cask finishes as separate expressions unless the query explicitly names that variant."
-            )
-        if expression_variants and clear_base_family:
-            items.append(
-                "When observed results show one clear base-expression family for the requested product, keep that family's naming variants as matches and exclude other expression families from the final candidate list."
-            )
         if any(term in lowered for term in ("exact json", "json file", "reread", "read back")):
             items.append("If the user asks for a result file or exact JSON, write the exact payload and reread it before answering.")
         if not items and tool_names:
@@ -481,18 +436,12 @@ class SkillSynthesizer:
             "Do not turn unsupported inference into deterministic truth.",
             "Do not answer the current ask by replaying prior setup unless it is required for correctness.",
         ]
-        expression_variants = self._mentions_expression_variants(lowered)
-        clear_base_family = self._mentions_clear_base_family(lowered)
         if any(term in lowered for term in ("json", "json array", "valid json")):
             items.append("Do not wrap final JSON in markdown fences or leave malformed JSON syntax in the answer.")
         if any(term in lowered for term in ("continue", "resume", "follow-up")):
             items.append("Do not drop into generic chat routing when the user is continuing an active artifact-backed task.")
         if any(term in lowered for term in ("memory", "store", "save", "poison")):
             items.append("Do not promote answer rhetoric or one-off speculation into durable project memory.")
-        if expression_variants:
-            items.append("Do not include distinct expression variants as candidates for the base product just because distillery and age match.")
-        if expression_variants and clear_base_family:
-            items.append("Do not return an empty result or keep other expression families as fallback uncertainty once the clear base-expression family is present in the observed results.")
         if any(term in lowered for term in ("exact", "verified", "check")):
             items.append("Do not claim verification until the relevant tool evidence has been gathered in this run.")
         return items[:8]
@@ -730,6 +679,7 @@ class SkillSynthesizer:
             "reflection_confidence": analysis.confidence,
             "root_cause": analysis.root_cause,
             "generalization_rationale": analysis.generalization_rationale,
+            "feedback_excerpt": analysis.feedback_excerpt,
             "debug_steps": analysis.debug_steps,
             "evidence": analysis.evidence,
             "promotion_state": "candidate",

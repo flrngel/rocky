@@ -67,6 +67,24 @@ def _append_context_blocks(parts: list[str], context: ContextPackage) -> None:
             parts.append(
                 "Retrieved learned skills are corrections from earlier feedback in this workspace. When a learned skill applies, follow it before generic heuristics. Treat explicit prohibitions in learned skills as hard constraints for this answer, even if the skill is still marked candidate."
             )
+            learned_constraints: list[str] = []
+            for item in context.skills:
+                if item.get("origin") != "learned" and int(item.get("generation", 0) or 0) <= 0:
+                    continue
+                feedback = str(item.get("feedback_excerpt") or "").strip()
+                if feedback:
+                    learned_constraints.append(f"- Teacher correction: {feedback}")
+                for rule in (item.get("prohibited_behavior") or [])[:3]:
+                    text = str(rule).strip()
+                    if text:
+                        learned_constraints.append(f"- Do not: {text}")
+                for rule in (item.get("required_behavior") or [])[:3]:
+                    text = str(rule).strip()
+                    if text:
+                        learned_constraints.append(f"- Do: {text}")
+            if learned_constraints:
+                parts.append("## Learned constraints")
+                parts.extend(learned_constraints[:12])
         parts.append("## Retrieved skills")
         for item in context.skills:
             parts.append(
@@ -96,6 +114,7 @@ def build_system_prompt(
         "Student notes are durable teacher feedback. Reuse them aggressively when they match the task, but verify environment facts live instead of assuming they still hold.",
         "When newer student feedback or learned skills conflict with older project instructions or fuzzy heuristics, prefer the newer corrective guidance.",
         "Treat explicit 'Do not...' rules from retrieved student notes and learned skills as hard constraints for the current answer, not soft suggestions.",
+        "If a retrieved learned rule excludes a candidate, claim, file, or action from the current deliverable, omit it from the deliverable instead of keeping it with a warning label.",
         "Unsupported deterministic claims are forbidden. If support is missing, gather evidence or state the uncertainty explicitly.",
     ]
     if context.tool_families:

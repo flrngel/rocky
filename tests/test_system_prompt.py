@@ -119,6 +119,8 @@ def test_system_prompt_makes_learned_skill_prohibitions_hard_constraints() -> No
                     "generation": 2,
                     "promotion_state": "candidate",
                     "text": "- Do not include distinct expression variants as candidates for the base product.",
+                    "required_behavior": ["Keep only the established item family once it is supported by the evidence."],
+                    "prohibited_behavior": ["Include distinct variants once the established item family is known."],
                 }
             ],
             tool_families=["shell", "filesystem"],
@@ -131,3 +133,6 @@ def test_system_prompt_makes_learned_skill_prohibitions_hard_constraints() -> No
     assert "prefer the newer corrective guidance" in prompt
     assert "Treat explicit 'Do not...' rules from retrieved student notes and learned skills as hard constraints" in prompt
     assert "even if the skill is still marked candidate" in prompt
+    assert "## Learned constraints" in prompt
+    assert "Do not: Include distinct variants once the established item family is known." in prompt
+    assert "Do: Keep only the established item family once it is supported by the evidence." in prompt

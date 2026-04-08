@@ -253,6 +253,12 @@ class ContextBuilder:
                 "promotion_state": skill.metadata.get("promotion_state", "promoted"),
                 "failure_class": skill.metadata.get("failure_class"),
                 "task_family": skill.metadata.get("task_family"),
+                "required_behavior": list(skill.metadata.get("required_behavior") or []),
+                "prohibited_behavior": list(skill.metadata.get("prohibited_behavior") or []),
+                "evidence_requirements": list(skill.metadata.get("evidence_requirements") or []),
+                "feedback_excerpt": skill.metadata.get("feedback_excerpt"),
+                "reflection_source": skill.metadata.get("reflection_source"),
+                "reflection_confidence": skill.metadata.get("reflection_confidence"),
             }
             for skill in self.skill_retriever.retrieve(prompt, task_signature, thread=active_thread)
         ]

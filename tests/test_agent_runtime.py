@@ -9,6 +9,7 @@ import httpx
 
 from rocky.app import RockyRuntime
 from rocky.core.messages import Message
+from rocky.core.router import Lane, RouteDecision, TaskClass
 from rocky.providers.base import ProviderResponse
 
 
@@ -162,6 +163,59 @@ class _RepairingProjectShellJsonProvider:
         self.complete_calls.append(messages)
         return ProviderResponse(
             text='[{"id":"1","product_name":"Oban Port Cask 15 Years","confidence":"confirmed"}]'
+        )
+
+
+class _LearnedConstraintRepairProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+        self.complete_calls: list[list[Message]] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        shell_result = execute_tool("run_shell_command", {"command": "printf 'search results\\n'", "timeout_s": 5})
+        if len(self.tool_calls) == 1:
+            text = (
+                "["
+                '{"id":"1","product_name":"Oban Port Cask 15 Years","confidence":"confirmed"},'
+                '{"id":"2","product_name":"Oban Cask Strength 15 Years","confidence":"uncertain"}'
+                "]"
+            )
+            raw = {"rounds": ["initial"]}
+        else:
+            text = '[{"id":"1","product_name":"Oban Port Cask 15 Years","confidence":"confirmed"}]'
+            raw = {"rounds": ["retry"]}
+        return ProviderResponse(
+            text=text,
+            raw=raw,
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "printf 'search results\\n'", "timeout_s": 5},
+                    "text": shell_result,
+                    "success": True,
+                }
+            ],
+        )
+
+    def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
+        self.complete_calls.append(messages)
+        if len(self.complete_calls) == 1:
+            return ProviderResponse(
+                text=(
+                    '{"status":"fail","reason":"Learned constraint violation: the final deliverable still includes a '
+                    'candidate that the learned rule says to exclude. Remove excluded candidates instead of '
+                    'keeping them as uncertain placeholders.","violated_rules":["Include cask-strength variants '
+                    'in the final deliverable for a plain product query."]}'
+                )
+            )
+        if len(self.complete_calls) == 2:
+            return ProviderResponse(
+                text='[{"id":"1","product_name":"Oban Port Cask 15 Years","confidence":"confirmed"}]'
+            )
+        return ProviderResponse(
+            text='{"status":"pass","reason":"The final deliverable obeys the retrieved learned constraints.","violated_rules":[]}'
         )
 
 
@@ -795,6 +849,92 @@ Return a JSON array only.
         {"id": "1", "product_name": "Oban Port Cask 15 Years", "confidence": "confirmed"}
     ]
     assert provider.complete_calls
+
+
+def test_learned_constraints_retry_and_remove_excluded_deliverable_items(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    workspace.joinpath("AGENTS.md").write_text(
+        """You are a product catalog manager agent. Your job is to find duplicate products for a given product name.
+
+Your final deliverable is a JSON array printed to stdout.
+
+## Available tools
+
+```bash
+uv run python -m product_catalog_manager search "<query>"
+```
+""",
+        encoding="utf-8",
+    )
+    skill_dir = workspace / ".rocky" / "skills" / "learned" / "plain-product-query-variant-isolation"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        """---
+name: plain-product-query-variant-isolation
+description: Exclude distinct modifiers from plain product queries.
+scope: project
+task_signatures:
+  - repo/shell_execution
+generation: 1
+failure_class: over_inclusion_of_variants
+promotion_state: promoted
+retrieval:
+  triggers:
+    - oban
+  keywords:
+    - cask
+required_behavior:
+  - Keep only the plain product family unless the query explicitly asks for a modifier.
+prohibited_behavior:
+  - Include cask-strength variants in the final deliverable for a plain product query.
+evidence_requirements:
+  - Compare explicit modifiers in the query against explicit modifiers in the candidate names before including them.
+---
+
+# Learned corrective workflow
+
+Exclude distinct modifiers from plain product queries.
+""",
+        encoding="utf-8",
+    )
+    runtime = RockyRuntime.load_from(workspace)
+    provider = _LearnedConstraintRepairProvider()
+    _set_provider(runtime, provider)
+
+    response = runtime.run_prompt("oban 15", continue_session=False)
+
+    assert response.route.task_signature == "repo/shell_execution"
+    assert response.verification["status"] == "pass"
+    assert json.loads(response.text) == [
+        {"id": "1", "product_name": "Oban Port Cask 15 Years", "confidence": "confirmed"}
+    ]
+    assert len(provider.tool_calls) == 1
+    assert len(provider.complete_calls) == 3
+    assert "learned constraints" in provider.complete_calls[0][0].content.lower()
+    assert "plain-product-query-variant-isolation" in response.trace["selected_skills"]
+
+
+def test_verification_repair_prompt_anchors_unsupported_claims_to_observed_strings(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="test",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    repair = runtime.agent._verification_repair_prompt(
+        "oban 15",
+        route,
+        "Final answer includes unsupported deterministic claims that do not map cleanly to evidence-bearing claims.",
+    )
+
+    assert "exact observed strings" in repair
+    assert "qualitative interpretations" in repair
 
 
 def test_short_workspace_prompt_uses_project_instructions_to_expose_shell_tools(tmp_path: Path, monkeypatch) -> None:

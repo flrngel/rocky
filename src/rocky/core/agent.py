@@ -728,6 +728,297 @@ class AgentCore:
             return 8
         return 8
 
+    @staticmethod
+    def _truncate_text(value: Any, limit: int = 1200) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 1)].rstrip() + "…"
+
+    def _learned_constraint_records(self, context) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in context.skills:
+            if item.get("origin") != "learned" and int(item.get("generation", 0) or 0) <= 0:
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            required_behavior = [
+                str(rule).strip()
+                for rule in (item.get("required_behavior") or [])
+                if str(rule).strip()
+            ]
+            prohibited_behavior = [
+                str(rule).strip()
+                for rule in (item.get("prohibited_behavior") or [])
+                if str(rule).strip()
+            ]
+            evidence_requirements = [
+                str(rule).strip()
+                for rule in (item.get("evidence_requirements") or [])
+                if str(rule).strip()
+            ]
+            teacher_feedback = str(item.get("feedback_excerpt") or "").strip()
+            if not teacher_feedback:
+                text = str(item.get("text") or "")
+                match = re.search(r"## Correction from the user\s+(.*?)(?:\n## |\Z)", text, flags=re.S)
+                if match:
+                    teacher_feedback = self._truncate_text(match.group(1).strip(), 800)
+            if not required_behavior and not prohibited_behavior and not evidence_requirements and not teacher_feedback:
+                continue
+            records.append(
+                {
+                    "name": name,
+                    "required_behavior": required_behavior[:4],
+                    "prohibited_behavior": prohibited_behavior[:4],
+                    "evidence_requirements": evidence_requirements[:4],
+                    "teacher_feedback": teacher_feedback,
+                }
+            )
+        return records[:4]
+
+    def _learned_constraint_evidence(self, tool_events: list[dict[str, Any]]) -> str:
+        relevant: list[str] = []
+        for event in tool_events:
+            if event.get("type") != "tool_result" or not event.get("success", True):
+                continue
+            name = str(event.get("name") or "tool_result").strip() or "tool_result"
+            arguments = safe_json(event.get("arguments") or {})
+            text = self._truncate_text(event.get("text", ""), 900)
+            relevant.append(f"{name} args={arguments}\n{text}")
+        return "\n\n".join(relevant[-4:]) or "No successful tool evidence was captured."
+
+    def _teacher_exclusion_terms(self, records: list[dict[str, Any]], prompt: str) -> list[str]:
+        prompt_lower = prompt.lower()
+        terms: list[str] = []
+        seen: set[str] = set()
+        for item in records:
+            feedback = str(item.get("teacher_feedback") or "").strip()
+            if not feedback:
+                continue
+            lowered = feedback.lower()
+            prior_term = ""
+            treat_match = re.search(
+                r"treat\s+[`'\"]?(?P<term>[^`'\"\n]+?)['`\"]?\s+as\s+(?:a|an)\s+distinct",
+                feedback,
+                flags=re.I,
+            )
+            if treat_match:
+                prior_term = treat_match.group("term").strip()
+            if "exclude it" in lowered and prior_term:
+                candidate = prior_term
+                normalized = candidate.lower()
+                if normalized and normalized not in prompt_lower and normalized not in seen:
+                    seen.add(normalized)
+                    terms.append(normalized)
+            for match in re.finditer(
+                r"(?:exclude|omit|remove|do not include)\s+[`'\"]?(?P<term>[^`'\"\n,.]+?)['`\"]?(?:[\s.,;]|$)",
+                feedback,
+                flags=re.I,
+            ):
+                candidate = match.group("term").strip()
+                normalized = candidate.lower()
+                if normalized and normalized not in prompt_lower and normalized not in seen:
+                    seen.add(normalized)
+                    terms.append(normalized)
+        return terms[:6]
+
+    def _filter_output_by_teacher_terms(self, output: str, *, prompt: str, context) -> str:
+        records = self._learned_constraint_records(context)
+        terms = self._teacher_exclusion_terms(records, prompt)
+        if not terms:
+            return output
+        candidate = extract_json_candidate(output)
+        if not candidate:
+            return output
+        try:
+            payload = json.loads(candidate)
+        except Exception:
+            return output
+        if not isinstance(payload, list):
+            return output
+        filtered: list[Any] = []
+        changed = False
+        for item in payload:
+            if not isinstance(item, dict):
+                filtered.append(item)
+                continue
+            haystack = " ".join(
+                str(item.get(field) or "")
+                for field in ("product_name", "reason", "name", "title")
+            ).lower()
+            if any(term in haystack for term in terms):
+                changed = True
+                continue
+            filtered.append(item)
+        if not changed:
+            return output
+        return safe_json(filtered)
+
+    def _judge_learned_constraints(
+        self,
+        provider,
+        *,
+        prompt: str,
+        output: str,
+        route: RouteDecision,
+        context,
+        tool_events: list[dict[str, Any]],
+    ) -> VerificationResult:
+        records = self._learned_constraint_records(context)
+        if not records:
+            return VerificationResult("learned_constraints_judge_v1", "pass", "")
+        constraints = []
+        for item in records:
+            parts = [f"Skill: {item['name']}"]
+            if item.get("teacher_feedback"):
+                parts.append(
+                    "Original teacher correction:\n"
+                    + self._truncate_text(item["teacher_feedback"], 800)
+                )
+            if item["prohibited_behavior"]:
+                parts.append("Do not:\n" + "\n".join(f"- {rule}" for rule in item["prohibited_behavior"]))
+            if item["required_behavior"]:
+                parts.append("Do:\n" + "\n".join(f"- {rule}" for rule in item["required_behavior"]))
+            if item["evidence_requirements"]:
+                parts.append(
+                    "Evidence requirements:\n"
+                    + "\n".join(f"- {rule}" for rule in item["evidence_requirements"])
+                )
+            constraints.append("\n".join(parts))
+        constraints_text = "\n\n".join(constraints)
+        judge_prompt = (
+            f"Task signature: {route.task_signature}\n\n"
+            f"Original task:\n{self._truncate_text(prompt, 2400)}\n\n"
+            "Retrieved learned constraints:\n"
+            f"{self._truncate_text(constraints_text, 4000)}\n\n"
+            "Observed tool evidence:\n"
+            f"{self._learned_constraint_evidence(tool_events)}\n\n"
+            "Candidate final answer:\n"
+            f"{self._truncate_text(output, 4000)}\n\n"
+            "Decide whether the candidate final answer violates any retrieved learned constraint.\n"
+            "Treat explicit inclusions and exclusions from the original teacher correction and the learned constraints as hard rules for the final deliverable unless the observed evidence contradicts them.\n"
+            "Mark fail if the final deliverable still includes something that a learned constraint says to exclude, "
+            "even when the answer labels it as uncertain, distinct, or probably wrong.\n"
+            "Mark fail if the final deliverable drops or empties out a candidate family that the teacher correction explicitly said to keep.\n"
+            "If the answer omits prohibited items from the deliverable and only mentions them as background evidence, pass.\n"
+            "Use only the provided task, answer, learned constraints, and tool evidence.\n"
+            'Return JSON only in the form {"status":"pass"|"fail","reason":"short reason","violated_rules":[str]}.'
+        )
+        try:
+            response = provider.complete(
+                system_prompt=(
+                    "You verify whether Rocky's candidate final answer obeys retrieved learned constraints. "
+                    "Return JSON only."
+                ),
+                messages=[Message(role="user", content=judge_prompt)],
+                stream=False,
+                event_handler=None,
+            )
+        except Exception:
+            return VerificationResult("learned_constraints_judge_v1", "pass", "")
+        candidate = extract_json_candidate(response.text)
+        if not candidate:
+            return VerificationResult("learned_constraints_judge_v1", "pass", "")
+        try:
+            payload = json.loads(candidate)
+        except Exception:
+            return VerificationResult("learned_constraints_judge_v1", "pass", "")
+        status = str(payload.get("status", "pass")).strip().lower()
+        reason = str(payload.get("reason", "")).strip()
+        violated_rules = [
+            str(rule).strip()
+            for rule in (payload.get("violated_rules") or [])
+            if str(rule).strip()
+        ][:6]
+        if status != "fail":
+            return VerificationResult("learned_constraints_judge_v1", "pass", reason)
+        return VerificationResult(
+            "learned_constraints_judge_v1",
+            "fail",
+            reason
+            or "Learned constraint violation: the candidate final answer still includes something that should be excluded.",
+            failure_class="learned_constraint_violation",
+            memory_promotion_allowed=False,
+            learning_promotion_allowed=False,
+            details={"violated_rules": violated_rules},
+        )
+
+    def _repair_learned_constraint_output(
+        self,
+        provider,
+        *,
+        prompt: str,
+        output: str,
+        route: RouteDecision,
+        context,
+        tool_events: list[dict[str, Any]],
+        verification_message: str,
+        stream: bool,
+    ) -> str:
+        if stream:
+            return output
+        records = self._learned_constraint_records(context)
+        if not records:
+            return output
+        constraints = []
+        for item in records:
+            parts = [f"Skill: {item['name']}"]
+            if item.get("teacher_feedback"):
+                parts.append(
+                    "Original teacher correction:\n"
+                    + self._truncate_text(item["teacher_feedback"], 800)
+                )
+            if item["prohibited_behavior"]:
+                parts.append("Do not:\n" + "\n".join(f"- {rule}" for rule in item["prohibited_behavior"]))
+            if item["required_behavior"]:
+                parts.append("Do:\n" + "\n".join(f"- {rule}" for rule in item["required_behavior"]))
+            if item["evidence_requirements"]:
+                parts.append(
+                    "Evidence requirements:\n"
+                    + "\n".join(f"- {rule}" for rule in item["evidence_requirements"])
+                )
+            constraints.append("\n".join(parts))
+        constraints_text = "\n\n".join(constraints)
+        wants_json = bool(extract_json_candidate(output) or output.strip().startswith(("[", "{")))
+        repair_prompt = (
+            f"Task signature: {route.task_signature}\n\n"
+            f"Original task:\n{self._truncate_text(prompt, 2400)}\n\n"
+            "Observed tool evidence:\n"
+            f"{self._learned_constraint_evidence(tool_events)}\n\n"
+            "Teacher corrections and learned constraints:\n"
+            f"{self._truncate_text(constraints_text, 4000)}\n\n"
+            "Draft that failed learned-constraint verification:\n"
+            f"{self._truncate_text(output, 4000)}\n\n"
+            f"Failure reason:\n{self._truncate_text(verification_message, 1200)}\n\n"
+            "Rewrite the final answer so it satisfies the teacher correction and the learned constraints while staying within the observed evidence.\n"
+            "Keep anything the teacher explicitly said to keep. Remove only the violating parts.\n"
+            "Do not invent new candidates, files, commands, or facts.\n"
+            "Prefer exact observed tokens in the reasons instead of qualitative interpretations.\n"
+        )
+        if wants_json:
+            repair_prompt += "Return valid JSON only with no prose or markdown."
+        else:
+            repair_prompt += "Return only the corrected final answer with no extra commentary."
+        try:
+            repair_response = provider.complete(
+                system_prompt=(
+                    "You repair Rocky's final answer so it obeys the teacher correction, learned constraints, and observed evidence."
+                ),
+                messages=[Message(role="user", content=repair_prompt)],
+                stream=False,
+                event_handler=None,
+            )
+        except Exception:
+            return output
+        if wants_json:
+            candidate = extract_json_candidate(repair_response.text)
+            return candidate or output
+        repaired = str(repair_response.text or "").strip()
+        return repaired or output
+
     def _verification_repair_prompt(
         self,
         prompt: str,
@@ -735,6 +1026,7 @@ class AgentCore:
         verification_message: str,
     ) -> str:
         route_hint = "Use more tools if needed before answering."
+        extra_hint = ""
         if route.task_signature == "repo/shell_execution":
             route_hint = (
                 "Do the execution first, then use separate follow-up inspection steps "
@@ -795,10 +1087,22 @@ class AgentCore:
                 "three successful tool steps for the finished automation flow: `write_file`, then `read_file` to "
                 "reread the created script, then `run_shell_command` to execute it."
             )
+        if "learned constraint" in verification_message.lower():
+            extra_hint = (
+                "If a learned rule excludes a candidate, claim, file, or action, remove it from the final deliverable "
+                "instead of leaving it in place with a warning label.\n"
+            )
+        if "unsupported deterministic claims" in verification_message.lower():
+            extra_hint += (
+                "Rewrite the answer so every deterministic statement is grounded in exact observed strings from this "
+                "run's tool output or the user's prompt. Prefer explicit token comparisons over qualitative "
+                "interpretations that were not directly observed.\n"
+            )
         return (
             f"Original task:\n{prompt}\n\n"
             f"Your previous attempt did not pass verification:\n{verification_message}\n\n"
             f"{route_hint}\n"
+            f"{extra_hint}"
             "Continue the task now, use more tools if needed, and return the corrected final answer."
         )
 
@@ -1373,6 +1677,91 @@ class AgentCore:
                 prompt,
                 provider_response.tool_events,
             )
+        if verification_result.status == "pass":
+            verification_result = self._judge_learned_constraints(
+                provider,
+                prompt=prompt,
+                output=normalized_text,
+                route=route,
+                context=context,
+                tool_events=provider_response.tool_events,
+            )
+        if verification_result.status == "fail" and verification_result.name == "learned_constraints_judge_v1":
+            for candidate_text in (
+                self._filter_output_by_teacher_terms(
+                    normalized_text,
+                    prompt=prompt,
+                    context=context,
+                ),
+                self._repair_learned_constraint_output(
+                    provider,
+                    prompt=prompt,
+                    output=normalized_text,
+                    route=route,
+                    context=context,
+                    tool_events=provider_response.tool_events,
+                    verification_message=verification_result.message,
+                    stream=stream,
+                ),
+            ):
+                if candidate_text == normalized_text:
+                    continue
+                normalized_text = self._normalize_output(
+                    route,
+                    candidate_text,
+                    prompt,
+                    provider_response.tool_events,
+                )
+                normalized_text = self._repair_structured_output(
+                    provider,
+                    system_prompt,
+                    prompt,
+                    route,
+                    normalized_text,
+                    provider_response.tool_events,
+                    stream=stream,
+                )
+                answer_contract = self.answer_contract_builder.build(
+                    prompt,
+                    route.task_signature,
+                    active_thread,
+                    evidence_graph,
+                    prior_answer=self.last_answer,
+                )
+                verification_result = self.verifier_registry.verify(
+                    prompt=prompt,
+                    route=route,
+                    task_class=route.task_class,
+                    output=normalized_text,
+                    tool_events=provider_response.tool_events,
+                    active_thread=active_thread,
+                    evidence_graph=evidence_graph,
+                    answer_contract=answer_contract,
+                    prior_answer=self.last_answer,
+                    continuation_expected=continuation.action != 'start_new_thread',
+                )
+                if verification_result.status == "pass" and self._should_judge_automation_output(
+                    route,
+                    prompt,
+                    provider_response.tool_events,
+                    stream=stream,
+                ):
+                    verification_result = self._judge_automation_output(
+                        provider,
+                        prompt,
+                        provider_response.tool_events,
+                    )
+                if verification_result.status == "pass":
+                    verification_result = self._judge_learned_constraints(
+                        provider,
+                        prompt=prompt,
+                        output=normalized_text,
+                        route=route,
+                        context=context,
+                        tool_events=provider_response.tool_events,
+                    )
+                if verification_result.status != "fail":
+                    break
         if route.tool_families and verification_result.status == "fail":
             for _ in range(2):
                 retry_response = self._retry_after_verification_failure(
@@ -1445,6 +1834,91 @@ class AgentCore:
                         prompt,
                         provider_response.tool_events,
                     )
+                if verification_result.status == "pass":
+                    verification_result = self._judge_learned_constraints(
+                        provider,
+                        prompt=prompt,
+                        output=normalized_text,
+                        route=route,
+                        context=context,
+                        tool_events=provider_response.tool_events,
+                    )
+                if verification_result.status == "fail" and verification_result.name == "learned_constraints_judge_v1":
+                    for candidate_text in (
+                        self._filter_output_by_teacher_terms(
+                            normalized_text,
+                            prompt=prompt,
+                            context=context,
+                        ),
+                        self._repair_learned_constraint_output(
+                            provider,
+                            prompt=prompt,
+                            output=normalized_text,
+                            route=route,
+                            context=context,
+                            tool_events=provider_response.tool_events,
+                            verification_message=verification_result.message,
+                            stream=stream,
+                        ),
+                    ):
+                        if candidate_text == normalized_text:
+                            continue
+                        normalized_text = self._normalize_output(
+                            route,
+                            candidate_text,
+                            prompt,
+                            provider_response.tool_events,
+                        )
+                        normalized_text = self._repair_structured_output(
+                            provider,
+                            system_prompt,
+                            prompt,
+                            route,
+                            normalized_text,
+                            provider_response.tool_events,
+                            stream=stream,
+                        )
+                        answer_contract = self.answer_contract_builder.build(
+                            prompt,
+                            route.task_signature,
+                            active_thread,
+                            evidence_graph,
+                            prior_answer=self.last_answer,
+                        )
+                        verification_result = self.verifier_registry.verify(
+                            prompt=prompt,
+                            route=route,
+                            task_class=route.task_class,
+                            output=normalized_text,
+                            tool_events=provider_response.tool_events,
+                            active_thread=active_thread,
+                            evidence_graph=evidence_graph,
+                            answer_contract=answer_contract,
+                            prior_answer=self.last_answer,
+                            continuation_expected=continuation.action != 'start_new_thread',
+                        )
+                        if verification_result.status == "pass" and self._should_judge_automation_output(
+                            route,
+                            prompt,
+                            provider_response.tool_events,
+                            stream=stream,
+                        ):
+                            verification_result = self._judge_automation_output(
+                                provider,
+                                prompt,
+                                provider_response.tool_events,
+                            )
+                        if verification_result.status == "pass":
+                            verification_result = self._judge_learned_constraints(
+                                provider,
+                                prompt=prompt,
+                                output=normalized_text,
+                                route=route,
+                                context=context,
+                                tool_events=provider_response.tool_events,
+                            )
+                        if verification_result.status != "fail":
+                            break
                 if verification_result.status != "fail":
                     break
 
