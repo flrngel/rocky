@@ -173,6 +173,16 @@ def test_router_treats_current_trending_query_as_research() -> None:
     assert 'web' in route.tool_families
 
 
+def test_router_treats_person_profile_investigation_as_research() -> None:
+    router = Router()
+
+    route = router.route('investigate on a person "Kiha Lee" who is vc partner. write a nice table about his profile, what should I know about.')
+
+    assert route.task_class == TaskClass.RESEARCH
+    assert route.task_signature == 'research/live_compare/general'
+    assert 'web' in route.tool_families
+
+
 def test_router_prefers_automation_for_empty_workspace_python_project() -> None:
     router = Router()
 
