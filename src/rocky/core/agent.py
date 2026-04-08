@@ -20,7 +20,7 @@ from rocky.learning.manager import LearningManager
 from rocky.providers.base import ProviderResponse
 from rocky.providers.registry import ProviderRegistry
 from rocky.session.store import Session, SessionStore
-from rocky.tools.registry import ToolRegistry
+from rocky.tools.registry import SAFE_UNEXPOSED_TOOL_FALLBACKS, ToolRegistry
 from rocky.util.io import read_text
 from rocky.util.text import extract_json_candidate, safe_json, tokenize_keywords
 from rocky.util.time import utc_iso
@@ -403,17 +403,30 @@ class AgentCore:
 
     def _run_selected_tool(
         self,
+        route: RouteDecision,
         allowed_names: set[str],
         name: str,
         arguments: dict[str, Any],
         event_handler: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
         if name not in allowed_names:
+            tool = self.tool_registry.get(name)
+            if (
+                tool is not None
+                and tool.family in set(route.tool_families)
+                and name in SAFE_UNEXPOSED_TOOL_FALLBACKS
+            ):
+                return self._run_tool(name, arguments, event_handler=event_handler)
             payload = {
                 "success": False,
-                "summary": f"Tool not available for this task: {name}",
+                "summary": f"Requested tool is not exposed on this task route: {name}",
                 "data": {},
-                "metadata": {"error": "tool_not_exposed"},
+                "metadata": {
+                    "error": "tool_not_exposed",
+                    "task_signature": route.task_signature,
+                    "requested_family": tool.family if tool is not None else None,
+                    "available_tools": sorted(allowed_names),
+                },
             }
             text = safe_json(payload)
             if event_handler:
@@ -1372,6 +1385,7 @@ class AgentCore:
                     event_handler({"type": "tool_result", "name": name, "text": guarded, "success": False})
                 return guarded
             text = self._run_selected_tool(
+                route,
                 selected_tool_names,
                 name,
                 arguments,
@@ -1597,6 +1611,7 @@ class AgentCore:
                         event_handler({"type": "tool_result", "name": name, "text": guarded, "success": False})
                     return guarded
                 text = self._run_selected_tool(
+                    route,
                     selected_tool_names,
                     name,
                     arguments,

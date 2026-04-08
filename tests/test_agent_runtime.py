@@ -241,6 +241,43 @@ class _HiddenToolProvider:
         )
 
 
+class _ShellInspectionHiddenFilesystemProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        grep_result = execute_tool("grep_files", {"pattern": "PermissionDenied", "path": "src"})
+        env_result = execute_tool("inspect_shell_environment", {})
+        grep_payload = json.loads(grep_result)
+        env_payload = json.loads(env_result)
+        grep_count = len(grep_payload.get("data") or [])
+        shell_name = str((env_payload.get("data") or {}).get("shell_name") or "")
+        return ProviderResponse(
+            text=(
+                f"Current shell is {shell_name or 'unknown'}. "
+                f"Searching the repo for PermissionDenied found {grep_count} hit(s)."
+            ),
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "grep_files",
+                    "arguments": {"pattern": "PermissionDenied", "path": "src"},
+                    "text": grep_result,
+                    "success": True,
+                },
+                {
+                    "type": "tool_result",
+                    "name": "inspect_shell_environment",
+                    "arguments": {},
+                    "text": env_result,
+                    "success": True,
+                },
+            ],
+        )
+
+
 class _RepairingToolExpectationProvider:
     def __init__(self) -> None:
         self.tool_calls: list[dict] = []
@@ -1246,6 +1283,65 @@ def test_extraction_route_gets_extended_tool_rounds(tmp_path: Path) -> None:
     assert provider.tool_calls[0]["max_rounds"] == 8
 
 
+def test_shell_execution_route_exposes_repo_inspection_tools(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+
+    selected = {
+        tool.name
+        for tool in runtime.tool_registry.select_for_task(
+            ["filesystem", "shell", "python", "git"],
+            "repo/shell_execution",
+            "run the workspace script and inspect the results",
+        )
+    }
+
+    assert "run_shell_command" in selected
+    assert "grep_files" in selected
+    assert "list_files" in selected
+    assert "glob_paths" in selected
+    assert "git_status" in selected
+    assert "git_diff" in selected
+
+
+def test_automation_route_exposes_lightweight_inspection_tools(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+
+    selected = {
+        tool.name
+        for tool in runtime.tool_registry.select_for_task(
+            ["filesystem", "shell", "python"],
+            "automation/general",
+            "build a tiny shell script project and verify it works",
+        )
+    }
+
+    assert "write_file" in selected
+    assert "read_file" in selected
+    assert "stat_path" in selected
+    assert "list_files" in selected
+    assert "glob_paths" in selected
+    assert "run_python" in selected
+
+
+def test_spreadsheet_route_exposes_file_inspection_tools(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+
+    selected = {
+        tool.name
+        for tool in runtime.tool_registry.select_for_task(
+            ["filesystem", "data", "python"],
+            "data/spreadsheet/analysis",
+            "analyze sales.csv and summarize the sheet",
+        )
+    }
+
+    assert "inspect_spreadsheet" in selected
+    assert "read_sheet_range" in selected
+    assert "stat_path" in selected
+    assert "read_file" in selected
+    assert "glob_paths" in selected
+
+
 def test_runtime_refuses_unexposed_tools_from_provider(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
     runtime.permissions.config.mode = "bypass"
@@ -1261,6 +1357,22 @@ def test_runtime_refuses_unexposed_tools_from_provider(tmp_path: Path) -> None:
     tool_result = response.trace["tool_events"][0]
     assert tool_result["name"] == "write_file"
     assert "\"tool_not_exposed\"" in tool_result["text"]
+
+
+def test_runtime_allows_safe_hidden_inspection_tool_within_route_family(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _ShellInspectionHiddenFilesystemProvider()
+    registry = _ProviderRegistry(provider)
+    runtime.provider_registry = registry
+    runtime.agent.provider_registry = registry
+
+    response = runtime.run_prompt("show me 10 last history of current shell", continue_session=False)
+
+    assert response.trace["tool_events"][0]["name"] == "grep_files"
+    assert response.trace["tool_events"][0]["success"] is True
+    assert "\"tool_not_exposed\"" not in response.trace["tool_events"][0]["text"]
 
 
 def test_runtime_recreates_internal_state_dirs_if_deleted_mid_run(tmp_path: Path) -> None:

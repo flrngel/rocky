@@ -27,6 +27,17 @@ READ_ONLY_TOOL_NAMES = {
     "git_recent_commits",
 }
 
+SAFE_UNEXPOSED_TOOL_FALLBACKS = {
+    "list_files",
+    "stat_path",
+    "glob_paths",
+    "read_file",
+    "grep_files",
+    "git_status",
+    "git_diff",
+    "git_recent_commits",
+}
+
 READ_ONLY_TASK_SIGNATURES = {
     "repo/general",
     "repo/shell_inspection",
@@ -41,13 +52,19 @@ TASK_ALLOWED_TOOL_NAMES: dict[str, set[str]] = {
         "run_python",
         "write_file",
         "inspect_runtime_versions",
+        "list_files",
+        "glob_paths",
+        "grep_files",
         "read_file",
         "stat_path",
+        "git_status",
+        "git_diff",
         "git_recent_commits",
     },
     "repo/shell_inspection": {
         "inspect_shell_environment",
         "read_shell_history",
+        "inspect_runtime_versions",
         "run_shell_command",
         "read_file",
         "stat_path",
@@ -62,20 +79,33 @@ TASK_ALLOWED_TOOL_NAMES: dict[str, set[str]] = {
         "inspect_spreadsheet",
         "read_sheet_range",
         "run_python",
+        "list_files",
+        "glob_paths",
+        "read_file",
+        "stat_path",
     },
     "automation/general": {
         "write_file",
+        "list_files",
+        "glob_paths",
         "read_file",
+        "stat_path",
         "run_shell_command",
+        "run_python",
     },
 }
 
 TASK_TOOL_PRIORITY: dict[str, list[str]] = {
     "repo/shell_execution": [
         "run_shell_command",
+        "grep_files",
+        "list_files",
+        "glob_paths",
         "run_python",
         "write_file",
         "inspect_runtime_versions",
+        "git_status",
+        "git_diff",
         "git_recent_commits",
         "read_file",
         "stat_path",
@@ -83,6 +113,7 @@ TASK_TOOL_PRIORITY: dict[str, list[str]] = {
     "repo/shell_inspection": [
         "inspect_shell_environment",
         "read_shell_history",
+        "inspect_runtime_versions",
         "run_shell_command",
         "stat_path",
         "read_file",
@@ -109,6 +140,10 @@ TASK_TOOL_PRIORITY: dict[str, list[str]] = {
         "inspect_spreadsheet",
         "read_sheet_range",
         "run_python",
+        "stat_path",
+        "read_file",
+        "glob_paths",
+        "list_files",
     ],
     "extract/general": [
         "glob_paths",
@@ -121,6 +156,10 @@ TASK_TOOL_PRIORITY: dict[str, list[str]] = {
     "automation/general": [
         "write_file",
         "read_file",
+        "stat_path",
+        "list_files",
+        "glob_paths",
+        "run_python",
         "run_shell_command",
     ],
 }
@@ -198,6 +237,9 @@ class ToolRegistry:
             selected,
             key=lambda tool: (order.get(tool.name, fallback), tool.family, tool.name),
         )
+
+    def get(self, name: str) -> Tool | None:
+        return self.tools.get(name)
 
     def run(self, name: str, arguments: dict) -> ToolResult:
         if name not in self.tools:
