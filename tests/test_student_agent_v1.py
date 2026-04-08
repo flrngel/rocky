@@ -4,11 +4,22 @@ import json
 from pathlib import Path
 
 from rocky.app import RockyRuntime
+from rocky.providers.base import ProviderResponse
 from rocky.core.router import ContinuationResolver
 from rocky.core.runtime_state import ThreadRegistry
 from rocky.session.store import Session
 from rocky.student.store import StudentStore
 from rocky.util.time import utc_iso
+
+
+class _FakeReflectionProvider:
+    def __init__(self, *payloads: object) -> None:
+        self.payloads = list(payloads)
+
+    def complete(self, system_prompt, messages, stream=False, event_handler=None):  # noqa: ANN001
+        payload = self.payloads.pop(0)
+        text = payload if isinstance(payload, str) else json.dumps(payload)
+        return ProviderResponse(text=text)
 
 
 def test_student_store_can_add_and_retrieve_pattern(tmp_path: Path) -> None:
@@ -130,6 +141,8 @@ def test_learn_creates_structured_pattern_memory_from_feedback(tmp_path: Path, m
     pattern_text = pattern_path.read_text(encoding="utf-8")
     assert "## Do this" in pattern_text
     assert "## Evidence to gather" in pattern_text
+    assert "## Root cause" in pattern_text
+    assert "## Reflection flow" in pattern_text
 
     retrieved = runtime.student_store.retrieve(
         "save unsupported memory guesses",
@@ -176,6 +189,7 @@ def test_learn_product_feedback_creates_expression_variant_pattern(tmp_path: Pat
     pattern_text = pattern_path.read_text(encoding="utf-8")
     assert "valid JSON only" in pattern_text
     assert "distinct expression variants" in pattern_text
+    assert "## Evidence observed" in pattern_text
 
 
 def test_learn_empty_result_feedback_records_clear_base_family_rule(tmp_path: Path, monkeypatch) -> None:
@@ -212,3 +226,84 @@ def test_learn_empty_result_feedback_records_clear_base_family_rule(tmp_path: Pa
     assert analysis["failure_class"] == "product_expression_variant_misclassified"
     assert any("clear base-expression family" in item for item in analysis["required_behavior"])
     assert any("fallback uncertainty" in item for item in analysis["prohibited_behavior"])
+
+
+def test_learn_model_reflection_can_keep_case_specific_feedback_as_example(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runtime = RockyRuntime.load_from(tmp_path / "workspace")
+    runtime.agent.last_prompt = "what file did the script create"
+    runtime.agent.last_answer = "It created report.md."
+    runtime.agent.last_trace = {
+        "route": {"task_signature": "repo/shell_execution"},
+        "thread": {
+            "current_thread": {
+                "thread_id": "thread_file_example",
+                "task_signature": "repo/shell_execution",
+                "task_family": "repo",
+            }
+        },
+        "verification": {},
+        "selected_tools": ["run_shell_command", "read_file"],
+        "tool_events": [
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": json.dumps(
+                    {
+                        "summary": "Command exited with 0",
+                        "data": {
+                            "command": "./build.sh",
+                            "stdout": "Created summary-2026-04-08.md\n",
+                        },
+                    }
+                ),
+            }
+        ],
+    }
+    runtime.provider_registry.primary = lambda: _FakeReflectionProvider(  # type: ignore[method-assign]
+        {
+            "title": "repo shell_execution: exact output example",
+            "summary": "The feedback is best stored as a worked example tied to one exact observed filename.",
+            "failure_class": "workflow_correction",
+            "root_cause": "Rocky answered with an invented filename instead of the filename shown in the observed command output.",
+            "corrected_outcome": "Answer with `summary-2026-04-08.md` because that is the filename shown in the successful tool result.",
+            "generalization_rationale": "This is useful as a concrete example of evidence-grounded answering, but it is too case-specific to become a reusable skill.",
+            "evidence": [
+                "The successful run_shell_command output says `Created summary-2026-04-08.md`.",
+                "The prior answer said `report.md`, which does not appear in the observed output.",
+            ],
+            "debug_steps": [
+                "Recovered the prior prompt, answer, and tool evidence.",
+                "Compared the filename in the answer against the filename in the observed command output.",
+                "Kept this as an example because the correction is tied to one exact output string.",
+            ],
+            "memory_kind": "example",
+            "should_publish_skill": False,
+            "confidence": 0.88,
+            "required_behavior": [
+                "Use the exact observed filename from the current run when answering this kind of question.",
+            ],
+            "prohibited_behavior": [
+                "Do not invent a different filename than the one shown in the observed output.",
+            ],
+            "evidence_requirements": [
+                "Check the successful command output from this run before naming created files.",
+            ],
+            "triggers": ["repo/shell_execution", "exact filename", "observed output"],
+            "keywords": ["filename", "exact", "evidence"],
+        }
+    )
+
+    result = runtime.learn("Your last answer invented the filename. Learn from this exact mistake.")
+
+    assert result["published"] is False
+    assert result["analysis"]["reflection_source"] == "model_reflection"
+    assert result["analysis"]["memory_kind"] == "example"
+    assert result["student_memory"]["kind"] == "example"
+    assert result["student_pattern"] is None
+    assert Path(result["reflection_path"]).exists()
+    example_path = Path(result["student_memory"]["path"])
+    example_text = example_path.read_text(encoding="utf-8")
+    assert "## Reflection flow" in example_text
+    assert "too case-specific to become a reusable skill" in example_text

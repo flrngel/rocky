@@ -25,6 +25,7 @@ def test_learning_manager_publishes_skill(tmp_path: Path) -> None:
     )
     assert result['published'] is True
     assert Path(result['skill_path']).exists()
+    assert Path(result["reflection_path"]).exists()
     learned = manager.list_learned()
     assert learned
 

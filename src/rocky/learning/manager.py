@@ -8,7 +8,8 @@ from typing import Any
 from rocky.config.models import LearningConfig
 from rocky.learning.episodes import EpisodeStore
 from rocky.learning.slow import SlowLearner
-from rocky.learning.synthesis import SkillSynthesizer
+from rocky.learning.synthesis import FeedbackAnalysis, SkillSynthesizer
+from rocky.util.text import safe_json
 from rocky.util.time import utc_iso
 
 
@@ -28,18 +29,20 @@ class LearningManager:
         self.query_dir = query_dir
         self.learned_root = learned_root
         self.artifacts_dir = artifacts_dir
+        self.reflections_dir = artifacts_dir / "learning_reflections"
         self.policies_dir = policies_dir
         self.config = config
         if create_layout:
             self.learned_root.mkdir(parents=True, exist_ok=True)
             self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+            self.reflections_dir.mkdir(parents=True, exist_ok=True)
         self.episode_store = EpisodeStore(
             support_dir=support_dir,
             query_dir=query_dir,
             generation_file=learned_root / "generation.json",
             create_layout=create_layout,
         )
-        self.synthesizer = SkillSynthesizer(use_model=False)
+        self.synthesizer = SkillSynthesizer(use_model=True)
         self.slow_learner = SlowLearner(
             query_dir=query_dir,
             policies_dir=policies_dir,
@@ -107,6 +110,55 @@ class LearningManager:
             if "promotion_state: candidate" in text:
                 skill_path.write_text(text.replace("promotion_state: candidate", "promotion_state: promoted", 1), encoding="utf-8")
 
+    def analyze_feedback(
+        self,
+        task_signature: str,
+        prompt: str,
+        answer: str,
+        feedback: str,
+        trace: dict[str, Any] | None = None,
+        *,
+        provider: Any | None = None,
+        task_family: str | None = None,
+        thread_id: str | None = None,
+        failure_class: str | None = None,
+    ) -> FeedbackAnalysis:
+        return self.synthesizer.analyze_feedback(
+            task_signature=task_signature,
+            feedback=feedback,
+            last_prompt=prompt,
+            last_answer=answer,
+            trace=trace,
+            task_family=task_family,
+            thread_id=thread_id,
+            failure_class=failure_class,
+            provider=provider,
+        )
+
+    def _write_reflection_artifact(
+        self,
+        support_episode_id: str,
+        *,
+        prompt: str,
+        answer: str,
+        feedback: str,
+        trace: dict[str, Any] | None,
+        analysis: FeedbackAnalysis,
+    ) -> str:
+        self.reflections_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "support_episode_id": support_episode_id,
+            "published_at": utc_iso(),
+            "prompt": prompt,
+            "answer": answer,
+            "feedback": feedback,
+            "analysis": analysis.as_record(),
+            "trace_snapshot": self.synthesizer._trace_snapshot(trace or {}),
+        }
+        path = self.reflections_dir / f"{support_episode_id}.json"
+        path.write_text(safe_json(payload) + "\n", encoding="utf-8")
+        return str(path)
+
     def learn_from_feedback(
         self,
         task_signature: str,
@@ -119,9 +171,22 @@ class LearningManager:
         thread_id: str | None = None,
         task_family: str | None = None,
         failure_class: str | None = None,
+        analysis: FeedbackAnalysis | None = None,
+        provider: Any | None = None,
     ) -> dict[str, Any]:
         if not self.config.enabled:
             return {"published": False, "reason": "learning disabled"}
+        analysis = analysis or self.analyze_feedback(
+            task_signature=task_signature,
+            prompt=prompt,
+            answer=answer,
+            feedback=feedback,
+            trace=trace,
+            provider=provider,
+            task_family=task_family,
+            thread_id=thread_id,
+            failure_class=failure_class,
+        )
         support = self.record_support(
             task_signature,
             prompt,
@@ -131,8 +196,28 @@ class LearningManager:
             scope,
             thread_id=thread_id,
             task_family=task_family,
-            failure_class=failure_class,
+            failure_class=analysis.failure_class,
         )
+        reflection_path = self._write_reflection_artifact(
+            support["id"],
+            prompt=prompt,
+            answer=answer,
+            feedback=feedback,
+            trace=trace,
+            analysis=analysis,
+        )
+        if not analysis.should_publish_skill:
+            return {
+                "published": False,
+                "reason": "reflection kept this as notebook memory rather than a reusable skill",
+                "support_episode_id": support["id"],
+                "failure_class": analysis.failure_class,
+                "task_family": task_family or task_signature.split("/", 1)[0],
+                "thread_id": thread_id,
+                "memory_kind": analysis.memory_kind,
+                "reflection_source": analysis.reflection_source,
+                "reflection_path": reflection_path,
+            }
         new_generation = self.current_generation() + 1
         draft = self.synthesizer.build_draft(
             self.learned_root,
@@ -146,7 +231,9 @@ class LearningManager:
             scope,
             task_family=task_family,
             thread_id=thread_id,
-            failure_class=failure_class,
+            failure_class=analysis.failure_class,
+            analysis=analysis,
+            provider=provider,
         )
         path = draft.path
         if path.exists():
@@ -162,11 +249,12 @@ class LearningManager:
             "published_at": utc_iso(),
             "feedback": feedback,
             "support_episode_id": support["id"],
+            "reflection_path": reflection_path,
             "rollback": None,
             "metadata": draft.metadata,
             "thread_id": thread_id,
             "task_family": task_family or task_signature.split("/", 1)[0],
-            "failure_class": failure_class or draft.metadata.get("failure_class"),
+            "failure_class": analysis.failure_class,
             "promotion_state": draft.metadata.get("promotion_state", "candidate"),
         }
         meta_path = path.parent / "SKILL.meta.json"
@@ -183,6 +271,9 @@ class LearningManager:
             "failure_class": meta["failure_class"],
             "task_family": meta["task_family"],
             "thread_id": thread_id,
+            "memory_kind": analysis.memory_kind,
+            "reflection_source": analysis.reflection_source,
+            "reflection_path": reflection_path,
         }
 
     def record_query(
