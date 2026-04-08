@@ -65,7 +65,7 @@ def _append_context_blocks(parts: list[str], context: ContextPackage) -> None:
     if context.skills:
         if any(item.get("origin") == "learned" or int(item.get("generation", 0) or 0) > 0 for item in context.skills):
             parts.append(
-                "Retrieved learned skills are corrections from earlier feedback in this workspace. When a learned skill applies, follow it before generic heuristics."
+                "Retrieved learned skills are corrections from earlier feedback in this workspace. When a learned skill applies, follow it before generic heuristics. Treat explicit prohibitions in learned skills as hard constraints for this answer, even if the skill is still marked candidate."
             )
         parts.append("## Retrieved skills")
         for item in context.skills:
@@ -94,6 +94,8 @@ def build_system_prompt(
         "Project handoff summaries come from earlier sessions in the same workspace; use them to continue work, but re-check machine facts with tools before claiming them.",
         "If the user asks to continue, resume, pick up, or keep working in this workspace, start from any retrieved handoff, student note, pattern, or learned skill before doing broad exploration. Treat those paths and constraints as the default working context until live tool results prove otherwise.",
         "Student notes are durable teacher feedback. Reuse them aggressively when they match the task, but verify environment facts live instead of assuming they still hold.",
+        "When newer student feedback or learned skills conflict with older project instructions or fuzzy heuristics, prefer the newer corrective guidance.",
+        "Treat explicit 'Do not...' rules from retrieved student notes and learned skills as hard constraints for the current answer, not soft suggestions.",
         "Unsupported deterministic claims are forbidden. If support is missing, gather evidence or state the uncertainty explicitly.",
     ]
     if context.tool_families:

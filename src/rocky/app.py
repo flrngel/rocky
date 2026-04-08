@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import json
 from pathlib import Path
 from typing import Any
 
@@ -457,11 +458,153 @@ class RockyRuntime:
         self.permissions.config.mode = self.config.permissions.mode
         return {"permission_mode": self.config.permissions.mode}
 
+    def _last_turn_from_session(self, session) -> tuple[str | None, str | None]:
+        prompt: str | None = None
+        answer: str | None = None
+        for row in reversed(session.messages):
+            role = str(row.get("role") or "").strip()
+            content = str(row.get("content") or "").strip()
+            if not content:
+                continue
+            if answer is None:
+                if role == "assistant":
+                    answer = content
+                continue
+            if role == "user":
+                prompt = content
+                break
+        return prompt, answer
+
+    def _load_trace_payload(self, raw_path: str | None) -> dict[str, Any] | None:
+        if not raw_path:
+            return None
+        candidate = Path(raw_path)
+        candidates = [candidate]
+        if not candidate.is_absolute():
+            candidates.append(self.workspace.root / candidate)
+            candidates.append(self.workspace.traces_dir / candidate.name)
+        for path in candidates:
+            if not path.exists():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                return payload
+        return None
+
+    def _recover_trace_for_session(
+        self,
+        session,
+        *,
+        prompt: str,
+    ) -> dict[str, Any] | None:
+        meta = session.meta or {}
+        last_turn = meta.get("last_turn_summary") or {}
+        last_thread = meta.get("last_thread_summary") or {}
+        for raw_path in (
+            meta.get("last_trace_path"),
+            last_turn.get("trace_path"),
+            last_thread.get("trace_path"),
+        ):
+            trace = self._load_trace_payload(str(raw_path) if raw_path else None)
+            if trace is not None:
+                return trace
+
+        thread_id = str(last_turn.get("thread_id") or meta.get("last_thread_id") or last_thread.get("thread_id") or "").strip()
+        task_signature = str(last_turn.get("task_signature") or meta.get("last_task_signature") or "").strip()
+        for path in sorted(self.workspace.traces_dir.glob("trace_*.json"), reverse=True)[:48]:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            current_thread = ((payload.get("thread") or {}).get("current_thread") or {})
+            route = payload.get("route") or {}
+            if thread_id and str(current_thread.get("thread_id") or "") == thread_id:
+                return payload
+            prompt_history = current_thread.get("prompt_history") or []
+            last_prompt = str(prompt_history[-1].get("prompt") or "").strip() if prompt_history else ""
+            if task_signature and str(route.get("task_signature") or "") == task_signature and last_prompt == prompt:
+                return payload
+        return None
+
+    def _synthetic_trace_for_session(self, session) -> dict[str, Any] | None:
+        meta = session.meta or {}
+        last_turn = meta.get("last_turn_summary") or {}
+        last_thread = meta.get("last_thread_summary") or {}
+        task_signature = str(last_turn.get("task_signature") or meta.get("last_task_signature") or "").strip()
+        if not task_signature:
+            return None
+        verification_status = str(last_turn.get("verification") or meta.get("last_verification") or "pass").strip() or "pass"
+        thread_id = str(last_turn.get("thread_id") or meta.get("last_thread_id") or "").strip()
+        registry = meta.get("task_threads_v1_0") or meta.get("task_threads_v0_3") or {}
+        current_thread = dict((registry.get(thread_id) or {}).get("thread") or {}) if thread_id else {}
+        if current_thread and not current_thread.get("summary_text"):
+            current_thread["summary_text"] = str(last_thread.get("text") or "")
+        return {
+            "route": {
+                "lane": "standard",
+                "task_class": task_signature.split("/", 1)[0] or "repo",
+                "risk": "medium",
+                "reasoning": "Recovered from persisted session history",
+                "tool_families": [],
+                "task_signature": task_signature,
+                "confidence": 0.0,
+                "source": "session_recovery",
+                "continued_thread_id": None,
+                "continuation_decision": "resume_recent_thread" if current_thread else "start_new_thread",
+            },
+            "verification": {
+                "name": "session_recovery_v1",
+                "status": verification_status,
+                "message": "Recovered from persisted session history",
+                "failure_class": None,
+            },
+            "selected_tools": list(last_turn.get("tool_names") or []),
+            "thread": {"current_thread": current_thread} if current_thread else {},
+            "tool_events": [],
+            "context": {},
+        }
+
+    def _restore_recent_agent_state(self) -> bool:
+        if self.agent.last_prompt and self.agent.last_answer and self.agent.last_trace:
+            return True
+        candidate_ids: list[str] = []
+        seen: set[str] = set()
+        for row in self.sessions.list():
+            session_id = str(row.get("id") or "").strip()
+            if session_id and session_id not in seen:
+                candidate_ids.append(session_id)
+                seen.add(session_id)
+        current = self.sessions.peek_current()
+        if current is not None and current.id not in seen:
+            candidate_ids.append(current.id)
+        for session_id in candidate_ids[:12]:
+            try:
+                session = self.sessions.load_snapshot(session_id)
+            except Exception:
+                continue
+            prompt, answer = self._last_turn_from_session(session)
+            if not prompt or not answer:
+                continue
+            trace = self._recover_trace_for_session(session, prompt=prompt) or self._synthetic_trace_for_session(session)
+            if trace is None:
+                continue
+            self.agent.last_prompt = prompt
+            self.agent.last_answer = answer
+            self.agent.last_trace = trace
+            return True
+        return False
+
     def learn(self, feedback: str) -> dict[str, Any]:
         if self.freeze_enabled:
             return self._freeze_blocked_result("learn", key="published")
         if not feedback.strip():
             return {"published": False, "reason": "feedback is required"}
+        self._restore_recent_agent_state()
         if not self.agent.last_prompt or not self.agent.last_answer or not self.agent.last_trace:
             return {"published": False, "reason": "no previous answer to learn from"}
         thread_snapshot = ((self.agent.last_trace.get("thread") or {}).get("current_thread") or {})
@@ -522,6 +665,7 @@ class RockyRuntime:
             return self._freeze_blocked_result("teach", key="ok")
         if not feedback.strip():
             return {"ok": False, "reason": "feedback is required"}
+        self._restore_recent_agent_state()
         if self.agent.last_prompt and self.agent.last_answer and self.agent.last_trace:
             result = self.learn(feedback)
             result["teachable"] = True

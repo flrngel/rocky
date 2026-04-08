@@ -131,6 +131,40 @@ class _RepairingExtractionProvider:
         return ProviderResponse(text='{"rows": 2, "fields": ["name", "role"]}')
 
 
+class _RepairingProjectShellJsonProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+        self.complete_calls: list[list[Message]] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        shell_result = execute_tool("run_shell_command", {"command": "printf 'search results\\n'", "timeout_s": 5})
+        return ProviderResponse(
+            text=(
+                "```json\n[\n"
+                '  {"id":"1","product_name":"Oban Port Cask 15 Years","confidence":"confirmed"},\n'
+                '  {"id":"2",% "product_name":"Oban Cask Strength 15 Years","confidence":"uncertain"}\n'
+                "]\n```"
+            ),
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "run_shell_command",
+                    "arguments": {"command": "printf 'search results\\n'", "timeout_s": 5},
+                    "text": shell_result,
+                    "success": True,
+                }
+            ],
+        )
+
+    def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
+        self.complete_calls.append(messages)
+        return ProviderResponse(
+            text='[{"id":"1","product_name":"Oban Port Cask 15 Years","confidence":"confirmed"}]'
+        )
+
+
 class _HiddenToolProvider:
     def __init__(self) -> None:
         self.tool_calls: list[dict] = []
@@ -727,6 +761,40 @@ Return a JSON array only.
 
     assert response.route.task_signature == "repo/shell_execution"
     assert response.text == "[]"
+
+
+def test_project_context_shell_prompt_repairs_invalid_json_like_output(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / ".rocky" / "skills" / "project" / "product-catalog"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        """---
+name: product-catalog-duplicate-check
+description: Resolve duplicate product lookups for short catalog prompts.
+task_signatures:
+  - repo/shell_execution
+  - conversation/general
+retrieval:
+  triggers:
+    - oban
+---
+
+Return a JSON array only.
+""",
+        encoding="utf-8",
+    )
+    runtime = RockyRuntime.load_from(workspace)
+    provider = _RepairingProjectShellJsonProvider()
+    _set_provider(runtime, provider)
+
+    response = runtime.run_prompt("oban 15", continue_session=False)
+
+    assert response.route.task_signature == "repo/shell_execution"
+    assert json.loads(response.text) == [
+        {"id": "1", "product_name": "Oban Port Cask 15 Years", "confidence": "confirmed"}
+    ]
+    assert provider.complete_calls
 
 
 def test_short_workspace_prompt_uses_project_instructions_to_expose_shell_tools(tmp_path: Path, monkeypatch) -> None:

@@ -196,6 +196,7 @@ class SessionStore:
         verification: dict[str, Any],
         trace: dict[str, Any],
         execution_cwd: str = ".",
+        trace_path: str | None = None,
     ) -> dict[str, Any]:
         tool_events = trace.get("tool_events") or []
         tools = _tool_names(tool_events)
@@ -244,12 +245,15 @@ class SessionStore:
             "execution_cwd": execution_cwd or ".",
             "project_keywords": keywords,
             "thread_id": thread.get("thread_id"),
+            "trace_path": trace_path,
             "text": "\n".join(summary_lines),
         }
         session.append_turn_summary(summary)
         session.meta["last_task_signature"] = task_signature
         session.meta["last_verification"] = verification_status
         session.meta["last_updated_at"] = summary["at"]
+        if trace_path:
+            session.meta["last_trace_path"] = trace_path
         session.meta["project_keywords"] = keywords
         if thread.get("thread_id"):
             session.meta["last_thread_id"] = thread.get("thread_id")
@@ -263,6 +267,7 @@ class SessionStore:
                 "artifacts": thread.get("artifact_refs") or [],
                 "entities": thread.get("entity_refs") or [],
                 "status": thread.get("status"),
+                "trace_path": trace_path,
                 "text": thread.get("summary_text") or summary["text"],
             }
             session.append_thread_summary(thread_summary)

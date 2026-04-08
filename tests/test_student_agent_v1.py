@@ -138,3 +138,77 @@ def test_learn_creates_structured_pattern_memory_from_feedback(tmp_path: Path, m
     assert retrieved
     assert retrieved[0]["kind"] == "pattern"
     assert retrieved[0]["failure_class"] == "project_memory_promotion_from_unsupported_inference"
+
+
+def test_learn_product_feedback_creates_expression_variant_pattern(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runtime = RockyRuntime.load_from(tmp_path / "workspace")
+    runtime.agent.last_prompt = "oban 15"
+    runtime.agent.last_answer = (
+        '[{"id":"1","product_name":"Oban Port Cask 15 Years","confidence":"confirmed"},'
+        '{"id":"2","product_name":"Oban Cask Strength 15 Years","confidence":"uncertain"}]'
+    )
+    runtime.agent.last_trace = {
+        "route": {"task_signature": "repo/shell_execution"},
+        "thread": {
+            "current_thread": {
+                "thread_id": "thread_oban",
+                "task_signature": "repo/shell_execution",
+                "task_family": "repo",
+            }
+        },
+        "verification": {},
+        "selected_tools": ["run_shell_command"],
+    }
+
+    monkeypatch.setattr(
+        runtime.learning_manager,
+        "learn_from_feedback",
+        lambda **kwargs: {"published": True, "skill": "dummy"},
+    )
+
+    result = runtime.learn(
+        "Return valid JSON only. For duplicate matching, treat cask strength, single barrel, and different cask finishes as different expressions unless the query explicitly names that variant."
+    )
+
+    assert result["analysis"]["failure_class"] == "product_expression_variant_misclassified"
+    pattern_path = Path(result["student_pattern"]["path"])
+    pattern_text = pattern_path.read_text(encoding="utf-8")
+    assert "valid JSON only" in pattern_text
+    assert "distinct expression variants" in pattern_text
+
+
+def test_learn_empty_result_feedback_records_clear_base_family_rule(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runtime = RockyRuntime.load_from(tmp_path / "workspace")
+    runtime.agent.last_prompt = "oban 15"
+    runtime.agent.last_answer = "[]"
+    runtime.agent.last_trace = {
+        "route": {"task_signature": "repo/shell_execution"},
+        "thread": {
+            "current_thread": {
+                "thread_id": "thread_oban_empty",
+                "task_signature": "repo/shell_execution",
+                "task_family": "repo",
+            }
+        },
+        "verification": {},
+        "selected_tools": ["run_shell_command"],
+    }
+
+    monkeypatch.setattr(
+        runtime.learning_manager,
+        "learn_from_feedback",
+        lambda **kwargs: {"published": True, "skill": "dummy"},
+    )
+
+    result = runtime.learn(
+        "Your last catalog answer over-pruned and returned an empty array even though the search results contained matching 15-year products. "
+        "For duplicate matching, do not collapse to [] when there are confirmed matches for the relevant base expression family. "
+        "Treat cask strength and other distinct expressions as separate products, but keep the non-cask-strength 15-year expression variants when they are the clear matching family for the query."
+    )
+
+    analysis = result["analysis"]
+    assert analysis["failure_class"] == "product_expression_variant_misclassified"
+    assert any("clear base-expression family" in item for item in analysis["required_behavior"])
+    assert any("fallback uncertainty" in item for item in analysis["prohibited_behavior"])

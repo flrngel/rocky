@@ -283,7 +283,10 @@ class AgentCore:
     def _write_trace(self, trace: dict[str, Any]) -> str:
         trace_path = self._trace_path()
         trace_path.parent.mkdir(parents=True, exist_ok=True)
-        trace_path.write_text(safe_json(trace) + "\n", encoding="utf-8")
+        payload = dict(trace)
+        payload["trace_path"] = str(trace_path)
+        trace_path.write_text(safe_json(payload) + "\n", encoding="utf-8")
+        trace["trace_path"] = str(trace_path)
         return str(trace_path)
 
     def _session_title(self, prompt: str) -> str:
@@ -400,8 +403,7 @@ class AgentCore:
         self.last_answer = text
         self.last_trace = trace
         if not options.freeze:
-            self.sessions.save(session)
-            trace["trace_path"] = self._write_trace(trace)
+            trace_path = self._write_trace(trace)
             if route.lane != Lane.META:
                 self.sessions.record_turn(
                     session,
@@ -411,7 +413,10 @@ class AgentCore:
                     verification=verification,
                     trace=trace,
                     execution_cwd=self.tool_registry.context.execution_relative,
+                    trace_path=trace_path,
                 )
+            else:
+                self.sessions.save(session)
             try:
                 self.learning_manager.record_query(
                     task_signature=route.task_signature,
@@ -669,7 +674,15 @@ class AgentCore:
         *,
         stream: bool,
     ) -> str:
-        if route.task_signature != "extract/general" or stream:
+        should_repair = route.task_signature == "extract/general"
+        if (
+            not should_repair
+            and route.task_signature == "repo/shell_execution"
+            and self._looks_like_atomic_workspace_task(prompt)
+        ):
+            stripped = text.strip()
+            should_repair = stripped.startswith("```json") or stripped.startswith("[") or stripped.startswith("{")
+        if not should_repair or stream:
             return text
         if extract_json_candidate(text):
             return text

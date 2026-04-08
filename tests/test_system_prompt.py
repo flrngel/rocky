@@ -104,3 +104,30 @@ def test_system_prompt_guides_repo_lookup_follow_up_reads() -> None:
     assert "do not stop at search hits alone" in prompt
     assert "After `grep_files` or `list_files`, read the most likely file" in prompt
     assert "Repeated search-only loops" in prompt
+
+
+def test_system_prompt_makes_learned_skill_prohibitions_hard_constraints() -> None:
+    prompt = build_system_prompt(
+        ContextPackage(
+            instructions=[],
+            memories=[],
+            skills=[
+                {
+                    "name": "product-expression-variant-misclassified",
+                    "scope": "project",
+                    "origin": "learned",
+                    "generation": 2,
+                    "promotion_state": "candidate",
+                    "text": "- Do not include distinct expression variants as candidates for the base product.",
+                }
+            ],
+            tool_families=["shell", "filesystem"],
+        ),
+        mode="bypass",
+        user_prompt="oban 15",
+        task_signature="repo/shell_execution",
+    )
+
+    assert "prefer the newer corrective guidance" in prompt
+    assert "Treat explicit 'Do not...' rules from retrieved student notes and learned skills as hard constraints" in prompt
+    assert "even if the skill is still marked candidate" in prompt
