@@ -900,6 +900,45 @@ class SkillSynthesizer:
             mismatch_confirmed=heuristic.mismatch_confirmed,
         )
 
+    def _draft_task_signatures(self, task_signature: str, analysis: FeedbackAnalysis) -> list[str]:
+        ordered: list[str] = []
+        for signature in [task_signature]:
+            if signature and signature not in ordered:
+                ordered.append(signature)
+        guidance_corpus = " ".join(
+            [
+                analysis.title,
+                analysis.summary,
+                analysis.feedback_excerpt,
+                analysis.root_cause,
+                analysis.corrected_outcome,
+                " ".join(analysis.required_behavior),
+                " ".join(analysis.prohibited_behavior),
+                " ".join(analysis.evidence_requirements),
+                " ".join(analysis.keywords),
+            ]
+        ).lower()
+        inferred_candidates = [
+            (
+                "research/live_compare/general",
+                ("web search", "search_web", "fetch_url", "browser_render_page", "live source", "live sources", "real-time", "trending", "latest", "current"),
+            ),
+            (
+                "repo/shell_execution",
+                ("run_shell_command", "shell command", "command line", "terminal", "bash", "zsh", "cli"),
+            ),
+            (
+                "data/spreadsheet/analysis",
+                ("spreadsheet", ".csv", ".xlsx", "sheet", "workbook"),
+            ),
+        ]
+        for signature, markers in inferred_candidates:
+            if signature in ordered:
+                continue
+            if any(marker in guidance_corpus for marker in markers):
+                ordered.append(signature)
+        return ordered
+
     def analyze_feedback(
         self,
         task_signature: str,
@@ -972,11 +1011,12 @@ class SkillSynthesizer:
         )
         skill_id = _slug(analysis.failure_class + "-" + task_signature.replace("/", "-"))
         path = learned_root / skill_id / "SKILL.md"
+        task_signatures = self._draft_task_signatures(task_signature, analysis)
         metadata = {
             "name": skill_id,
             "description": feedback.strip().splitlines()[0][:140] if feedback.strip() else f"Learned workflow correction for {task_signature}",
             "scope": scope,
-            "task_signatures": [task_signature],
+            "task_signatures": task_signatures,
             "task_family": analysis.task_family,
             "generation": generation,
             "origin": {

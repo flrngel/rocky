@@ -270,6 +270,33 @@ class Router:
         'who are ',
         'background on',
     )
+    RESEARCH_LIVE_MARKERS = {
+        'current',
+        'latest',
+        'today',
+        'trending',
+        'recent',
+        'newest',
+        'live',
+    }
+    RESEARCH_LIVE_SUBJECT_TOKENS = {
+        'github',
+        'repo',
+        'repos',
+        'repository',
+        'repositories',
+        'news',
+        'price',
+        'prices',
+        'market',
+        'weather',
+        'ranking',
+        'rankings',
+        'leaderboard',
+        'leaderboards',
+        'stock',
+        'stocks',
+    }
 
     def __init__(self) -> None:
         self.continuation_resolver = ContinuationResolver()
@@ -379,11 +406,15 @@ class Router:
         tokens = self._tokens(lowered)
         if any(phrase in lowered for phrase in self.RESEARCH_ACTION_PHRASES):
             return True
+        if "web search" in lowered or "live source" in lowered or "live sources" in lowered:
+            return True
         if tokens & self.RESEARCH_PROFILE_TOKENS and any(
             phrase in lowered for phrase in self.RESEARCH_PROFILE_PHRASES
         ):
             return True
         if 'compare sources' in lowered:
+            return True
+        if tokens & self.RESEARCH_LIVE_MARKERS and tokens & self.RESEARCH_LIVE_SUBJECT_TOKENS:
             return True
         if tokens & {'forecast', 'probability', 'market', 'weather', 'research'}:
             return True

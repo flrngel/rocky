@@ -6,6 +6,7 @@ from pathlib import Path
 from rocky.app import RockyRuntime
 from rocky.providers.base import ProviderResponse
 from rocky.core.router import ContinuationResolver
+from rocky.learning.synthesis import SkillSynthesizer
 from rocky.core.runtime_state import ThreadRegistry
 from rocky.session.store import Session
 from rocky.student.store import StudentStore
@@ -328,6 +329,45 @@ def test_learn_locks_in_evidence_backed_schema_failure_when_reflection_denies_it
     assert result["analysis"]["reflection_source"] == "heuristic_locked"
     assert result["analysis"]["memory_kind"] == "pattern"
     assert result["student_pattern"] is not None
+
+
+def test_build_draft_adds_research_signature_for_web_search_tool_refusal(tmp_path: Path) -> None:
+    synthesizer = SkillSynthesizer()
+    analysis = synthesizer.analyze_feedback(
+        "conversation/general",
+        "you must use web search and you do have search tools",
+        "what is current github trending repos",
+        "I do not have web search tools available.",
+        trace={
+            "verification": {"failure_class": "tool_use_refusal"},
+            "selected_tools": [],
+        },
+        task_family="conversation",
+        thread_id="thread_research_learn",
+        failure_class="tool_use_refusal",
+        provider=None,
+    )
+
+    draft = synthesizer.build_draft(
+        tmp_path / "learned",
+        "conversation/general",
+        1,
+        "you must use web search and you do have search tools",
+        "sup_research",
+        "what is current github trending repos",
+        "I do not have web search tools available.",
+        trace={
+            "verification": {"failure_class": "tool_use_refusal"},
+            "selected_tools": [],
+        },
+        task_family="conversation",
+        thread_id="thread_research_learn",
+        failure_class="tool_use_refusal",
+        analysis=analysis,
+    )
+
+    assert "conversation/general" in draft.metadata["task_signatures"]
+    assert "research/live_compare/general" in draft.metadata["task_signatures"]
 
 
 def test_learn_model_reflection_creates_variant_pattern(tmp_path: Path, monkeypatch) -> None:

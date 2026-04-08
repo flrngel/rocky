@@ -1135,6 +1135,57 @@ def test_live_research_prompt_retries_after_no_op_and_uses_web_tools(tmp_path: P
     assert any(event["name"] == "search_web" for event in response.trace["tool_events"])
 
 
+def test_learned_tool_refusal_skill_can_upgrade_conversation_route_to_research(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / ".rocky" / "skills" / "learned" / "tool-use-refusal-conversation-general"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        """---
+name: tool-use-refusal-conversation-general
+description: Avoid false refusals regarding live web search availability.
+scope: project
+task_signatures:
+  - conversation/general
+generation: 1
+origin: learned
+failure_class: tool_use_refusal
+promotion_state: candidate
+feedback_excerpt: you must use web search and you do have search tools
+required_behavior:
+  - Attempt to use web search tools for real-time queries.
+  - Verify tool availability through the environment before claiming inability.
+prohibited_behavior:
+  - Refuse live queries by claiming a lack of search tools.
+retrieval:
+  triggers:
+    - github
+    - repos
+    - right now
+  keywords:
+    - web search
+    - live data
+---
+
+Use web search tools for live queries.
+""",
+        encoding="utf-8",
+    )
+    runtime = RockyRuntime.load_from(workspace)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _ResearchRetryProvider()
+    _set_provider(runtime, provider)
+
+    response = runtime.run_prompt("github repos right now", continue_session=False)
+
+    assert response.route.task_signature == "research/live_compare/general"
+    assert response.verification["status"] == "pass"
+    assert provider.tool_calls
+    assert "search_web" in response.trace["selected_tools"]
+    assert any(event["name"] == "search_web" for event in response.trace["tool_events"])
+
+
 def test_extraction_route_normalizes_json_fence_output(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
     runtime.permissions.config.mode = "bypass"

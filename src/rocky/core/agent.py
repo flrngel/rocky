@@ -203,6 +203,11 @@ class AgentCore:
                 for resolved in (self._resolve_project_task_signature(item) for item in skill.task_signatures)
                 if resolved is not None
             ]
+            candidate_signatures.extend(
+                signature
+                for signature in self._infer_route_signatures_from_skill_guidance(prompt, skill, current_signature=route.task_signature)
+                if signature not in candidate_signatures
+            )
             if not candidate_signatures:
                 continue
 
@@ -260,6 +265,37 @@ class AgentCore:
                 return upgraded
 
         return route
+
+    def _infer_route_signatures_from_skill_guidance(
+        self,
+        prompt: str,
+        skill,
+        *,
+        current_signature: str,
+    ) -> list[str]:
+        metadata = skill.metadata
+        guidance_parts = [prompt.strip(), skill.description.strip()]
+        feedback_excerpt = str(metadata.get("feedback_excerpt") or "").strip()
+        if feedback_excerpt:
+            guidance_parts.append(feedback_excerpt)
+        for key in ("required_behavior", "prohibited_behavior", "evidence_requirements"):
+            guidance_parts.extend(
+                str(item).strip()
+                for item in (metadata.get(key) or [])
+                if str(item).strip()
+            )
+        guidance_prompt = "\n".join(part for part in guidance_parts if part).strip()
+        if not guidance_prompt:
+            return []
+        inferred = self.router.route(guidance_prompt)
+        inferred_signature = self._resolve_project_task_signature(inferred.task_signature)
+        if (
+            inferred_signature is None
+            or inferred_signature == current_signature
+            or not inferred.tool_families
+        ):
+            return []
+        return [inferred_signature]
 
     def _wants_prior_turn_context(self, prompt: str) -> bool:
         lowered = prompt.lower()
