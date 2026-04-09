@@ -12,6 +12,7 @@ import openpyxl
 
 from rocky.core.router import TaskClass
 from rocky.harness.models import MiniProjectScenario, PhaseExpectations, Scenario, WorkspaceContinuityScenario
+from rocky.harness.phases import DEFAULT_PHASES
 
 
 _ADJECTIVES = (
@@ -916,32 +917,146 @@ def workspace_continuity_scenarios() -> tuple[WorkspaceContinuityScenario, ...]:
     return _build_continuity_scenarios()
 
 
+def _first_scenario(task_signature: str) -> Scenario:
+    return next(scenario for scenario in default_scenarios() if scenario.task_signature == task_signature)
+
+
+def _first_project(family: str) -> MiniProjectScenario:
+    return next(
+        scenario
+        for scenario in phase4_mini_projects()
+        if str(scenario.oracle.get("family") or "") == family
+    )
+
+
+def _learning_case_from_project(project: MiniProjectScenario) -> dict[str, object]:
+    family = str(project.oracle.get("family") or "")
+    if family == "catalog_review":
+        script_name = str(project.oracle["script_name"])
+        output_path = f"retry_{Path(str(project.oracle['output_file'])).name}"
+        return {
+            "name": f"learning_{family}_{project.fixture_seed}",
+            "summary": "Teach Rocky to resume existing catalog-review work in a fresh process and reuse the learned correction on the next turn.",
+            "workspace_profile": "mini_project",
+            "fixture_seed": project.fixture_seed,
+            "baseline_prompt": project.prompt,
+            "teach_feedback": (
+                f"When continuing catalog-review work in this workspace, keep `{script_name}` in focus. "
+                "Execute the existing workspace script first. "
+                "If it returns structured data, parse it with `run_python` before making merge decisions. "
+                "When the user asks for a result file, write the exact JSON there and reread it before answering."
+            ),
+            "retry_prompt": (
+                "continue the catalog review work in this project. "
+                f"Re-run the existing workspace script, write the final exact JSON merge decisions to `{output_path}` "
+                "with a top-level key `products`, where each item contains `product_id`, `merge`, and `skip` arrays of candidate ids, "
+                "then read that file back and tell me the exact JSON."
+            ),
+            "expected_task_signature": "repo/shell_execution",
+            "expected_tools": ["run_shell_command", "run_python", "write_file", "read_file"],
+            "expected_artifacts": [output_path],
+            "phases": ["prepare_workspace", "install_and_baseline", "teach", "retry_with_learning", "grade_results"],
+        }
+    if family == "sales_report":
+        report_script = str(project.verify_command[1])
+        sales_file = str(project.oracle["sales_file"])
+        return {
+            "name": f"learning_{family}_{project.fixture_seed}",
+            "summary": "Teach Rocky to keep existing project files in focus and verify them again in a fresh process.",
+            "workspace_profile": "mini_project",
+            "fixture_seed": project.fixture_seed,
+            "baseline_prompt": project.prompt,
+            "teach_feedback": (
+                f"When continuing report-helper work in this workspace, keep `{report_script}` and `{sales_file}` in view. "
+                "Use the existing project files, reread the script before verifying it, then run the exact command and name the exact observed output in the final answer."
+            ),
+            "retry_prompt": (
+                "continue the reporting helper work in this project. "
+                "Re-read the existing script if needed, then tell me the exact verified output."
+            ),
+            "expected_task_signature": "automation/general",
+            "expected_tools": ["read_file", "run_shell_command"],
+            "expected_artifacts": [report_script],
+            "phases": ["prepare_workspace", "install_and_baseline", "teach", "retry_with_learning", "grade_results"],
+        }
+    raise ValueError(f"unsupported learning project family: {family}")
+
+
+def agentic_playbook() -> dict[str, object]:
+    repo_lookup = _first_scenario("repo/general")
+    exact_output = _first_project("sales_report")
+    learning_project = _first_project("catalog_review")
+    learning_case = _learning_case_from_project(learning_project)
+    phases = [
+        {
+            "slug": phase.slug,
+            "title": phase.title,
+            "description": phase.description,
+            "success_signals": list(phase.success_signals),
+        }
+        for phase in DEFAULT_PHASES
+    ]
+    return {
+        "strategy": "installed_cli_agentic_scenarios",
+        "provider": "current ollama via installed rocky CLI",
+        "notes": [
+            "Use generated workspaces instead of fixed example repositories or hard-coded case literals.",
+            "Judge both agentic behavior and task result from the real installed `rocky` process.",
+            "For learning scenarios, verify that `/learn` persists reusable guidance and that a fresh Rocky process loads it on the retry.",
+        ],
+        "phases": phases,
+        "scenarios": [
+            {
+                "name": f"agentic_repo_lookup_{repo_lookup.fixture_seed}",
+                "summary": "Run a repo-inspection task and confirm multi-step tool use plus a grounded answer.",
+                "workspace_profile": repo_lookup.workspace_profile,
+                "fixture_seed": repo_lookup.fixture_seed,
+                "baseline_prompt": repo_lookup.prompt,
+                "expected_task_signature": repo_lookup.task_signature,
+                "expected_tools": list(repo_lookup.phase_expectations.anchor_tools),
+                "manual_steps": [
+                    "mkdir -p /tmp/rocky/<tmpid>",
+                    "pipx install --force <repo_root>",
+                    "rocky --provider ollama --cwd /tmp/rocky/<tmpid> --json '<baseline_prompt>'",
+                ],
+            },
+            {
+                "name": f"agentic_exact_output_{exact_output.fixture_seed}",
+                "summary": "Run a build-and-verify task and compare the observed output from the created project files.",
+                "workspace_profile": exact_output.workspace_profile,
+                "fixture_seed": exact_output.fixture_seed,
+                "baseline_prompt": exact_output.prompt,
+                "expected_task_signature": exact_output.task_signature,
+                "expected_files": list(exact_output.expected_files),
+                "manual_steps": [
+                    "mkdir -p /tmp/rocky/<tmpid>",
+                    "pipx install --force <repo_root>",
+                    "rocky --provider ollama --cwd /tmp/rocky/<tmpid> --json '<baseline_prompt>'",
+                    "run the verify command from the scenario and compare it with Rocky's answer",
+                ],
+            },
+            {
+                **learning_case,
+                "manual_steps": [
+                    "mkdir -p /tmp/rocky/<tmpid>",
+                    "pipx install --force <repo_root>",
+                    "rocky --provider ollama --cwd /tmp/rocky/<tmpid> --json '<baseline_prompt>'",
+                    "rocky --provider ollama --cwd /tmp/rocky/<tmpid> --json learn '<teach_feedback>'",
+                    "rocky --provider ollama --cwd /tmp/rocky/<tmpid> --json '<retry_prompt>'",
+                ],
+            },
+        ],
+    }
+
+
 def scenarios_by_phase(phase_slug: str) -> tuple[object, ...]:
-    default_phase_scenarios = default_scenarios()
-    if phase_slug == "phase4_exact_output_build":
-        return phase4_mini_projects()
-    if phase_slug == "phase5_workspace_continuity":
-        return workspace_continuity_scenarios()
-    if phase_slug in ("phase1_route_anchor", "phase2_followup_evidence", "phase3_end_to_end_contract"):
-        return default_phase_scenarios
-    return ()
+    playbook = agentic_playbook()
+    return tuple(
+        scenario
+        for scenario in playbook["scenarios"]
+        if phase_slug in tuple(scenario.get("phases") or ())
+    )
 
 
 def harness_inventory() -> dict[str, object]:
-    default_phase_scenarios = default_scenarios()
-    phase4_scenarios = phase4_mini_projects()
-    phase5_scenarios = workspace_continuity_scenarios()
-    family_counts: dict[str, int] = {}
-    for scenario in default_phase_scenarios:
-        family_counts[scenario.task_signature] = family_counts.get(scenario.task_signature, 0) + 1
-    return {
-        "phase1_3_scenarios": len(default_phase_scenarios),
-        "phase4_scenarios": len(phase4_scenarios),
-        "phase5_scenarios": len(phase5_scenarios),
-        "phase1_3_task_signatures": family_counts,
-        "generation": {
-            "phase_seeds": list(_PHASE_SEEDS),
-            "mini_project_seeds": list(_MINI_PROJECT_SEEDS),
-            "strategy": "on_demand_generators_without_static_catalog",
-        },
-    }
+    return agentic_playbook()

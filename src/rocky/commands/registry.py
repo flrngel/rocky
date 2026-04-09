@@ -89,7 +89,7 @@ class CommandRegistry:
                 "- `/help` show commands",
                 "- `/tools` list tools",
                 "- `/skills` list skills",
-                "- `/harness` show harness phases and scenario inventory",
+                "- `/harness` show the installed-CLI agentic scenario playbook",
                 "- `/memory` list project/global memory notes",
                 "- `/memory show <scope>:<name>` show one memory note",
                 "- `/memory add <name> <text>` add global manual memory",

@@ -14,7 +14,7 @@ from rocky.core.permissions import PermissionManager
 from rocky.core.router import Lane, Router
 from rocky.core.runtime_state import ThreadRegistry
 from rocky.core.verifiers import VerifierRegistry
-from rocky.harness import DEFAULT_PHASES, harness_inventory as harness_catalog, scenarios_by_phase
+from rocky.harness import harness_inventory as harness_catalog
 from rocky.learning.manager import LearningManager
 from rocky.memory.retriever import MemoryRetriever
 from rocky.memory.store import MemoryStore
@@ -227,21 +227,10 @@ class RockyRuntime:
         return True
 
     def harness_inventory(self) -> dict[str, Any]:
-        catalog = harness_catalog()
         return {
             "version": __version__,
             "execution_cwd": self.workspace.execution_relative,
-            "phases": [
-                {
-                    "slug": phase.slug,
-                    "title": phase.title,
-                    "description": phase.description,
-                    "success_signals": list(phase.success_signals),
-                    "scenario_count": len(scenarios_by_phase(phase.slug)),
-                }
-                for phase in DEFAULT_PHASES
-            ],
-            **catalog,
+            **harness_catalog(),
         }
 
     def meta_answer(self, prompt: str) -> str:

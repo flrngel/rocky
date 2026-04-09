@@ -282,6 +282,85 @@ class VerifierRegistry:
         arguments = event.get("arguments") or {}
         return str(arguments.get("path") or "").strip()
 
+    def _strip_numbered_read_output(self, text: str) -> str:
+        cleaned_lines = []
+        for line in text.splitlines():
+            cleaned_lines.append(re.sub(r"^\s*\d+:\s?", "", line))
+        return "\n".join(cleaned_lines).strip()
+
+    def _prompt_json_file_paths(self, prompt: str) -> list[str]:
+        return re.findall(r"`([^`]+\.json)`", prompt, flags=re.I)
+
+    def _prompt_required_json_keys(self, prompt: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        def _quoted_names(fragment: str) -> tuple[str, ...]:
+            return tuple(dict.fromkeys(re.findall(r"`([^`]+)`", fragment)))
+
+        top_level_keys: tuple[str, ...] = ()
+        item_keys: tuple[str, ...] = ()
+
+        top_level_match = re.search(
+            r"top-level key[s]?\s+(?P<fragment>.+?)(?:\s+where\b|[.;]|$)",
+            prompt,
+            flags=re.I,
+        )
+        if top_level_match:
+            top_level_keys = _quoted_names(top_level_match.group("fragment"))
+
+        item_match = re.search(
+            r"each item contains\s+(?P<fragment>.+?)(?:\s+array|\s+arrays|[.;]|$)",
+            prompt,
+            flags=re.I,
+        )
+        if item_match:
+            item_keys = _quoted_names(item_match.group("fragment"))
+
+        return top_level_keys, item_keys
+
+    def _latest_read_json_payload(self, prompt: str, tool_events: list[dict]) -> tuple[str, Any] | None:
+        json_paths = self._prompt_json_file_paths(prompt)
+        candidate_paths = {PurePosixPath(path).name for path in json_paths}
+        for event in reversed(tool_events):
+            if event.get("type") != "tool_result" or not event.get("success", True):
+                continue
+            if str(event.get("name") or "") != "read_file":
+                continue
+            path = self._tool_path(event)
+            if candidate_paths and PurePosixPath(path).name not in candidate_paths:
+                continue
+            payload = self._tool_payload(event)
+            data = payload.get("data")
+            if not isinstance(data, str):
+                continue
+            candidate = extract_json_candidate(self._strip_numbered_read_output(data))
+            if not candidate:
+                continue
+            try:
+                return path, json.loads(candidate)
+            except Exception:
+                continue
+        return None
+
+    def _contains_required_item_keys(self, payload: Any, top_level_keys: tuple[str, ...], item_keys: tuple[str, ...]) -> tuple[bool, str]:
+        if not item_keys:
+            return True, ""
+        containers: list[Any] = []
+        if top_level_keys and isinstance(payload, dict):
+            for key in top_level_keys:
+                value = payload.get(key)
+                if isinstance(value, list):
+                    containers.extend(value)
+        elif isinstance(payload, list):
+            containers.extend(payload)
+        if not containers:
+            return True, ""
+        for index, item in enumerate(containers, start=1):
+            if not isinstance(item, dict):
+                return False, f"expected each item to be an object, but item {index} is {type(item).__name__}"
+            missing = [key for key in item_keys if key not in item]
+            if missing:
+                return False, f"missing item keys {missing} in item {index}"
+        return True, ""
+
     def _is_internal_path(self, path: str) -> bool:
         normalized = path.replace("\\", "/")
         return (
@@ -670,6 +749,9 @@ class VerifierRegistry:
         if result.status != "pass":
             return result
         result = self._structured_output(prompt, output)
+        if result.status != "pass":
+            return result
+        result = self._json_file_contract(prompt, route, tool_events)
         if result.status != "pass":
             return result
         result = self._automation_reporting(prompt, route, output, tool_events)
@@ -1092,6 +1174,47 @@ class VerifierRegistry:
                     "Requested structured output but response is not valid JSON",
                 )
         return VerificationResult("structured_output_v1", "pass", "")
+
+    def _json_file_contract(
+        self,
+        prompt: str,
+        route: RouteDecision,
+        tool_events: list[dict],
+    ) -> VerificationResult:
+        if route.task_signature not in {"repo/shell_execution", "automation/general"}:
+            return VerificationResult("json_file_contract_v1", "pass", "")
+        lowered = prompt.lower()
+        if "write" not in lowered or ".json" not in lowered or "read" not in lowered:
+            return VerificationResult("json_file_contract_v1", "pass", "")
+        required_top_level_keys, required_item_keys = self._prompt_required_json_keys(prompt)
+        if not required_top_level_keys and not required_item_keys:
+            return VerificationResult("json_file_contract_v1", "pass", "")
+        read_payload = self._latest_read_json_payload(prompt, tool_events)
+        if read_payload is None:
+            return VerificationResult("json_file_contract_v1", "pass", "")
+        path, payload = read_payload
+        if required_top_level_keys:
+            if not isinstance(payload, dict):
+                return VerificationResult(
+                    "json_file_contract_v1",
+                    "fail",
+                    f"Expected `{path}` to contain a JSON object with top-level keys {list(required_top_level_keys)}, but it is {type(payload).__name__}.",
+                )
+            missing_top_level = [key for key in required_top_level_keys if key not in payload]
+            if missing_top_level:
+                return VerificationResult(
+                    "json_file_contract_v1",
+                    "fail",
+                    f"Expected `{path}` to include top-level keys {missing_top_level} from the prompt contract.",
+                )
+        ok, detail = self._contains_required_item_keys(payload, required_top_level_keys, required_item_keys)
+        if not ok:
+            return VerificationResult(
+                "json_file_contract_v1",
+                "fail",
+                f"Expected `{path}` to preserve the requested item schema, but {detail}.",
+            )
+        return VerificationResult("json_file_contract_v1", "pass", "")
 
     def _non_empty_output(self, prompt: str, output: str) -> VerificationResult:
         if not prompt.strip():

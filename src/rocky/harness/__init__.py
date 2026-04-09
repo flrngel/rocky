@@ -2,6 +2,7 @@ from rocky.harness.models import HarnessPhase, MiniProjectScenario, PhaseExpecta
 from rocky.harness.phases import DEFAULT_PHASES, PHASES_BY_SLUG, phase_titles
 from rocky.harness.results import HarnessResultStore, HarnessRunRecord
 from rocky.harness.scenarios import (
+    agentic_playbook,
     default_scenarios,
     harness_inventory,
     materialize_mini_project_workspace,
@@ -13,6 +14,7 @@ from rocky.harness.scenarios import (
 
 __all__ = [
     "DEFAULT_PHASES",
+    "agentic_playbook",
     "HarnessPhase",
     "HarnessResultStore",
     "HarnessRunRecord",

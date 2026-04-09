@@ -893,6 +893,55 @@ def test_verifier_accepts_recovered_shell_execution_after_structured_follow_up_f
     assert result.status == "pass"
 
 
+def test_verifier_rejects_json_file_outputs_that_drop_required_item_keys() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Explicit shell command or execution request",
+        tool_families=["filesystem", "shell", "python", "git"],
+        task_signature="repo/shell_execution",
+    )
+
+    result = verifier.verify(
+        prompt=(
+            "Execute `x.sh` and explore the response. "
+            "Write valid JSON to `merge_decisions.json` with a top-level key `products`, "
+            "where each item contains `product_id`, `merge`, and `skip` arrays of candidate ids. "
+            "Then read the file back and tell me the exact JSON."
+        ),
+        route=route,
+        task_class=route.task_class,
+        output='{"output_path":"merge_decisions.json","verified_output":{"products":[{"product_id":"P001","merge":["C001"]}]}}',
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "run_shell_command",
+                "success": True,
+                "text": '{"success": true, "data": {"command": "sh x.sh", "stdout": "{\\"products\\": [{\\"product_id\\": \\"P001\\", \\"candidates\\": []}]}", "stderr": ""}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "run_python",
+                "success": True,
+                "text": '{"success": true, "data": {"stdout": "{\\"products\\":[{\\"product_id\\":\\"P001\\",\\"merge\\":[\\"C001\\"]}]}", "stderr": ""}}',
+            },
+            {"type": "tool_result", "name": "write_file", "success": True, "arguments": {"path": "merge_decisions.json"}},
+            {
+                "type": "tool_result",
+                "name": "read_file",
+                "success": True,
+                "arguments": {"path": "merge_decisions.json"},
+                "text": '{"success": true, "data": "1: {\\n2:   \\"products\\": [\\n3:     {\\n4:       \\"product_id\\": \\"P001\\",\\n5:       \\"merge\\": [\\n6:         \\"C001\\"\\n7:       ]\\n8:     }\\n9:   ]\\n10: }"}',
+            },
+        ],
+    )
+
+    assert result.status == "fail"
+    assert "item schema" in result.message.lower()
+
+
 def test_verifier_accepts_recovered_shell_execution_after_retry_window_follow_up() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(
