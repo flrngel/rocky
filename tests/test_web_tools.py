@@ -252,6 +252,35 @@ def test_fetch_url_rejects_bot_challenge_pages(tmp_path: Path, monkeypatch) -> N
     assert "anti-bot challenge" in result.summary.lower()
 
 
+def test_fetch_url_allows_normal_html_that_mentions_captcha_without_challenge_signals(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text="""
+            <html>
+              <head><title>Captcha usability notes</title></head>
+              <body>
+                <article>
+                  <p>This plain text article discusses captcha history and how web apps reduce false positives.</p>
+                </article>
+              </body>
+            </html>
+            """,
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://example.com/article"})
+
+    assert result.success is True
+    assert result.data["title"] == "Captcha usability notes"
+    assert "captcha history" in result.data["text_excerpt"].lower()
+
+
 def test_fetch_url_falls_back_to_unverified_tls_on_certificate_errors(tmp_path: Path, monkeypatch) -> None:
     ctx = _tool_context(tmp_path)
     requests: list[tuple[bool, str]] = []

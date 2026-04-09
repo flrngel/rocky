@@ -34,13 +34,29 @@ BOT_CHALLENGE_MARKERS = (
     "human verification",
     "verify you are human",
     "verify you're human",
-    "captcha",
     "please complete the following challenge",
     "complete the following challenge",
     "prove you're human",
     "unusual traffic",
     "automated requests",
     "bots use duckduckgo too",
+)
+BOT_CHALLENGE_HARD_MARKERS = (
+    "g-recaptcha",
+    "hcaptcha",
+    "cf-turnstile",
+    "cf-chl",
+    "__cf_chl_",
+    "/cdn-cgi/challenge-platform/",
+    "data-sitekey",
+    "challenge-form",
+)
+BOT_CHALLENGE_TITLE_MARKERS = (
+    "challenge",
+    "just a moment",
+    "attention required",
+    "verify you are human",
+    "verify you're human",
 )
 NO_RESULTS_MARKERS = (
     "no results found",
@@ -107,8 +123,20 @@ def _looks_like_bot_challenge(response: httpx.Response) -> bool:
     content_type = response.headers.get("content-type", "").lower()
     if "html" not in content_type:
         return False
-    text = response.text.lower()
-    return any(marker in text for marker in BOT_CHALLENGE_MARKERS)
+    html = response.text.lower()
+    if any(marker in html for marker in BOT_CHALLENGE_HARD_MARKERS):
+        return True
+    soup = BeautifulSoup(response.text, "html.parser")
+    title = soup.title.string.strip().lower() if soup.title and soup.title.string else ""
+    phrase_matches = sum(1 for marker in BOT_CHALLENGE_MARKERS if marker in html)
+    title_matches = sum(1 for marker in BOT_CHALLENGE_TITLE_MARKERS if marker in title)
+    if phrase_matches >= 2:
+        return True
+    if phrase_matches >= 1 and title_matches >= 1:
+        return True
+    if response.status_code in {202, 403, 429, 503} and phrase_matches >= 1:
+        return True
+    return False
 
 
 def _looks_like_no_results(html: str) -> bool:
