@@ -151,12 +151,36 @@ class EventPrinter:
         self.console.print(Text(text, style=style))
         self._last_status_text = text
 
+    def _self_learning_message(self, event: dict) -> str:
+        persisted = bool(event.get("persisted"))
+        summary = str(event.get("summary", "")).strip()
+        title = str(event.get("title", "")).strip()
+        reason = str(event.get("reason", "")).strip()
+        if persisted:
+            detail = summary or title or "stored a compact retrospective."
+            return f"Learned: {detail}"
+        if reason:
+            return f"Reflection kept no durable lesson: {reason}"
+        return "Reflection kept no durable lesson."
+
     def __call__(self, event: dict) -> None:
         kind = event.get("type")
         if kind == "assistant_chunk":
             self.streamed_text = True
             self._ensure_stream_line()
             self.console.print(Text(str(event.get("text", ""))), end="")
+        elif kind == "self_learning_start":
+            self._close_stream_line()
+            if self.verbose:
+                self.console.print(Text("Reflecting on this turn...", style="dim"))
+            return
+        elif kind == "self_learning_result":
+            self._close_stream_line()
+            if event.get("persisted"):
+                self.console.print(Text(self._self_learning_message(event), style="green"))
+            elif self.verbose:
+                self.console.print(Text(self._self_learning_message(event), style="dim"))
+            return
         elif kind == "tool_call":
             self._close_stream_line()
             if not self.verbose:

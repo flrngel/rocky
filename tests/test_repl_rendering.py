@@ -91,6 +91,33 @@ def test_default_tool_logs_show_refined_failure_message() -> None:
     assert second.plain == "Couldn't open that source. HTTP 403 while fetching https://example.com"
 
 
+def test_self_learning_result_is_visible_when_a_lesson_is_persisted() -> None:
+    printer = EventPrinter(console=MagicMock())
+
+    printer(
+        {
+            "type": "self_learning_result",
+            "persisted": True,
+            "summary": "Use inspect_runtime_versions before shell confirmation for runtime questions.",
+        }
+    )
+
+    first = printer.console.print.call_args_list[0].args[0]
+    assert first.plain == "Learned: Use inspect_runtime_versions before shell confirmation for runtime questions."
+
+
+def test_verbose_mode_shows_self_learning_process_even_without_persisted_lesson() -> None:
+    printer = EventPrinter(console=MagicMock(), verbose=True)
+
+    printer({"type": "self_learning_start"})
+    printer({"type": "self_learning_result", "persisted": False, "reason": "reflection found no durable lesson to keep"})
+
+    first = printer.console.print.call_args_list[0].args[0]
+    second = printer.console.print.call_args_list[1].args[0]
+    assert first.plain == "Reflecting on this turn..."
+    assert second.plain == "Reflection kept no durable lesson: reflection found no durable lesson to keep"
+
+
 def test_verbose_tool_logs_use_panels() -> None:
     printer = EventPrinter(console=MagicMock(), verbose=True)
 

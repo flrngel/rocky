@@ -229,7 +229,7 @@ class RockyRuntime:
             except Exception:
                 pass
         if not effective_freeze:
-            self._auto_self_reflect(prompt, response)
+            self._auto_self_reflect(prompt, response, event_handler=event_handler)
         return response
 
     def _should_capture_project_memory(self, response: AgentResponse) -> bool:
@@ -268,11 +268,16 @@ class RockyRuntime:
         except Exception:
             return
 
-    def _auto_self_reflect(self, prompt: str, response: AgentResponse) -> None:
+    def _auto_self_reflect(self, prompt: str, response: AgentResponse, *, event_handler=None) -> None:
         if not self._should_self_reflect(response):
             return
         current_thread = ((response.trace.get("thread") or {}).get("current_thread") or {})
         provider = self._reflection_provider()
+        if event_handler is not None:
+            try:
+                event_handler({"type": "self_learning_start"})
+            except Exception:
+                pass
         try:
             result = self.learning_manager.retrospect_episode(
                 task_signature=str(current_thread.get("task_signature") or response.route.task_signature),
@@ -284,8 +289,27 @@ class RockyRuntime:
                 provider=provider,
             )
         except Exception:
+            if event_handler is not None:
+                try:
+                    event_handler({"type": "self_learning_result", "persisted": False, "reason": "reflection failed"})
+                except Exception:
+                    pass
             return
         if not result.get("persisted"):
+            if event_handler is not None:
+                try:
+                    retrospective = dict(result.get("retrospective") or {})
+                    event_handler(
+                        {
+                            "type": "self_learning_result",
+                            "persisted": False,
+                            "reason": str(result.get("reason") or "").strip(),
+                            "title": str(retrospective.get("title") or "").strip(),
+                            "summary": str(retrospective.get("summary") or "").strip(),
+                        }
+                    )
+                except Exception:
+                    pass
             return
         retrospective = dict(result.get("retrospective") or {})
         try:
@@ -312,6 +336,19 @@ class RockyRuntime:
         self.agent.last_trace = response.trace
         self.refresh_knowledge()
         self._persist_trace_update(response.trace)
+        if event_handler is not None:
+            try:
+                event_handler(
+                    {
+                        "type": "self_learning_result",
+                        "persisted": True,
+                        "title": str(retrospective.get("title") or "").strip(),
+                        "summary": str(retrospective.get("summary") or "").strip(),
+                        "artifact_path": result.get("artifact_path"),
+                    }
+                )
+            except Exception:
+                pass
 
     def harness_inventory(self) -> dict[str, Any]:
         return {
