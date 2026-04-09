@@ -19,6 +19,14 @@ def _make_runtime(tmp_path: Path) -> MagicMock:
     runtime.commands.names = ["help", "exit"]
     runtime.freeze_enabled = False
     runtime.verbose_enabled = False
+    runtime.current_context.return_value = {
+        "instructions": [],
+        "memories": [],
+        "skills": [],
+        "learned_policies": [],
+        "student_notes": [],
+        "handoffs": [],
+    }
     return runtime
 
 
@@ -95,6 +103,7 @@ def test_freeze_repl_uses_in_memory_history_and_toolbar(tmp_path):
     assert isinstance(repl.session.history, InMemoryHistory)
     assert "Freeze: ON" in repl._toolbar().value
     assert "Verbose: OFF" in repl._toolbar().value
+    assert "Ctx I0 M0 S0 P0 N0 H0" in repl._toolbar().value
     assert "freeze" in repl._prompt_message().value
 
 
@@ -111,6 +120,22 @@ def test_verbose_repl_toolbar_shows_enabled(tmp_path):
     repl = RockyRepl(runtime)
 
     assert "Verbose: ON" in repl._toolbar().value
+
+
+def test_repl_toolbar_shows_context_usage_counts(tmp_path):
+    runtime = _make_runtime(tmp_path)
+    runtime.current_context.return_value = {
+        "instructions": [{"path": "/tmp/AGENTS.md"}],
+        "memories": [{"id": "mem1"}, {"id": "mem2"}],
+        "skills": [{"name": "general-operator"}],
+        "learned_policies": [{"name": "runtime-check"}],
+        "student_notes": [{"id": "note1"}, {"id": "note2"}, {"id": "note3"}],
+        "handoffs": [{"session_id": "ses1"}],
+    }
+
+    repl = RockyRepl(runtime)
+
+    assert "Ctx I1 M2 S1 P1 N3 H1" in repl._toolbar().value
 
 
 def test_slash_command_completion_matches_prefix(tmp_path):

@@ -17,6 +17,14 @@ def test_runtime_meta_and_init(tmp_path: Path, monkeypatch) -> None:
     assert status['workspace_root'] == str(workspace)
     assert status["runtime"]["active_provider"] == runtime.config.active_provider
     assert status["runtime"]["verbose_mode"] is False
+    assert status["context_usage"] == {
+        "instructions": 0,
+        "memories": 0,
+        "skills": 0,
+        "learned_policies": 0,
+        "student_notes": 0,
+        "handoffs": 0,
+    }
     assert status["global_settings"]["path"].endswith("config.yaml")
     assert status["project_settings"]["project"]["path"].endswith(".rocky/config.yaml")
     assert status["effective_settings"]["active_provider"] == runtime.config.active_provider

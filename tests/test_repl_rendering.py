@@ -14,6 +14,14 @@ def _make_runtime(tmp_path: Path) -> MagicMock:
     runtime.commands.names = ["help"]
     runtime.freeze_enabled = False
     runtime.verbose_enabled = False
+    runtime.current_context.return_value = {
+        "instructions": [],
+        "memories": [],
+        "skills": [],
+        "learned_policies": [],
+        "student_notes": [],
+        "handoffs": [],
+    }
     return runtime
 
 
@@ -35,7 +43,7 @@ def test_streamed_chunks_preserve_bracket_text(tmp_path: Path) -> None:
 
     first_renderable = printer.console.print.call_args_list[0].args[0]
     second_renderable = printer.console.print.call_args_list[1].args[0]
-    assert first_renderable.plain == "Rocky "
+    assert first_renderable.plain == "| "
     assert second_renderable.plain == "Provider request failed: [Errno 61] Connection refused"
 
 

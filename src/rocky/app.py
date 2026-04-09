@@ -388,6 +388,7 @@ class RockyRuntime:
             "learned_policies": len(self.policy_retriever.policies),
             "memories": len(self.memory_retriever.notes),
             "student": self.student_store.status(),
+            "context_usage": self.context_usage(),
             "learned_generation": self.learning_manager.current_generation(),
             "global_settings": self._config_source_snapshot("global", self.global_root / "config.yaml"),
             "project_settings": {
@@ -411,6 +412,17 @@ class RockyRuntime:
             "handoffs": [],
             "student_profile": {},
             "student_notes": [],
+        }
+
+    def context_usage(self) -> dict[str, int]:
+        context = self.current_context()
+        return {
+            "instructions": len(context.get("instructions") or []),
+            "memories": len(context.get("memories") or []),
+            "skills": len(context.get("skills") or []),
+            "learned_policies": len(context.get("learned_policies") or []),
+            "student_notes": len(context.get("student_notes") or []),
+            "handoffs": len(context.get("handoffs") or []),
         }
 
     def why(self) -> dict[str, Any]:

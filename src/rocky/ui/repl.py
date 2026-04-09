@@ -52,7 +52,7 @@ def make_live_console(console: Console) -> Console:
 @dataclass(slots=True)
 class EventPrinter:
     console: Console
-    speaker_label: str = field(default="Rocky")
+    response_marker: str = field(default="| ")
     verbose: bool = field(default=False)
     streamed_text: bool = field(default=False)
     _stream_open: bool = field(default=False)
@@ -60,7 +60,7 @@ class EventPrinter:
 
     def _ensure_stream_line(self) -> None:
         if not self._stream_open:
-            self.console.print(Text(f"{self.speaker_label} ", style="bold bright_white"), end="")
+            self.console.print(Text(self.response_marker, style="bold bright_black"), end="")
             self._stream_open = True
 
     def _close_stream_line(self) -> None:
@@ -297,6 +297,69 @@ class RockyRepl:
         except Exception:
             return ""
 
+    def _default_context_usage(self) -> dict[str, int]:
+        return {
+            "instructions": 0,
+            "memories": 0,
+            "skills": 0,
+            "learned_policies": 0,
+            "student_notes": 0,
+            "handoffs": 0,
+        }
+
+    def _summarize_context_usage(self, context: object) -> dict[str, int]:
+        if not isinstance(context, dict):
+            return self._default_context_usage()
+
+        def _count(name: str) -> int:
+            value = context.get(name) or []
+            return len(value) if isinstance(value, list) else 0
+
+        return {
+            "instructions": _count("instructions"),
+            "memories": _count("memories"),
+            "skills": _count("skills"),
+            "learned_policies": _count("learned_policies"),
+            "student_notes": _count("student_notes"),
+            "handoffs": _count("handoffs"),
+        }
+
+    def _normalize_context_usage(self, payload: object) -> dict[str, int]:
+        if not isinstance(payload, dict):
+            return self._default_context_usage()
+        expected = self._default_context_usage().keys()
+        if all(isinstance(payload.get(name), int) for name in expected):
+            return {name: int(payload.get(name) or 0) for name in expected}
+        return self._summarize_context_usage(payload)
+
+    def _safe_context_usage(self) -> dict[str, int]:
+        method = getattr(type(self.runtime), "context_usage", None)
+        if method is not None:
+            try:
+                payload = method(self.runtime)
+                if isinstance(payload, dict):
+                    return self._normalize_context_usage(payload)
+            except Exception:
+                pass
+        fallback = getattr(self.runtime, "current_context", None)
+        if callable(fallback):
+            try:
+                return self._normalize_context_usage(fallback())
+            except Exception:
+                pass
+        return self._default_context_usage()
+
+    def _context_usage_label(self) -> str:
+        usage = self._safe_context_usage()
+        return (
+            f"Ctx I{usage['instructions']}"
+            f" M{usage['memories']}"
+            f" S{usage['skills']}"
+            f" P{usage['learned_policies']}"
+            f" N{usage['student_notes']}"
+            f" H{usage['handoffs']}"
+        )
+
     def _toolbar(self) -> HTML:
         freeze_label = "Freeze: ON" if self.runtime.freeze_enabled else "Freeze: OFF"
         verbose_label = "Verbose: ON" if getattr(self.runtime, "verbose_enabled", False) else "Verbose: OFF"
@@ -310,6 +373,7 @@ class RockyRepl:
             "Ctrl-G student",
             freeze_label,
             verbose_label,
+            self._context_usage_label(),
         ]
         session_id = self._safe_session_id()
         if session_id:
