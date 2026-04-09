@@ -6,7 +6,7 @@ from pathlib import Path
 from rocky.app import RockyRuntime
 from rocky.providers.base import ProviderResponse
 from rocky.core.router import ContinuationResolver
-from rocky.learning.synthesis import SkillSynthesizer
+from rocky.learning.synthesis import PolicySynthesizer
 from rocky.core.runtime_state import ThreadRegistry
 from rocky.session.store import Session
 from rocky.student.store import StudentStore
@@ -88,7 +88,7 @@ def test_teach_records_single_notebook_entry_when_last_answer_exists(tmp_path: P
     monkeypatch.setattr(
         runtime.learning_manager,
         "learn_from_feedback",
-        lambda **kwargs: {"published": True, "skill": "dummy"},
+        lambda **kwargs: {"published": True, "policy": "dummy"},
     )
 
     result = runtime.teach("Do not merge products when edition text differs.")
@@ -126,7 +126,7 @@ def test_learn_creates_structured_pattern_memory_from_feedback(tmp_path: Path, m
 
     def fake_learn_from_feedback(**kwargs):
         captured.update(kwargs)
-        return {"published": True, "skill": "dummy"}
+        return {"published": True, "policy": "dummy"}
 
     monkeypatch.setattr(runtime.learning_manager, "learn_from_feedback", fake_learn_from_feedback)
 
@@ -219,7 +219,7 @@ def test_learn_does_not_publish_skill_when_feedback_is_already_satisfied(tmp_pat
                 "Found that the prior answer already followed the requested rule.",
             ],
             "memory_kind": "lesson",
-            "should_publish_skill": False,
+            "should_publish_policy": False,
             "confidence": 0.94,
             "required_behavior": [
                 "Keep this as a notebook reminder only.",
@@ -310,7 +310,7 @@ def test_learn_locks_in_evidence_backed_schema_failure_when_reflection_denies_it
             "evidence": ["The answer already matches the expected schema."],
             "debug_steps": ["Reviewed the previous answer against the feedback."],
             "memory_kind": "lesson",
-            "should_publish_skill": False,
+            "should_publish_policy": False,
             "confidence": 0.95,
             "required_behavior": ["Keep only notebook memory."],
             "prohibited_behavior": ["Do not publish a skill."],
@@ -332,7 +332,7 @@ def test_learn_locks_in_evidence_backed_schema_failure_when_reflection_denies_it
 
 
 def test_build_draft_adds_research_signature_for_web_search_tool_refusal(tmp_path: Path) -> None:
-    synthesizer = SkillSynthesizer()
+    synthesizer = PolicySynthesizer()
     analysis = synthesizer.analyze_feedback(
         "conversation/general",
         "you must use web search and you do have search tools",
@@ -349,7 +349,7 @@ def test_build_draft_adds_research_signature_for_web_search_tool_refusal(tmp_pat
     )
 
     draft = synthesizer.build_draft(
-        tmp_path / "learned",
+        tmp_path / "policies" / "learned",
         "conversation/general",
         1,
         "you must use web search and you do have search tools",
@@ -408,7 +408,7 @@ def test_learn_model_reflection_creates_variant_pattern(tmp_path: Path, monkeypa
                 "Generalized the correction into a reusable variant-isolation rule.",
             ],
             "memory_kind": "pattern",
-            "should_publish_skill": True,
+            "should_publish_policy": True,
             "confidence": 0.92,
             "required_behavior": [
                 "Identify the established item family from the observed results.",
@@ -473,7 +473,7 @@ def test_learn_model_reflection_captures_clear_family_rule(tmp_path: Path, monke
                 "Generalized a reusable rule about established families and over-pruning.",
             ],
             "memory_kind": "pattern",
-            "should_publish_skill": True,
+            "should_publish_policy": True,
             "confidence": 0.9,
             "required_behavior": [
                 "Keep the established matching family when the evidence already supports it.",
@@ -540,7 +540,7 @@ def test_learn_model_reflection_can_keep_case_specific_feedback_as_example(tmp_p
             "failure_class": "workflow_correction",
             "root_cause": "Rocky answered with an invented filename instead of the filename shown in the observed command output.",
             "corrected_outcome": "Answer with `summary-2026-04-08.md` because that is the filename shown in the successful tool result.",
-            "generalization_rationale": "This is useful as a concrete example of evidence-grounded answering, but it is too case-specific to become a reusable skill.",
+            "generalization_rationale": "This is useful as a concrete example of evidence-grounded answering, but it is too case-specific to become a reusable policy.",
             "evidence": [
                 "The successful run_shell_command output says `Created summary-2026-04-08.md`.",
                 "The prior answer said `report.md`, which does not appear in the observed output.",
@@ -551,7 +551,7 @@ def test_learn_model_reflection_can_keep_case_specific_feedback_as_example(tmp_p
                 "Kept this as an example because the correction is tied to one exact output string.",
             ],
             "memory_kind": "example",
-            "should_publish_skill": False,
+            "should_publish_policy": False,
             "confidence": 0.88,
             "required_behavior": [
                 "Use the exact observed filename from the current run when answering this kind of question.",
@@ -578,4 +578,4 @@ def test_learn_model_reflection_can_keep_case_specific_feedback_as_example(tmp_p
     example_path = Path(result["student_memory"]["path"])
     example_text = example_path.read_text(encoding="utf-8")
     assert "## Reflection flow" in example_text
-    assert "too case-specific to become a reusable skill" in example_text
+    assert "too case-specific to become a reusable policy" in example_text

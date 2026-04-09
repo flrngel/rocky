@@ -16,6 +16,7 @@ from rocky.core.runtime_state import ThreadRegistry
 from rocky.core.verifiers import VerifierRegistry
 from rocky.harness import harness_inventory as harness_catalog
 from rocky.learning.manager import LearningManager
+from rocky.learning.policies import LearnedPolicyLoader, LearnedPolicyRetriever
 from rocky.memory.retriever import MemoryRetriever
 from rocky.memory.store import MemoryStore
 from rocky.providers.registry import ProviderRegistry
@@ -42,6 +43,8 @@ class RockyRuntime:
         memory_retriever: MemoryRetriever,
         skill_loader: SkillLoader,
         skill_retriever: SkillRetriever,
+        policy_loader: LearnedPolicyLoader,
+        policy_retriever: LearnedPolicyRetriever,
         context_builder: ContextBuilder,
         tool_registry: ToolRegistry,
         provider_registry: ProviderRegistry,
@@ -61,6 +64,8 @@ class RockyRuntime:
         self.memory_retriever = memory_retriever
         self.skill_loader = skill_loader
         self.skill_retriever = skill_retriever
+        self.policy_loader = policy_loader
+        self.policy_retriever = policy_retriever
         self.context_builder = context_builder
         self.tool_registry = tool_registry
         self.provider_registry = provider_registry
@@ -94,6 +99,8 @@ class RockyRuntime:
         bundled_root = Path(__file__).resolve().parent / "data" / "bundled_skills"
         skill_loader = SkillLoader(workspace.root, global_root, bundled_root)
         skill_retriever = SkillRetriever(skill_loader.load_all())
+        policy_loader = LearnedPolicyLoader(workspace.root)
+        policy_retriever = LearnedPolicyRetriever(policy_loader.load_all())
         memory_store = MemoryStore(workspace.memories_dir, global_root / "memories", create_layout=not freeze)
         memory_retriever = MemoryRetriever(memory_store.load_all())
         student_store = StudentStore(workspace.student_dir, create_layout=not freeze)
@@ -103,6 +110,7 @@ class RockyRuntime:
             workspace.execution_root,
             instruction_candidates,
             skill_retriever,
+            policy_retriever,
             memory_retriever,
             sessions,
             student_store,
@@ -119,10 +127,11 @@ class RockyRuntime:
         learning_manager = LearningManager(
             support_dir=workspace.episodes_support_dir,
             query_dir=workspace.episodes_query_dir,
-            learned_root=workspace.skills_learned_dir,
+            learned_policy_root=workspace.policies_learned_dir,
             artifacts_dir=workspace.artifacts_dir,
             policies_dir=workspace.policies_dir,
             config=config.learning,
+            legacy_learned_root=workspace.skills_learned_dir,
             create_layout=not freeze,
         )
         agent = AgentCore(
@@ -148,6 +157,8 @@ class RockyRuntime:
             memory_retriever=memory_retriever,
             skill_loader=skill_loader,
             skill_retriever=skill_retriever,
+            policy_loader=policy_loader,
+            policy_retriever=policy_retriever,
             context_builder=context_builder,
             tool_registry=tool_registry,
             provider_registry=provider_registry,
@@ -162,6 +173,7 @@ class RockyRuntime:
 
     def refresh_knowledge(self) -> None:
         self.skill_retriever = SkillRetriever(self.skill_loader.load_all())
+        self.policy_retriever = LearnedPolicyRetriever(self.policy_loader.load_all())
         self.memory_retriever = MemoryRetriever(self.memory_store.load_all())
         instruction_candidates = self.workspace.instruction_candidates + [self.global_root / "AGENTS.md"]
         self.context_builder = ContextBuilder(
@@ -169,6 +181,7 @@ class RockyRuntime:
             self.workspace.execution_root,
             instruction_candidates,
             self.skill_retriever,
+            self.policy_retriever,
             self.memory_retriever,
             self.sessions,
             self.student_store,
@@ -297,6 +310,8 @@ class RockyRuntime:
                 "verbose_mode": self.verbose_enabled,
             },
             "skills": len(self.skill_retriever.skills),
+            "authored_skills": len(self.skill_retriever.skills),
+            "learned_policies": len(self.policy_retriever.policies),
             "memories": len(self.memory_retriever.notes),
             "student": self.student_store.status(),
             "learned_generation": self.learning_manager.current_generation(),
@@ -313,6 +328,7 @@ class RockyRuntime:
             "instructions": [],
             "memories": [],
             "skills": [],
+            "learned_policies": [],
             "tool_families": [],
             "workspace_focus": {
                 "workspace_root": str(self.workspace.root),
@@ -694,7 +710,7 @@ class RockyRuntime:
     def undo(self) -> dict[str, Any]:
         if self.freeze_enabled:
             return self._freeze_blocked_result("undo", key="rolled_back")
-        result = self.learning_manager.rollback_latest() or {"rolled_back": False, "reason": "no learned skills found"}
+        result = self.learning_manager.rollback_latest() or {"rolled_back": False, "reason": "no learned policies found"}
         self.refresh_knowledge()
         return result
 
@@ -708,6 +724,7 @@ class RockyRuntime:
             "freeze_mode": self.freeze_enabled,
             "tool_count": len(self.tool_registry.tools),
             "skill_count": len(self.skill_retriever.skills),
+            "learned_policy_count": len(self.policy_retriever.policies),
             "memory_count": len(self.memory_retriever.notes),
             "student_count": self.student_store.status().get("count", 0),
         }

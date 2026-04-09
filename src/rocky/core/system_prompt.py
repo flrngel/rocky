@@ -62,33 +62,36 @@ def _append_context_blocks(parts: list[str], context: ContextPackage) -> None:
         parts.append("## Retrieved memory")
         for item in context.memories:
             parts.append(f"### {item['name']} ({item['scope']})\n{item['text']}")
-    if context.skills:
-        if any(item.get("origin") == "learned" or int(item.get("generation", 0) or 0) > 0 for item in context.skills):
+    if context.learned_policies:
+        parts.append(
+            "Retrieved learned policies are corrective memories from earlier feedback in this workspace. When a learned policy applies, follow it before generic heuristics. Treat explicit prohibitions in learned policies as hard constraints for this answer, even if the policy is still marked candidate."
+        )
+        learned_constraints: list[str] = []
+        for item in context.learned_policies:
+            feedback = str(item.get("feedback_excerpt") or "").strip()
+            if feedback:
+                learned_constraints.append(f"- Teacher correction: {feedback}")
+            for rule in (item.get("prohibited_behavior") or [])[:3]:
+                text = str(rule).strip()
+                if text:
+                    learned_constraints.append(f"- Do not: {text}")
+            for rule in (item.get("required_behavior") or [])[:3]:
+                text = str(rule).strip()
+                if text:
+                    learned_constraints.append(f"- Do: {text}")
+        if learned_constraints:
+            parts.append("## Learned constraints")
+            parts.extend(learned_constraints[:12])
+        parts.append("## Learned policies")
+        for item in context.learned_policies:
             parts.append(
-                "Retrieved learned skills are corrections from earlier feedback in this workspace. When a learned skill applies, follow it before generic heuristics. Treat explicit prohibitions in learned skills as hard constraints for this answer, even if the skill is still marked candidate."
+                f"### {item['name']} [{item['scope']} origin={item.get('origin', 'learned')} gen={item['generation']} state={item.get('promotion_state', 'promoted')}]\n{item['text']}"
             )
-            learned_constraints: list[str] = []
-            for item in context.skills:
-                if item.get("origin") != "learned" and int(item.get("generation", 0) or 0) <= 0:
-                    continue
-                feedback = str(item.get("feedback_excerpt") or "").strip()
-                if feedback:
-                    learned_constraints.append(f"- Teacher correction: {feedback}")
-                for rule in (item.get("prohibited_behavior") or [])[:3]:
-                    text = str(rule).strip()
-                    if text:
-                        learned_constraints.append(f"- Do not: {text}")
-                for rule in (item.get("required_behavior") or [])[:3]:
-                    text = str(rule).strip()
-                    if text:
-                        learned_constraints.append(f"- Do: {text}")
-            if learned_constraints:
-                parts.append("## Learned constraints")
-                parts.extend(learned_constraints[:12])
+    if context.skills:
         parts.append("## Retrieved skills")
         for item in context.skills:
             parts.append(
-                f"### {item['name']} [{item['scope']} origin={item.get('origin', 'manual')} gen={item['generation']} state={item.get('promotion_state', 'promoted')}]\n{item['text']}"
+                f"### {item['name']} [{item['scope']} origin={item.get('origin', 'manual')} gen={item['generation']}]\n{item['text']}"
             )
     if context.tool_families:
         parts.append("## Tool exposure")
@@ -112,10 +115,10 @@ def build_system_prompt(
         "Unless the user explicitly asked for an external path, keep created, copied, edited, and verified files inside the current workspace. Prefer relative workspace paths and never invent placeholder roots like `/workspace`.",
         "The active execution directory is the default project focus. Favor it for shell commands, reads, and new files unless the user asks for another exact path.",
         "Project handoff summaries come from earlier sessions in the same workspace; use them to continue work, but re-check machine facts with tools before claiming them.",
-        "If the user asks to continue, resume, pick up, or keep working in this workspace, start from any retrieved handoff, student note, pattern, or learned skill before doing broad exploration. Treat those paths and constraints as the default working context until live tool results prove otherwise.",
+        "If the user asks to continue, resume, pick up, or keep working in this workspace, start from any retrieved handoff, student note, pattern, or learned policy before doing broad exploration. Treat those paths and constraints as the default working context until live tool results prove otherwise.",
         "Student notes are durable teacher feedback. Reuse them aggressively when they match the task, but verify environment facts live instead of assuming they still hold.",
-        "When newer student feedback or learned skills conflict with older project instructions or fuzzy heuristics, prefer the newer corrective guidance.",
-        "Treat explicit 'Do not...' rules from retrieved student notes and learned skills as hard constraints for the current answer, not soft suggestions.",
+        "When newer student feedback or learned policies conflict with older project instructions or fuzzy heuristics, prefer the newer corrective guidance.",
+        "Treat explicit 'Do not...' rules from retrieved student notes and learned policies as hard constraints for the current answer, not soft suggestions.",
         "If a retrieved learned rule excludes a candidate, claim, file, or action from the current deliverable, omit it from the deliverable instead of keeping it with a warning label.",
         "Unsupported deterministic claims are forbidden. If support is missing, gather evidence or state the uncertainty explicitly.",
     ]

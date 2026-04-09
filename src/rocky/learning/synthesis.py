@@ -13,12 +13,12 @@ from rocky.util.text import extract_json_candidate, safe_json, tokenize_keywords
 
 
 def _slug(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:72] or "skill"
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:72] or "policy"
 
 
 @dataclass(slots=True)
-class SkillDraft:
-    skill_id: str
+class PolicyDraft:
+    policy_id: str
     path: Path
     content: str
     metadata: dict[str, Any]
@@ -47,11 +47,19 @@ class FeedbackAnalysis:
     evidence: list[str] = field(default_factory=list)
     debug_steps: list[str] = field(default_factory=list)
     memory_kind: str = "pattern"
-    should_publish_skill: bool = True
+    should_publish_policy: bool = True
     reflection_source: str = "heuristic_fallback"
     confidence: float = 0.0
     observed_failure: bool = True
     mismatch_confirmed: bool = False
+
+    @property
+    def should_publish_skill(self) -> bool:
+        return self.should_publish_policy
+
+    @should_publish_skill.setter
+    def should_publish_skill(self, value: bool) -> None:
+        self.should_publish_policy = value
 
     def memory_text(self) -> str:
         heading = {
@@ -124,7 +132,7 @@ class FeedbackAnalysis:
             "evidence": list(self.evidence),
             "debug_steps": list(self.debug_steps),
             "memory_kind": self.memory_kind,
-            "should_publish_skill": self.should_publish_skill,
+            "should_publish_policy": self.should_publish_policy,
             "reflection_source": self.reflection_source,
             "confidence": self.confidence,
             "observed_failure": self.observed_failure,
@@ -138,7 +146,7 @@ class FeedbackAnalysis:
         }
 
 
-class SkillSynthesizer:
+class PolicySynthesizer:
     def __init__(self, *, use_model: bool = False) -> None:
         self.use_model = use_model
 
@@ -484,6 +492,7 @@ class SkillSynthesizer:
             },
             "selected_tools": [str(name) for name in (trace.get("selected_tools") or [])[:8]],
             "selected_skills": [str(name) for name in (trace.get("selected_skills") or [])[:8]],
+            "selected_policies": [str(name) for name in (trace.get("selected_policies") or [])[:8]],
             "supported_claims": supported_claims,
             "tool_evidence": tool_evidence[:8],
         }
@@ -506,18 +515,18 @@ class SkillSynthesizer:
             "1. Figure out what failed in the previous answer.\n"
             "2. Ground the diagnosis in the provided evidence only.\n"
             "3. Decide what kind of memory should be created: `pattern`, `example`, or `lesson`.\n"
-            "4. Decide whether this should become a reusable learned skill (`should_publish_skill`).\n\n"
+            "4. Decide whether this should become a reusable learned policy (`should_publish_policy`).\n\n"
             "Memory kinds:\n"
             "- `pattern`: reusable correction that should guide future tasks with the same failure shape.\n"
-            "- `example`: concrete worked case that is useful to retrieve, but too case-specific to publish as a reusable skill.\n"
+            "- `example`: concrete worked case that is useful to retrieve, but too case-specific to publish as a reusable policy.\n"
             "- `lesson`: raw teacher feedback that should stay in the notebook only.\n\n"
             "Rules:\n"
             "- Use only the provided prompt, answer, feedback, and trace evidence.\n"
             "- Do not invent commands, files, outputs, or hidden reasoning.\n"
             "- First decide whether the previous answer actually violated the feedback. If the previous answer already satisfies the feedback, set `observed_failure` to false.\n"
             "- Prefer generalized lessons over product-specific wording.\n"
-            "- If the lesson does not clearly generalize beyond this exact case, choose `example` or `lesson` and set `should_publish_skill` to false.\n"
-            "- If `observed_failure` is false, choose `lesson` and set `should_publish_skill` to false.\n"
+            "- If the lesson does not clearly generalize beyond this exact case, choose `example` or `lesson` and set `should_publish_policy` to false.\n"
+            "- If `observed_failure` is false, choose `lesson` and set `should_publish_policy` to false.\n"
             "- Keep `debug_steps` high-signal and concise. They should explain the reasoning flow without hidden chain-of-thought.\n"
             "- Return valid JSON only.\n\n"
             "Return exactly these keys:\n"
@@ -532,7 +541,7 @@ class SkillSynthesizer:
             '"evidence": [str], '
             '"debug_steps": [str], '
             '"memory_kind": "pattern"|"example"|"lesson", '
-            '"should_publish_skill": bool, '
+            '"should_publish_policy": bool, '
             '"confidence": float, '
             '"required_behavior": [str], '
             '"prohibited_behavior": [str], '
@@ -707,8 +716,8 @@ class SkillSynthesizer:
                 title=self._analysis_title(task_signature, "no_new_failure_observed"),
                 summary=summary,
                 required_behavior=["Keep the teacher guidance available as a notebook reminder for future work."],
-                prohibited_behavior=["Do not publish a new reusable corrective skill when the prior answer already complied with the feedback."],
-                evidence_requirements=["Only publish a corrective skill when the prior answer and feedback show a concrete mismatch."],
+                prohibited_behavior=["Do not publish a new reusable corrective policy when the prior answer already complied with the feedback."],
+                evidence_requirements=["Only publish a corrective policy when the prior answer and feedback show a concrete mismatch."],
                 triggers=[task_signature, task_family, *path_hints[:4], *tool_names[:4], *prompt_keywords[:4]],
                 keywords=feedback_keywords[:16],
                 path_hints=path_hints[:8],
@@ -717,16 +726,16 @@ class SkillSynthesizer:
                 answer_excerpt=last_answer[:1200].strip(),
                 feedback_excerpt=feedback.strip()[:2000],
                 root_cause="The feedback described a rule that the previous answer already followed.",
-                corrected_outcome="No output change is required; keep this as a notebook lesson instead of a reusable corrective skill.",
-                generalization_rationale="Publishing another reusable skill here would be redundant because the previous answer already complied.",
+                corrected_outcome="No output change is required; keep this as a notebook lesson instead of a reusable corrective policy.",
+                generalization_rationale="Publishing another reusable policy here would be redundant because the previous answer already complied.",
                 evidence=[summary],
                 debug_steps=[
                     "Recovered the prior prompt, answer, and trace evidence.",
                     "Compared the feedback against the prior answer and trace.",
-                    "Detected no concrete mismatch that would justify a new corrective skill.",
+                    "Detected no concrete mismatch that would justify a new corrective policy.",
                 ],
                 memory_kind="lesson",
-                should_publish_skill=False,
+                should_publish_policy=False,
                 reflection_source="heuristic_fallback",
                 confidence=0.3,
                 observed_failure=False,
@@ -784,7 +793,7 @@ class SkillSynthesizer:
                 "Compiled reusable do/don't guidance and retrieval triggers from the prompt, feedback, and trace context.",
             ],
             memory_kind="pattern",
-            should_publish_skill=True,
+            should_publish_policy=True,
             reflection_source="heuristic_fallback",
             confidence=0.55 if confirmed_mismatch else 0.35,
             observed_failure=True,
@@ -809,14 +818,14 @@ class SkillSynthesizer:
             memory_kind = "lesson"
         elif locked_to_heuristic:
             memory_kind = heuristic.memory_kind
-        should_publish_skill = self._bool_value(
-            payload.get("should_publish_skill"),
-            heuristic.should_publish_skill if memory_kind == "pattern" else False,
+        should_publish_policy = self._bool_value(
+            payload.get("should_publish_policy", payload.get("should_publish_skill")),
+            heuristic.should_publish_policy if memory_kind == "pattern" else False,
         )
         if not observed_failure:
-            should_publish_skill = False
+            should_publish_policy = False
         elif locked_to_heuristic:
-            should_publish_skill = heuristic.should_publish_skill
+            should_publish_policy = heuristic.should_publish_policy
         if locked_to_heuristic:
             return FeedbackAnalysis(
                 failure_class=heuristic.failure_class,
@@ -840,7 +849,7 @@ class SkillSynthesizer:
                 evidence=heuristic.evidence,
                 debug_steps=heuristic.debug_steps,
                 memory_kind=heuristic.memory_kind,
-                should_publish_skill=heuristic.should_publish_skill,
+                should_publish_policy=heuristic.should_publish_policy,
                 reflection_source="heuristic_locked",
                 confidence=max(heuristic.confidence, self._float_value(payload.get("confidence"), 0.0)),
                 observed_failure=True,
@@ -893,7 +902,7 @@ class SkillSynthesizer:
             evidence=evidence,
             debug_steps=debug_steps,
             memory_kind=memory_kind,
-            should_publish_skill=should_publish_skill,
+            should_publish_policy=should_publish_policy,
             reflection_source="model_reflection",
             confidence=self._float_value(payload.get("confidence"), 0.7),
             observed_failure=observed_failure,
@@ -982,7 +991,7 @@ class SkillSynthesizer:
 
     def build_draft(
         self,
-        learned_root: Path,
+        learned_policy_root: Path,
         task_signature: str,
         generation: int,
         feedback: str,
@@ -997,7 +1006,7 @@ class SkillSynthesizer:
         failure_class: str | None = None,
         analysis: FeedbackAnalysis | None = None,
         provider: Any | None = None,
-    ) -> SkillDraft:
+    ) -> PolicyDraft:
         analysis = analysis or self.analyze_feedback(
             task_signature,
             feedback,
@@ -1009,12 +1018,13 @@ class SkillSynthesizer:
             failure_class=failure_class,
             provider=provider,
         )
-        skill_id = _slug(analysis.failure_class + "-" + task_signature.replace("/", "-"))
-        path = learned_root / skill_id / "SKILL.md"
+        policy_id = _slug(analysis.failure_class + "-" + task_signature.replace("/", "-"))
+        path = learned_policy_root / policy_id / "POLICY.md"
         task_signatures = self._draft_task_signatures(task_signature, analysis)
         metadata = {
-            "name": skill_id,
-            "description": feedback.strip().splitlines()[0][:140] if feedback.strip() else f"Learned workflow correction for {task_signature}",
+            "policy_id": policy_id,
+            "name": policy_id,
+            "description": feedback.strip().splitlines()[0][:140] if feedback.strip() else f"Learned corrective policy for {task_signature}",
             "scope": scope,
             "task_signatures": task_signatures,
             "task_family": analysis.task_family,
@@ -1026,7 +1036,7 @@ class SkillSynthesizer:
             },
             "failure_class": analysis.failure_class,
             "memory_kind": analysis.memory_kind,
-            "should_publish_skill": analysis.should_publish_skill,
+            "should_publish_policy": analysis.should_publish_policy,
             "reflection_source": analysis.reflection_source,
             "reflection_confidence": analysis.confidence,
             "root_cause": analysis.root_cause,
@@ -1059,11 +1069,11 @@ class SkillSynthesizer:
         debug_text = "\n".join(f"- {item}" for item in analysis.debug_steps[:8]) or "- none captured"
         path_text = "\n".join(f"- `{path_hint}`" for path_hint in analysis.path_hints[:6]) or "- none captured"
         body = f"""
-# Learned corrective workflow
+# Learned corrective policy
 
-## Why this skill exists
+## Why this policy exists
 
-This skill was synthesized from a reflective self-debugging pass over user feedback on a previous Rocky answer.
+This policy was synthesized from a reflective self-debugging pass over user feedback on a previous Rocky answer.
 
 ## Failure class
 
@@ -1072,7 +1082,7 @@ This skill was synthesized from a reflective self-debugging pass over user feedb
 ## Memory decision
 
 - kind: `{analysis.memory_kind}`
-- publish reusable skill: `{analysis.should_publish_skill}`
+- publish reusable policy: `{analysis.should_publish_policy}`
 - reflection source: `{analysis.reflection_source}`
 - confidence: `{analysis.confidence:.2f}`
 
@@ -1123,4 +1133,8 @@ This skill was synthesized from a reflective self-debugging pass over user feedb
 {analysis.answer_excerpt}
 """.strip() + "\n"
         content = f"---\n{frontmatter}\n---\n\n{body}"
-        return SkillDraft(skill_id=skill_id, path=path, content=content, metadata=metadata)
+        return PolicyDraft(policy_id=policy_id, path=path, content=content, metadata=metadata)
+
+
+SkillDraft = PolicyDraft
+SkillSynthesizer = PolicySynthesizer

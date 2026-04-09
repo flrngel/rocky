@@ -15,6 +15,7 @@ class WorkspacePaths:
     skills_bundled_dir: Path
     skills_project_dir: Path
     skills_learned_dir: Path
+    policies_learned_dir: Path
     student_dir: Path
     student_knowledge_dir: Path
     student_patterns_dir: Path
@@ -52,7 +53,7 @@ class WorkspacePaths:
             self.skills_dir,
             self.skills_bundled_dir,
             self.skills_project_dir,
-            self.skills_learned_dir,
+            self.policies_learned_dir,
             self.student_dir,
             self.student_knowledge_dir,
             self.student_patterns_dir,
@@ -94,6 +95,7 @@ def discover_workspace(start: Path) -> WorkspacePaths:
         skills_bundled_dir=rocky_dir / "skills" / "bundled",
         skills_project_dir=rocky_dir / "skills" / "project",
         skills_learned_dir=rocky_dir / "skills" / "learned",
+        policies_learned_dir=rocky_dir / "policies" / "learned",
         student_dir=student_dir,
         student_knowledge_dir=student_dir / "knowledge",
         student_patterns_dir=student_dir / "patterns",

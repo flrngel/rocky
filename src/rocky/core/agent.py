@@ -193,56 +193,60 @@ class AgentCore:
         prompt_tokens = tokenize_keywords(prompt)
         instruction_texts = self._preview_instruction_texts()
         instruction_shell_bias = self._instruction_shell_bias(instruction_texts)
-        retrieved_skills = self.context_builder.skill_retriever.retrieve(prompt, route.task_signature, limit=6)
-        best_candidate: tuple[int, str, str] | None = None
+        retrieved_guidance = [
+            *self.context_builder.skill_retriever.retrieve(prompt, route.task_signature, limit=6),
+            *self.context_builder.policy_retriever.retrieve(prompt, route.task_signature, limit=6),
+        ]
+        best_candidate: tuple[int, str, str, str] | None = None
 
-        for skill in retrieved_skills:
+        for guidance in retrieved_guidance:
+            guidance_kind = "policy" if getattr(guidance, "kind", "") == "learned_policy" else "skill"
             candidate_signatures = [
                 resolved
-                for resolved in (self._resolve_project_task_signature(item) for item in skill.task_signatures)
+                for resolved in (self._resolve_project_task_signature(item) for item in guidance.task_signatures)
                 if resolved is not None
             ]
             candidate_signatures.extend(
                 signature
-                for signature in self._infer_route_signatures_from_skill_guidance(prompt, skill, current_signature=route.task_signature)
+                for signature in self._infer_route_signatures_from_guidance(prompt, guidance, current_signature=route.task_signature)
                 if signature not in candidate_signatures
             )
             if not candidate_signatures:
                 continue
 
-            skill_text = skill.body.lower()
-            shellish_skill = instruction_shell_bias >= 3 or any(marker in skill_text for marker in self._SHELLISH_MARKERS)
-            retrieval_tokens = tokenize_keywords(skill.name) | tokenize_keywords(skill.description)
-            for trigger in skill.triggers:
+            guidance_text = guidance.body.lower()
+            shellish_guidance = instruction_shell_bias >= 3 or any(marker in guidance_text for marker in self._SHELLISH_MARKERS)
+            retrieval_tokens = tokenize_keywords(guidance.name) | tokenize_keywords(guidance.description)
+            for trigger in guidance.triggers:
                 retrieval_tokens |= tokenize_keywords(trigger)
-            for keyword in skill.retrieval_keywords:
+            for keyword in guidance.retrieval_keywords:
                 retrieval_tokens |= tokenize_keywords(keyword)
             overlap = prompt_tokens & retrieval_tokens
 
-            skill_score = 0
-            if skill.scope == "project":
-                skill_score += 4
-            if skill.origin in {"project", "project_bundled", "compat", "learned"}:
-                skill_score += 1
-            if skill.origin == "learned":
-                skill_score += 2
-            if any(trigger.lower() in prompt_lower for trigger in skill.triggers if trigger.strip()):
-                skill_score += 6
-            skill_score += min(len(overlap), 4) * 2
-            if shellish_skill:
-                skill_score += 2
+            guidance_score = 0
+            if guidance.scope == "project":
+                guidance_score += 4
+            if guidance.origin in {"project", "project_bundled", "compat", "learned", "learned_legacy"}:
+                guidance_score += 1
+            if guidance_kind == "policy":
+                guidance_score += 2
+            if any(trigger.lower() in prompt_lower for trigger in guidance.triggers if trigger.strip()):
+                guidance_score += 6
+            guidance_score += min(len(overlap), 4) * 2
+            if shellish_guidance:
+                guidance_score += 2
 
             for signature in candidate_signatures:
-                signature_score = skill_score + self._TASK_SIGNATURE_BIAS.get(signature, 0)
-                if signature == "repo/shell_execution" and not shellish_skill:
+                signature_score = guidance_score + self._TASK_SIGNATURE_BIAS.get(signature, 0)
+                if signature == "repo/shell_execution" and not shellish_guidance:
                     signature_score -= 2
                 if best_candidate is None or signature_score > best_candidate[0]:
-                    best_candidate = (signature_score, signature, skill.name)
+                    best_candidate = (signature_score, signature, guidance.name, guidance_kind)
 
         if best_candidate is not None and best_candidate[0] >= 9:
             upgraded = self.router.decision_for_task_signature(
                 best_candidate[1],
-                reasoning=f"Project skill `{best_candidate[2]}` maps this short workspace prompt to {best_candidate[1]}",
+                reasoning=f"Project {best_candidate[3]} `{best_candidate[2]}` maps this short workspace prompt to {best_candidate[1]}",
                 confidence=min(0.93, 0.55 + best_candidate[0] / 20),
                 source="project_context",
             )
@@ -265,15 +269,15 @@ class AgentCore:
 
         return route
 
-    def _infer_route_signatures_from_skill_guidance(
+    def _infer_route_signatures_from_guidance(
         self,
         prompt: str,
-        skill,
+        guidance,
         *,
         current_signature: str,
     ) -> list[str]:
-        metadata = skill.metadata
-        guidance_parts = [prompt.strip(), skill.description.strip()]
+        metadata = guidance.metadata
+        guidance_parts = [prompt.strip(), guidance.description.strip()]
         feedback_excerpt = str(metadata.get("feedback_excerpt") or "").strip()
         if feedback_excerpt:
             guidance_parts.append(feedback_excerpt)
@@ -336,6 +340,7 @@ class AgentCore:
         context_summary: dict[str, Any],
         selected_tools: list[str],
         selected_skills: list[str],
+        selected_policies: list[str],
         provider_name: str,
         exc: Exception,
         options: ExecutionOptions,
@@ -357,6 +362,7 @@ class AgentCore:
             "route": asdict(route),
             "selected_tools": selected_tools,
             "selected_skills": selected_skills,
+            "selected_policies": selected_policies,
             "provider": provider_name,
             "verification": verification,
             "tool_events": [],
@@ -435,6 +441,7 @@ class AgentCore:
                 self.learning_manager.record_query(
                     task_signature=route.task_signature,
                     skills_used=trace.get("selected_skills") or [],
+                    policies_used=trace.get("selected_policies") or [],
                     verifier=verification.get("name", "default_v1"),
                     result="success" if verification.get("status") == "pass" else verification.get("status", "warn"),
                     usage=usage,
@@ -752,9 +759,7 @@ class AgentCore:
     def _learned_constraint_records(self, context) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for item in context.skills:
-            if item.get("origin") != "learned" and int(item.get("generation", 0) or 0) <= 0:
-                continue
+        for item in context.learned_policies:
             name = str(item.get("name") or "").strip()
             if not name or name in seen:
                 continue
@@ -1449,10 +1454,11 @@ class AgentCore:
                 },
                 "selected_tools": [],
                 "selected_skills": [],
+                "selected_policies": [],
                 "provider": "deterministic",
                 "verification": verification,
                 "tool_events": [],
-                "context": {"instructions": [], "memories": [], "skills": [], "tool_families": []},
+                "context": {"instructions": [], "memories": [], "skills": [], "learned_policies": [], "tool_families": []},
                 "thread": thread_registry.snapshot(),
             }
             self.last_context = trace["context"]
@@ -1527,6 +1533,7 @@ class AgentCore:
                 },
                 "selected_tools": [],
                 "selected_skills": [],
+                "selected_policies": [],
                 "provider": "deterministic",
                 "verification": verification,
                 "tool_events": [],
@@ -1546,6 +1553,7 @@ class AgentCore:
         selected_tools = [tool.name for tool in selected_tool_objects]
         selected_tool_names = set(selected_tools)
         selected_skills = [item["name"] for item in context.skills]
+        selected_policies = [item["name"] for item in context.learned_policies]
         provider_name = provider.__class__.__name__
 
         provider_response = None
@@ -1623,6 +1631,7 @@ class AgentCore:
                     },
                     "selected_tools": selected_tools,
                     "selected_skills": selected_skills,
+                    "selected_policies": selected_policies,
                     "provider": provider_name,
                     "verification": {"name": "provider_failure_v1", "status": "fail", "message": str(exc)},
                     "tool_events": [],
@@ -1637,6 +1646,7 @@ class AgentCore:
                     context_summary=context_summary,
                     selected_tools=selected_tools,
                     selected_skills=selected_skills,
+                    selected_policies=selected_policies,
                     provider_name=provider_name,
                     exc=exc,
                     options=options,
@@ -1954,6 +1964,7 @@ class AgentCore:
             },
             "selected_tools": selected_tools,
             "selected_skills": selected_skills,
+            "selected_policies": selected_policies,
             "provider": provider_name,
             "verification": verification,
             "usage": provider_response.usage,

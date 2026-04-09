@@ -78,26 +78,26 @@ def test_skill_retrieval_still_supports_explicit_skill_discovery_queries() -> No
     assert [skill.name for skill in results] == ["find-skills"]
 
 
-def test_skill_retrieval_prefers_learned_project_skill_for_exact_task_signature() -> None:
-    learned = Skill(
+def test_skill_retrieval_prefers_project_skill_for_exact_task_signature() -> None:
+    project_skill = Skill(
         name="repo-shell-execution",
         scope="project",
         path=Path("/tmp/repo-shell-execution/SKILL.md"),
         body="# repo-shell-execution\nUse run_python after the shell command.\n",
         metadata={
-            "description": "Learned correction for shell execution response analysis.",
+            "description": "Project workflow for shell execution response analysis.",
             "task_signatures": ["repo/shell_execution"],
             "generation": 2,
             "retrieval": {"triggers": ["pending_catalog.sh", "merge decisions"]},
         },
-        origin="learned",
+        origin="project",
     )
     bundled = _skill(
         "general-operator",
         "General repo help.",
         task_signatures=["repo/*"],
     )
-    retriever = SkillRetriever([bundled, learned])
+    retriever = SkillRetriever([bundled, project_skill])
 
     results = retriever.retrieve(
         "execute pending_catalog.sh and decide merge decisions",

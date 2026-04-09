@@ -27,14 +27,15 @@ class SlowLearner:
         by_signature: dict[str, dict[str, Any]] = defaultdict(
             lambda: {"count": 0, "success": 0}
         )
-        skill_counter: Counter[str] = Counter()
+        policy_counter: Counter[str] = Counter()
         for row in rows:
             signature = str(row.get("task_signature", "unknown"))
             by_signature[signature]["count"] += 1
             if row.get("result") == "success":
                 by_signature[signature]["success"] += 1
-            for skill in row.get("skills_used") or []:
-                skill_counter[str(skill)] += 1
+            observed_policies = row.get("policies_used") or row.get("skills_used") or []
+            for policy in observed_policies:
+                policy_counter[str(policy)] += 1
         report = {
             "generated_at": utc_iso(),
             "query_episode_count": total,
@@ -54,9 +55,9 @@ class SlowLearner:
                     reverse=True,
                 )[:10]
             ],
-            "top_skills": [
-                {"skill": skill, "count": count}
-                for skill, count in skill_counter.most_common(10)
+            "top_policies": [
+                {"policy": policy, "count": count}
+                for policy, count in policy_counter.most_common(10)
             ],
             "notes": [
                 "This is a heuristic slow-learner report.",

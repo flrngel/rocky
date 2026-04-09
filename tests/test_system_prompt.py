@@ -6,7 +6,7 @@ from rocky.core.system_prompt import build_system_prompt
 
 def test_system_prompt_warns_against_inventing_prior_turns() -> None:
     prompt = build_system_prompt(
-        ContextPackage(instructions=[], memories=[], skills=[], tool_families=[]),
+        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=[]),
         mode="bypass",
         user_prompt="what was my previous question?",
     )
@@ -20,7 +20,7 @@ def test_system_prompt_warns_against_inventing_prior_turns() -> None:
 
 def test_system_prompt_pushes_multi_step_tool_use() -> None:
     prompt = build_system_prompt(
-        ContextPackage(instructions=[], memories=[], skills=[], tool_families=["shell", "filesystem"]),
+        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["shell", "filesystem"]),
         mode="bypass",
         user_prompt="show me what python versions i have and where they live",
         task_signature="local/runtime_inspection",
@@ -35,13 +35,13 @@ def test_system_prompt_pushes_multi_step_tool_use() -> None:
 
 def test_system_prompt_guides_data_and_extraction_tasks() -> None:
     data_prompt = build_system_prompt(
-        ContextPackage(instructions=[], memories=[], skills=[], tool_families=["filesystem", "data", "python"]),
+        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["filesystem", "data", "python"]),
         mode="bypass",
         user_prompt="analyze sales.csv",
         task_signature="data/spreadsheet/analysis",
     )
     extraction_prompt = build_system_prompt(
-        ContextPackage(instructions=[], memories=[], skills=[], tool_families=["filesystem", "data", "python"]),
+        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["filesystem", "data", "python"]),
         mode="bypass",
         user_prompt="classify tickets.txt into json",
         task_signature="extract/general",
@@ -63,13 +63,13 @@ def test_system_prompt_guides_data_and_extraction_tasks() -> None:
 
 def test_system_prompt_guides_shell_and_automation_tasks() -> None:
     shell_prompt = build_system_prompt(
-        ContextPackage(instructions=[], memories=[], skills=[], tool_families=["filesystem", "shell", "python", "git"]),
+        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["filesystem", "shell", "python", "git"]),
         mode="bypass",
         user_prompt="execute ls and count the entries",
         task_signature="repo/shell_execution",
     )
     automation_prompt = build_system_prompt(
-        ContextPackage(instructions=[], memories=[], skills=[], tool_families=["filesystem", "shell", "python"]),
+        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["filesystem", "shell", "python"]),
         mode="bypass",
         user_prompt="create a repeatable cleanup script and verify it",
         task_signature="automation/general",
@@ -100,7 +100,7 @@ def test_system_prompt_guides_shell_and_automation_tasks() -> None:
 
 def test_system_prompt_guides_repo_lookup_follow_up_reads() -> None:
     prompt = build_system_prompt(
-        ContextPackage(instructions=[], memories=[], skills=[], tool_families=["filesystem", "git"]),
+        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["filesystem", "git"]),
         mode="bypass",
         user_prompt="in this repo, find where shell history is implemented and tell me the file and function name",
         task_signature="repo/general",
@@ -111,12 +111,13 @@ def test_system_prompt_guides_repo_lookup_follow_up_reads() -> None:
     assert "Repeated search-only loops" in prompt
 
 
-def test_system_prompt_makes_learned_skill_prohibitions_hard_constraints() -> None:
+def test_system_prompt_makes_learned_policy_prohibitions_hard_constraints() -> None:
     prompt = build_system_prompt(
         ContextPackage(
             instructions=[],
             memories=[],
-            skills=[
+            skills=[],
+            learned_policies=[
                 {
                     "name": "product-expression-variant-misclassified",
                     "scope": "project",
@@ -136,8 +137,9 @@ def test_system_prompt_makes_learned_skill_prohibitions_hard_constraints() -> No
     )
 
     assert "prefer the newer corrective guidance" in prompt
-    assert "Treat explicit 'Do not...' rules from retrieved student notes and learned skills as hard constraints" in prompt
-    assert "even if the skill is still marked candidate" in prompt
+    assert "Treat explicit 'Do not...' rules from retrieved student notes and learned policies as hard constraints" in prompt
+    assert "even if the policy is still marked candidate" in prompt
     assert "## Learned constraints" in prompt
+    assert "## Learned policies" in prompt
     assert "Do not: Include distinct variants once the established item family is known." in prompt
     assert "Do: Keep only the established item family once it is supported by the evidence." in prompt

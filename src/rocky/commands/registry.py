@@ -37,6 +37,7 @@ class CommandRegistry:
             "threads",
             "teach",
             "learned",
+            "policies",
             "permissions",
             "context",
             "status",
@@ -88,7 +89,7 @@ class CommandRegistry:
                 "# Rocky commands",
                 "- `/help` show commands",
                 "- `/tools` list tools",
-                "- `/skills` list skills",
+                "- `/skills` list authored agent skills",
                 "- `/harness` show the installed-CLI agentic scenario playbook",
                 "- `/memory` list project/global memory notes",
                 "- `/memory show <scope>:<name>` show one memory note",
@@ -101,7 +102,8 @@ class CommandRegistry:
                 "- `/student add <kind> <title> <text>` add knowledge, pattern, or example",
                 "- `/threads` show active and recent task threads",
                 "- `/teach <feedback>` write durable teacher feedback to Rocky's notebook",
-                "- `/learned` list learned skills",
+                "- `/learned` list learned policies",
+                "- `/policies` list learned policies",
                 "- `/permissions` show legacy permission config (tool blocking is disabled)",
                 "- `/context` show last assembled context",
                 "- `/status` show runtime status",
@@ -117,8 +119,8 @@ class CommandRegistry:
                 "- `/freeze` toggle freeze mode for this process",
                 "- `/freeze on|off|status` manage freeze mode",
                 "- `/plan` toggle plan preference metadata",
-                "- `/learn <feedback>` publish a learned skill from last answer",
-                "- `/undo` rollback latest learned skill",
+                "- `/learn <feedback>` publish a learned policy from last answer",
+                "- `/undo` rollback latest learned policy",
                 "- `/init` create starter project files",
                 "- aliases: `/setup` or `/set-up` -> `/init`",
             ]
@@ -212,6 +214,9 @@ class CommandRegistry:
     def cmd_learned(self, args: list[str]) -> CommandResult:
         data = {"learned": self.runtime.learning_manager.list_learned()}
         return CommandResult("learned", dump_yaml(data), data)
+
+    def cmd_policies(self, args: list[str]) -> CommandResult:
+        return self.cmd_learned(args)
 
     def cmd_permissions(self, args: list[str]) -> CommandResult:
         data = self.runtime.permissions.explain()

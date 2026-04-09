@@ -1097,10 +1097,11 @@ uv run python -m product_catalog_manager search "<query>"
 """,
         encoding="utf-8",
     )
-    skill_dir = workspace / ".rocky" / "skills" / "learned" / "plain-product-query-variant-isolation"
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_dir.joinpath("SKILL.md").write_text(
+    policy_dir = workspace / ".rocky" / "policies" / "learned" / "plain-product-query-variant-isolation"
+    policy_dir.mkdir(parents=True, exist_ok=True)
+    policy_dir.joinpath("POLICY.md").write_text(
         """---
+policy_id: plain-product-query-variant-isolation
 name: plain-product-query-variant-isolation
 description: Exclude distinct modifiers from plain product queries.
 scope: project
@@ -1122,7 +1123,7 @@ evidence_requirements:
   - Compare explicit modifiers in the query against explicit modifiers in the candidate names before including them.
 ---
 
-# Learned corrective workflow
+# Learned corrective policy
 
 Exclude distinct modifiers from plain product queries.
 """,
@@ -1142,7 +1143,7 @@ Exclude distinct modifiers from plain product queries.
     assert len(provider.tool_calls) == 1
     assert len(provider.complete_calls) == 3
     assert "learned constraints" in provider.complete_calls[0][0].content.lower()
-    assert "plain-product-query-variant-isolation" in response.trace["selected_skills"]
+    assert "plain-product-query-variant-isolation" in response.trace["selected_policies"]
 
 
 def test_verification_repair_prompt_anchors_unsupported_claims_to_observed_strings(tmp_path: Path) -> None:
@@ -1274,20 +1275,20 @@ def test_live_research_prompt_retries_after_no_op_and_uses_web_tools(tmp_path: P
     assert any(event["name"] == "search_web" for event in response.trace["tool_events"])
 
 
-def test_learned_tool_refusal_skill_can_upgrade_conversation_route_to_research(tmp_path: Path, monkeypatch) -> None:
+def test_learned_tool_refusal_policy_can_upgrade_conversation_route_to_research(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     workspace = tmp_path / "workspace"
-    skill_dir = workspace / ".rocky" / "skills" / "learned" / "tool-use-refusal-conversation-general"
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_dir.joinpath("SKILL.md").write_text(
+    policy_dir = workspace / ".rocky" / "policies" / "learned" / "tool-use-refusal-conversation-general"
+    policy_dir.mkdir(parents=True, exist_ok=True)
+    policy_dir.joinpath("POLICY.md").write_text(
         """---
+policy_id: tool-use-refusal-conversation-general
 name: tool-use-refusal-conversation-general
 description: Avoid false refusals regarding live web search availability.
 scope: project
 task_signatures:
   - conversation/general
 generation: 1
-origin: learned
 failure_class: tool_use_refusal
 promotion_state: candidate
 feedback_excerpt: you must use web search and you do have search tools

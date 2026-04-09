@@ -36,7 +36,6 @@ class SkillLoader:
         items += self._scan(self.global_root / 'skills', 'global', 'global')
         items += self._scan(project / 'bundled', 'project', 'project_bundled')
         items += self._scan(project / 'project', 'project', 'project')
-        items += self._scan(project / 'learned', 'project', 'learned')
         for root in compat_project:
             items += self._scan(root, 'project', 'compat')
         for root in compat_global:

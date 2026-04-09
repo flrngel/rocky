@@ -31,7 +31,7 @@ def test_runtime_learn_binds_to_thread_snapshot_over_last_route(tmp_path: Path, 
 
     def fake_learn_from_feedback(**kwargs):
         captured.update(kwargs)
-        return {"published": True, "skill_path": str(workspace / "skill.md")}
+        return {"published": True, "policy_path": str(workspace / "policy.md")}
 
     runtime.learning_manager.learn_from_feedback = fake_learn_from_feedback  # type: ignore[method-assign]
     runtime.refresh_knowledge = lambda: None  # type: ignore[assignment]
@@ -89,7 +89,7 @@ def test_runtime_learn_recovers_latest_non_current_session_for_one_shot_feedback
 
     def fake_learn_from_feedback(**kwargs):
         captured.update(kwargs)
-        return {"published": True, "skill_path": str(workspace / "skill.md")}
+        return {"published": True, "policy_path": str(workspace / "policy.md")}
 
     fresh_runtime.learning_manager.learn_from_feedback = fake_learn_from_feedback  # type: ignore[method-assign]
     fresh_runtime.refresh_knowledge = lambda: None  # type: ignore[assignment]

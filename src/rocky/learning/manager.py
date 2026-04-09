@@ -8,7 +8,7 @@ from typing import Any
 from rocky.config.models import LearningConfig
 from rocky.learning.episodes import EpisodeStore
 from rocky.learning.slow import SlowLearner
-from rocky.learning.synthesis import FeedbackAnalysis, SkillSynthesizer
+from rocky.learning.synthesis import FeedbackAnalysis, PolicySynthesizer
 from rocky.util.text import safe_json
 from rocky.util.time import utc_iso
 
@@ -18,36 +18,53 @@ class LearningManager:
         self,
         support_dir: Path,
         query_dir: Path,
-        learned_root: Path,
+        learned_policy_root: Path,
         artifacts_dir: Path,
         policies_dir: Path,
         config: LearningConfig,
         *,
+        legacy_learned_root: Path | None = None,
         create_layout: bool = True,
     ) -> None:
         self.support_dir = support_dir
         self.query_dir = query_dir
-        self.learned_root = learned_root
+        self.learned_policy_root = learned_policy_root
+        self.legacy_learned_root = legacy_learned_root
         self.artifacts_dir = artifacts_dir
         self.reflections_dir = artifacts_dir / "learning_reflections"
         self.policies_dir = policies_dir
         self.config = config
         if create_layout:
-            self.learned_root.mkdir(parents=True, exist_ok=True)
+            self._bootstrap_generation_file()
+        if create_layout:
+            self.learned_policy_root.mkdir(parents=True, exist_ok=True)
             self.artifacts_dir.mkdir(parents=True, exist_ok=True)
             self.reflections_dir.mkdir(parents=True, exist_ok=True)
         self.episode_store = EpisodeStore(
             support_dir=support_dir,
             query_dir=query_dir,
-            generation_file=learned_root / "generation.json",
+            generation_file=self.learned_policy_root / "generation.json",
             create_layout=create_layout,
         )
-        self.synthesizer = SkillSynthesizer(use_model=True)
+        self.synthesizer = PolicySynthesizer(use_model=True)
         self.slow_learner = SlowLearner(
             query_dir=query_dir,
             policies_dir=policies_dir,
             create_layout=create_layout,
         )
+
+    def _bootstrap_generation_file(self) -> None:
+        legacy_generation = None
+        if self.legacy_learned_root is not None:
+            candidate = self.legacy_learned_root / "generation.json"
+            if candidate.exists():
+                legacy_generation = candidate
+        self.learned_policy_root.mkdir(parents=True, exist_ok=True)
+        generation_file = self.learned_policy_root / "generation.json"
+        if generation_file.exists():
+            return
+        if legacy_generation is not None:
+            shutil.copyfile(legacy_generation, generation_file)
 
     def current_generation(self) -> int:
         return self.episode_store.current_generation()
@@ -71,7 +88,7 @@ class LearningManager:
             "task_family": task_family or task_signature.split("/", 1)[0],
             "thread_id": thread_id,
             "scope": scope,
-            "skill_generation_seen": self.current_generation(),
+            "policy_generation_seen": self.current_generation(),
             "prompt_summary": prompt[:240],
             "tool_trace": list((trace or {}).get("selected_tools") or []),
             "failure_type": failure_type,
@@ -83,32 +100,45 @@ class LearningManager:
         return self.episode_store.record_support(payload)
 
     def _meta_paths(self) -> list[Path]:
-        return sorted(self.learned_root.rglob("SKILL.meta.json"))
+        paths = sorted(self.learned_policy_root.rglob("POLICY.meta.json"))
+        if self.legacy_learned_root is not None and self.legacy_learned_root.exists():
+            paths.extend(sorted(self.legacy_learned_root.rglob("SKILL.meta.json")))
+        return paths
 
     def _read_meta(self, path: Path) -> dict[str, Any] | None:
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return None
+        metadata = dict(payload.get("metadata") or {})
+        if "should_publish_policy" not in metadata and "should_publish_skill" in metadata:
+            metadata["should_publish_policy"] = metadata["should_publish_skill"]
+        payload["metadata"] = metadata
+        if "policy_id" not in payload and payload.get("skill_id"):
+            payload["policy_id"] = payload["skill_id"]
+        if "policy_path" not in payload and payload.get("skill_path"):
+            payload["policy_path"] = payload["skill_path"]
+        payload.setdefault("storage_format", "legacy_skill" if path.name == "SKILL.meta.json" else "policy")
+        return payload
 
     def _write_meta(self, path: Path, payload: dict[str, Any]) -> None:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    def _skill_name_from_meta(self, meta: dict[str, Any], meta_path: Path) -> str:
-        return str(meta.get("skill_id") or meta_path.parent.name)
+    def _policy_name_from_meta(self, meta: dict[str, Any], meta_path: Path) -> str:
+        return str(meta.get("policy_id") or meta.get("skill_id") or meta_path.parent.name)
 
-    def _promote_skill_meta(self, meta_path: Path, payload: dict[str, Any]) -> None:
+    def _promote_policy_meta(self, meta_path: Path, payload: dict[str, Any]) -> None:
         payload["metadata"] = dict(payload.get("metadata") or {})
         payload["metadata"]["promotion_state"] = "promoted"
         payload["metadata"]["verified_success_count"] = int(payload["metadata"].get("verified_success_count") or 0)
         payload["metadata"]["verification"] = {"status": "promoted", "tests": payload["metadata"].get("verification", {}).get("tests", [])}
         payload["promoted_at"] = utc_iso()
         self._write_meta(meta_path, payload)
-        skill_path = Path(payload["skill_path"])
-        if skill_path.exists():
-            text = skill_path.read_text(encoding="utf-8")
+        policy_path = Path(str(payload.get("policy_path") or payload.get("skill_path") or ""))
+        if policy_path.exists():
+            text = policy_path.read_text(encoding="utf-8")
             if "promotion_state: candidate" in text:
-                skill_path.write_text(text.replace("promotion_state: candidate", "promotion_state: promoted", 1), encoding="utf-8")
+                policy_path.write_text(text.replace("promotion_state: candidate", "promotion_state: promoted", 1), encoding="utf-8")
 
     def analyze_feedback(
         self,
@@ -206,10 +236,10 @@ class LearningManager:
             trace=trace,
             analysis=analysis,
         )
-        if not analysis.should_publish_skill:
+        if not analysis.should_publish_policy:
             return {
                 "published": False,
-                "reason": "reflection kept this as notebook memory rather than a reusable skill",
+                "reason": "reflection kept this as notebook memory rather than a reusable policy",
                 "support_episode_id": support["id"],
                 "failure_class": analysis.failure_class,
                 "task_family": task_family or task_signature.split("/", 1)[0],
@@ -220,7 +250,7 @@ class LearningManager:
             }
         new_generation = self.current_generation() + 1
         draft = self.synthesizer.build_draft(
-            self.learned_root,
+            self.learned_policy_root,
             task_signature,
             new_generation,
             feedback,
@@ -237,12 +267,12 @@ class LearningManager:
         )
         path = draft.path
         if path.exists():
-            path = path.parent.parent / f"{draft.skill_id}-{new_generation}" / "SKILL.md"
+            path = path.parent.parent / f"{draft.policy_id}-{new_generation}" / "POLICY.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(draft.content, encoding="utf-8")
         meta = {
-            "skill_id": draft.skill_id,
-            "skill_path": str(path),
+            "policy_id": draft.policy_id,
+            "policy_path": str(path),
             "scope": scope,
             "generation": new_generation,
             "published": True,
@@ -257,13 +287,13 @@ class LearningManager:
             "failure_class": analysis.failure_class,
             "promotion_state": draft.metadata.get("promotion_state", "candidate"),
         }
-        meta_path = path.parent / "SKILL.meta.json"
+        meta_path = path.parent / "POLICY.meta.json"
         self._write_meta(meta_path, meta)
         self.episode_store.set_generation(new_generation)
         return {
             "published": True,
-            "skill_id": draft.skill_id,
-            "skill_path": str(path),
+            "policy_id": draft.policy_id,
+            "policy_path": str(path),
             "meta_path": str(meta_path),
             "support_episode_id": support["id"],
             "generation": new_generation,
@@ -279,7 +309,8 @@ class LearningManager:
     def record_query(
         self,
         task_signature: str,
-        skills_used: list[str],
+        skills_used: list[str] | None,
+        policies_used: list[str] | None,
         verifier: str,
         result: str,
         usage: dict[str, Any] | None,
@@ -292,8 +323,9 @@ class LearningManager:
             **self.episode_store.record_query(
                 {
                     "task_signature": task_signature,
-                    "skill_generation_seen": self.current_generation(),
-                    "skills_used": skills_used,
+                    "policy_generation_seen": self.current_generation(),
+                    "skills_used": list(skills_used or []),
+                    "policies_used": list(policies_used or []),
                     "verifier": verifier,
                     "result": result,
                     "cost": usage or {},
@@ -301,13 +333,13 @@ class LearningManager:
                 }
             ),
         }
-        if skills_used:
-            skill_names = set(skills_used)
+        if policies_used:
+            policy_names = set(policies_used)
             for meta_path in self._meta_paths():
                 meta = self._read_meta(meta_path)
                 if meta is None:
                     continue
-                if self._skill_name_from_meta(meta, meta_path) not in skill_names:
+                if self._policy_name_from_meta(meta, meta_path) not in policy_names:
                     continue
                 metadata = dict(meta.get("metadata") or {})
                 metadata["reuse_count"] = int(metadata.get("reuse_count") or 0) + 1
@@ -318,7 +350,7 @@ class LearningManager:
                 meta["last_query_at"] = utc_iso()
                 self._write_meta(meta_path, meta)
                 if metadata.get("promotion_state") == "candidate" and int(metadata.get("verified_success_count") or 0) >= 1 and result == "success":
-                    self._promote_skill_meta(meta_path, meta)
+                    self._promote_policy_meta(meta_path, meta)
         return recorded
 
     def list_learned(self) -> list[dict[str, Any]]:
@@ -335,20 +367,20 @@ class LearningManager:
         if not learned:
             return None
         latest = learned[0]
-        skill_path = Path(latest["skill_path"])
-        if not skill_path.exists():
-            return {"rolled_back": False, "reason": "skill path missing", **latest}
+        policy_path = Path(str(latest.get("policy_path") or latest.get("skill_path") or ""))
+        if not policy_path.exists():
+            return {"rolled_back": False, "reason": "policy path missing", **latest}
         rollback_dir = (
             self.artifacts_dir
             / "rollback"
-            / f"{skill_path.parent.name}__{utc_iso().replace(':', '').replace('-', '')}"
+            / f"{policy_path.parent.name}__{utc_iso().replace(':', '').replace('-', '')}"
         )
         rollback_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(skill_path.parent), str(rollback_dir))
+        shutil.move(str(policy_path.parent), str(rollback_dir))
         return {
             "rolled_back": True,
-            "skill_id": latest.get("skill_id"),
-            "from": str(skill_path.parent),
+            "policy_id": latest.get("policy_id") or latest.get("skill_id"),
+            "from": str(policy_path.parent),
             "to": str(rollback_dir),
         }
 

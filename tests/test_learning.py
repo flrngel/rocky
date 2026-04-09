@@ -7,11 +7,11 @@ from rocky.learning.episodes import EpisodeStore
 from rocky.learning.manager import LearningManager
 
 
-def test_learning_manager_publishes_skill(tmp_path: Path) -> None:
+def test_learning_manager_publishes_policy(tmp_path: Path) -> None:
     manager = LearningManager(
         support_dir=tmp_path / 'support',
         query_dir=tmp_path / 'query',
-        learned_root=tmp_path / 'learned',
+        learned_policy_root=tmp_path / 'policies' / 'learned',
         artifacts_dir=tmp_path / 'artifacts',
         policies_dir=tmp_path / 'policies',
         config=LearningConfig(),
@@ -24,15 +24,15 @@ def test_learning_manager_publishes_skill(tmp_path: Path) -> None:
         trace={'selected_tools': ['read_file']},
     )
     assert result['published'] is True
-    assert Path(result['skill_path']).exists()
+    assert Path(result['policy_path']).exists()
     assert Path(result["reflection_path"]).exists()
     learned = manager.list_learned()
     assert learned
 
-    skill_text = Path(result["skill_path"]).read_text(encoding="utf-8")
-    assert "include bottle size and distillery" in skill_text
-    assert "Operational guidance" in skill_text
-    assert "Workspace hints" in skill_text
+    policy_text = Path(result["policy_path"]).read_text(encoding="utf-8")
+    assert "include bottle size and distillery" in policy_text
+    assert "Operational guidance" in policy_text
+    assert "Workspace hints" in policy_text
 
 
 def test_episode_store_recreates_query_directory_on_write(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from rocky.core.runtime_state import ActiveTaskThread, AnswerContract, EvidenceGraph
+from rocky.learning.policies import LearnedPolicyRetriever
 from rocky.memory.retriever import MemoryRetriever
 from rocky.session.store import SessionStore
 from rocky.skills.retriever import SkillRetriever
@@ -17,6 +18,7 @@ class ContextPackage:
     instructions: list[dict]
     memories: list[dict]
     skills: list[dict]
+    learned_policies: list[dict]
     tool_families: list[str]
     workspace_focus: dict = field(default_factory=dict)
     handoffs: list[dict] = field(default_factory=list)
@@ -44,12 +46,21 @@ class ContextPackage:
                 {
                     "name": s["name"],
                     "scope": s["scope"],
-                    "generation": s["generation"],
                     "origin": s.get("origin"),
-                    "promotion_state": s.get("promotion_state"),
-                    "failure_class": s.get("failure_class"),
+                    "generation": s["generation"],
                 }
                 for s in self.skills
+            ],
+            "learned_policies": [
+                {
+                    "name": p["name"],
+                    "scope": p["scope"],
+                    "origin": p.get("origin"),
+                    "generation": p["generation"],
+                    "promotion_state": p.get("promotion_state"),
+                    "failure_class": p.get("failure_class"),
+                }
+                for p in self.learned_policies
             ],
             "tool_families": self.tool_families,
             "workspace_focus": self.workspace_focus,
@@ -88,6 +99,7 @@ class ContextBuilder:
         execution_root: Path,
         instruction_candidates: list[Path],
         skill_retriever: SkillRetriever,
+        policy_retriever: LearnedPolicyRetriever,
         memory_retriever: MemoryRetriever,
         session_store: SessionStore | None = None,
         student_store: StudentStore | None = None,
@@ -96,6 +108,7 @@ class ContextBuilder:
         self.execution_root = execution_root.resolve()
         self.instruction_candidates = instruction_candidates
         self.skill_retriever = skill_retriever
+        self.policy_retriever = policy_retriever
         self.memory_retriever = memory_retriever
         self.session_store = session_store
         self.student_store = student_store
@@ -262,6 +275,28 @@ class ContextBuilder:
             }
             for skill in self.skill_retriever.retrieve(prompt, task_signature, thread=active_thread)
         ]
+        learned_policies = [
+            {
+                "name": policy.name,
+                "scope": policy.scope,
+                "origin": policy.origin,
+                "generation": policy.generation,
+                "path": str(policy.path),
+                "description": policy.description,
+                "text": policy.body[:6000],
+                "promotion_state": policy.metadata.get("promotion_state", "promoted"),
+                "failure_class": policy.metadata.get("failure_class"),
+                "task_family": policy.metadata.get("task_family"),
+                "required_behavior": list(policy.metadata.get("required_behavior") or []),
+                "prohibited_behavior": list(policy.metadata.get("prohibited_behavior") or []),
+                "evidence_requirements": list(policy.metadata.get("evidence_requirements") or []),
+                "feedback_excerpt": policy.metadata.get("feedback_excerpt"),
+                "reflection_source": policy.metadata.get("reflection_source"),
+                "reflection_confidence": policy.metadata.get("reflection_confidence"),
+                "storage_format": policy.storage_format,
+            }
+            for policy in self.policy_retriever.retrieve(prompt, task_signature, thread=active_thread)
+        ]
         workspace_focus = self._workspace_focus()
         handoffs: list[dict] = []
         if self.session_store is not None:
@@ -290,6 +325,7 @@ class ContextBuilder:
             instructions=instructions,
             memories=memories,
             skills=skills,
+            learned_policies=learned_policies,
             tool_families=tool_families,
             workspace_focus=workspace_focus,
             handoffs=handoffs,

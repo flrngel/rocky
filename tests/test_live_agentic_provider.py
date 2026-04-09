@@ -99,9 +99,9 @@ def _successful_tool_names(payload: dict[str, object]) -> list[str]:
     ]
 
 
-def _selected_skills(payload: dict[str, object]) -> list[str]:
+def _selected_policies(payload: dict[str, object]) -> list[str]:
     trace = dict(payload.get("trace") or {})
-    return [str(item) for item in list(trace.get("selected_skills") or [])]
+    return [str(item) for item in list(trace.get("selected_policies") or [])]
 
 
 def _write_scenario_report(
@@ -267,7 +267,7 @@ def test_live_cli_exact_output_project_scenario(tmp_path: Path, live_provider_re
     assert report.exists()
 
 
-def test_live_cli_learning_roundtrip_uses_learned_skill(tmp_path: Path, live_provider_ready: dict[str, str]) -> None:
+def test_live_cli_learning_roundtrip_uses_learned_policy(tmp_path: Path, live_provider_ready: dict[str, str]) -> None:
     project, workspace, _home, env = _prepare_project_workspace(tmp_path, "catalog_review")
     case = _learning_case(project)
 
@@ -281,7 +281,7 @@ def test_live_cli_learning_roundtrip_uses_learned_skill(tmp_path: Path, live_pro
         retry_payload = _cli_json(workspace, env, str(case["retry_prompt"]))
         if (
             retry_payload["verification"]["status"] == "pass"
-            and str(learn_data.get("skill_id") or "") in _selected_skills(retry_payload)
+            and str(learn_data.get("policy_id") or "") in _selected_policies(retry_payload)
         ):
             break
         _cli_json(workspace, env, "learn", str(case["feedback"]))
@@ -289,7 +289,7 @@ def test_live_cli_learning_roundtrip_uses_learned_skill(tmp_path: Path, live_pro
     output_path = workspace / str(case["expected_output_path"])
     report = _write_scenario_report(
         workspace,
-        "learning_roundtrip_uses_learned_skill",
+        "learning_roundtrip_uses_learned_policy",
         [
             f"mkdir -p {workspace}",
             f"pipx install --force {REPO_ROOT}",
@@ -307,20 +307,20 @@ def test_live_cli_learning_roundtrip_uses_learned_skill(tmp_path: Path, live_pro
             (
                 "install_and_baseline",
                 "ran the seed prompt and a fresh-process follow-up before teaching",
-                "seed prompt succeeds and follow-up has no learned skill yet",
-                f"seed_verification={seed_payload['verification']['status']}, baseline_skills={_selected_skills(baseline_retry)}",
+                "seed prompt succeeds and follow-up has no learned policy yet",
+                f"seed_verification={seed_payload['verification']['status']}, baseline_policies={_selected_policies(baseline_retry)}",
             ),
             (
                 "teach",
                 "sent `/learn` feedback through the installed CLI",
-                "Rocky publishes a reusable skill bound to the prior answer",
-                f"published={learn_data.get('published')}, skill_id={learn_data.get('skill_id')}",
+                "Rocky publishes a reusable policy bound to the prior answer",
+                f"published={learn_data.get('published')}, policy_id={learn_data.get('policy_id')}",
             ),
             (
                 "retry_with_learning",
                 "re-ran the follow-up in a fresh Rocky process",
-                "retry loads the learned skill and uses it in the trace",
-                f"retry_skills={_selected_skills(retry_payload)}, verification={retry_payload['verification']['status']}",
+                "retry loads the learned policy and uses it in the trace",
+                f"retry_policies={_selected_policies(retry_payload)}, verification={retry_payload['verification']['status']}",
             ),
             (
                 "grade_results",
@@ -335,7 +335,7 @@ def test_live_cli_learning_roundtrip_uses_learned_skill(tmp_path: Path, live_pro
     assert learn_data.get("published") is True
     assert retry_payload["route"]["task_signature"] == case["expected_task_signature"]
     assert retry_payload["verification"]["status"] == "pass"
-    assert str(learn_data.get("skill_id") or "") in _selected_skills(retry_payload)
+    assert str(learn_data.get("policy_id") or "") in _selected_policies(retry_payload)
     assert output_path.is_file()
     assert json.loads(output_path.read_text(encoding="utf-8")) == project.expected_output
     assert report.exists()

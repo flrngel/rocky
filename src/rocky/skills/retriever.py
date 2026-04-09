@@ -5,7 +5,6 @@ from rocky.skills.models import Skill
 from rocky.util.text import tokenize_keywords
 
 WEAK_MATCH_TOKENS = {"command", "find", "help", "information", "task", "user"}
-PROMOTION_WEIGHT = {"promoted": 3, "candidate": 1, "rejected": -2, "stale": -1}
 
 
 class SkillRetriever:
@@ -58,18 +57,6 @@ class SkillRetriever:
             score += task_signature_score
             if skill.scope == 'project':
                 score += 2
-            if skill.origin == 'learned':
-                score += 3
-                if task_signature_score:
-                    score += 4
-                failure_class = str(skill.metadata.get('failure_class') or '')
-                if failure_class and any(token in prompt_lower for token in tokenize_keywords(failure_class)):
-                    score += 3
-                task_family = str(skill.metadata.get('task_family') or '')
-                if thread is not None and task_family and task_family == thread.task_family:
-                    score += 3
-                score += PROMOTION_WEIGHT.get(str(skill.metadata.get('promotion_state') or 'promoted'), 0)
-                score += min(int(skill.metadata.get('verified_success_count') or 0), 4)
             if skill.generation:
                 score += min(skill.generation, 3)
             if not trigger_match and not task_signature_score and not strong_token_matches:
