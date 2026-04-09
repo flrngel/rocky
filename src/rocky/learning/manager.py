@@ -8,7 +8,7 @@ from typing import Any
 from rocky.config.models import LearningConfig
 from rocky.learning.episodes import EpisodeStore
 from rocky.learning.slow import SlowLearner
-from rocky.learning.synthesis import FeedbackAnalysis, PolicySynthesizer
+from rocky.learning.synthesis import EpisodeRetrospective, FeedbackAnalysis, PolicySynthesizer
 from rocky.util.text import safe_json
 from rocky.util.time import utc_iso
 
@@ -32,6 +32,7 @@ class LearningManager:
         self.legacy_learned_root = legacy_learned_root
         self.artifacts_dir = artifacts_dir
         self.reflections_dir = artifacts_dir / "learning_reflections"
+        self.self_reflections_dir = artifacts_dir / "self_reflections"
         self.policies_dir = policies_dir
         self.config = config
         if create_layout:
@@ -40,6 +41,7 @@ class LearningManager:
             self.learned_policy_root.mkdir(parents=True, exist_ok=True)
             self.artifacts_dir.mkdir(parents=True, exist_ok=True)
             self.reflections_dir.mkdir(parents=True, exist_ok=True)
+            self.self_reflections_dir.mkdir(parents=True, exist_ok=True)
         self.episode_store = EpisodeStore(
             support_dir=support_dir,
             query_dir=query_dir,
@@ -189,6 +191,22 @@ class LearningManager:
         path.write_text(safe_json(payload) + "\n", encoding="utf-8")
         return str(path)
 
+    def _write_self_reflection_artifact(
+        self,
+        retrospective: EpisodeRetrospective,
+        *,
+        trace: dict[str, Any] | None,
+    ) -> str:
+        self.self_reflections_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "published_at": utc_iso(),
+            "retrospective": retrospective.as_record(),
+            "trace_snapshot": self.synthesizer._trace_snapshot(trace or {}),
+        }
+        path = self.self_reflections_dir / f"retro_{utc_iso().replace(':', '').replace('-', '')}.json"
+        path.write_text(safe_json(payload) + "\n", encoding="utf-8")
+        return str(path)
+
     def learn_from_feedback(
         self,
         task_signature: str,
@@ -304,6 +322,46 @@ class LearningManager:
             "memory_kind": analysis.memory_kind,
             "reflection_source": analysis.reflection_source,
             "reflection_path": reflection_path,
+        }
+
+    def retrospect_episode(
+        self,
+        *,
+        task_signature: str,
+        prompt: str,
+        answer: str,
+        trace: dict[str, Any] | None = None,
+        task_family: str | None = None,
+        thread_id: str | None = None,
+        provider: Any | None = None,
+    ) -> dict[str, Any]:
+        if not self.config.enabled:
+            return {"persisted": False, "reason": "learning disabled"}
+        if not self.config.auto_self_reflection_enabled:
+            return {"persisted": False, "reason": "auto self reflection disabled"}
+        retrospective = self.synthesizer.retrospect_episode(
+            task_signature=task_signature,
+            last_prompt=prompt,
+            last_answer=answer,
+            trace=trace,
+            task_family=task_family,
+            thread_id=thread_id,
+            provider=provider,
+        )
+        if retrospective is None:
+            return {"persisted": False, "reason": "retrospective unavailable"}
+        if not retrospective.should_persist:
+            return {
+                "persisted": False,
+                "reason": "reflection found no durable lesson to keep",
+                "retrospective": retrospective.as_record(),
+            }
+        artifact_path = self._write_self_reflection_artifact(retrospective, trace=trace)
+        return {
+            "persisted": True,
+            "artifact_path": artifact_path,
+            "retrospective": retrospective.as_record(),
+            "text": retrospective.compact_text(),
         }
 
     def record_query(

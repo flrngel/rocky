@@ -146,6 +146,63 @@ class FeedbackAnalysis:
         }
 
 
+@dataclass(slots=True)
+class EpisodeRetrospective:
+    title: str
+    summary: str
+    repeat_next_time: list[str]
+    avoid_next_time: list[str]
+    recall_when: list[str]
+    keywords: list[str]
+    evidence: list[str]
+    confidence: float
+    should_persist: bool
+    task_signature: str
+    task_family: str
+    thread_id: str | None = None
+    verification_status: str = ""
+    failure_class: str | None = None
+    reflection_source: str = "model_retrospective"
+
+    def compact_text(self) -> str:
+        repeat_text = "\n".join(f"- {item}" for item in self.repeat_next_time[:4]) or "- none"
+        avoid_text = "\n".join(f"- {item}" for item in self.avoid_next_time[:4]) or "- none"
+        recall_text = "\n".join(f"- {item}" for item in self.recall_when[:4]) or "- none"
+        evidence_text = "\n".join(f"- {item}" for item in self.evidence[:4]) or "- none"
+        return (
+            "# Self retrospective\n\n"
+            "## Learned\n\n"
+            f"{self.summary}\n\n"
+            "## Recall when\n\n"
+            f"{recall_text}\n\n"
+            "## Repeat next time\n\n"
+            f"{repeat_text}\n\n"
+            "## Avoid next time\n\n"
+            f"{avoid_text}\n\n"
+            "## Evidence behind this\n\n"
+            f"{evidence_text}\n"
+        )
+
+    def as_record(self) -> dict[str, Any]:
+        return {
+            "title": self.title,
+            "summary": self.summary,
+            "repeat_next_time": list(self.repeat_next_time),
+            "avoid_next_time": list(self.avoid_next_time),
+            "recall_when": list(self.recall_when),
+            "keywords": list(self.keywords),
+            "evidence": list(self.evidence),
+            "confidence": self.confidence,
+            "should_persist": self.should_persist,
+            "task_signature": self.task_signature,
+            "task_family": self.task_family,
+            "thread_id": self.thread_id,
+            "verification_status": self.verification_status,
+            "failure_class": self.failure_class,
+            "reflection_source": self.reflection_source,
+        }
+
+
 class PolicySynthesizer:
     def __init__(self, *, use_model: bool = False) -> None:
         self.use_model = use_model
@@ -612,6 +669,160 @@ class PolicySynthesizer:
                 Message(role="user", content=repair_note),
             ]
         return None
+
+    def _retrospective_prompt(
+        self,
+        *,
+        task_signature: str,
+        task_family: str,
+        thread_id: str | None,
+        last_prompt: str,
+        last_answer: str,
+        trace: dict[str, Any],
+    ) -> str:
+        snapshot = safe_json(self._trace_snapshot(trace))
+        return (
+            "Write Rocky's compact self-retrospective for one finished episode.\n\n"
+            "Goal:\n"
+            "- Decide whether there is a durable lesson worth carrying into a future session.\n"
+            "- If yes, summarize only what Rocky learned, not the whole conversation.\n"
+            "- Keep it short, reusable, and convention-oriented.\n\n"
+            "Rules:\n"
+            "- Use only the provided prompt, answer, and trace evidence.\n"
+            "- Do not restate the whole prompt or whole answer.\n"
+            "- Prefer workflow conventions, evidence discipline, and repeatable operator habits over case-specific facts.\n"
+            "- Good persistence cases: a repeatable workflow that worked, an avoidable failure, or a convention that should be repeated next time.\n"
+            "- If there is no durable lesson, set `should_persist` to false.\n"
+            "- `summary` should be one compact lesson, not a transcript.\n"
+            "- Return valid JSON only.\n\n"
+            "Return exactly these keys:\n"
+            "{"
+            '"title": str, '
+            '"summary": str, '
+            '"should_persist": bool, '
+            '"confidence": float, '
+            '"repeat_next_time": [str], '
+            '"avoid_next_time": [str], '
+            '"recall_when": [str], '
+            '"keywords": [str], '
+            '"evidence": [str]'
+            "}\n\n"
+            f"Task signature: {task_signature}\n"
+            f"Task family: {task_family}\n"
+            f"Thread id: {thread_id or ''}\n\n"
+            f"Prompt excerpt:\n{last_prompt[:1600].strip()}\n\n"
+            f"Answer excerpt:\n{last_answer[:1600].strip()}\n\n"
+            f"Trace snapshot:\n{snapshot}\n"
+        )
+
+    def _retrospect_with_model(
+        self,
+        provider: Any,
+        *,
+        task_signature: str,
+        task_family: str,
+        thread_id: str | None,
+        last_prompt: str,
+        last_answer: str,
+        trace: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        prompt = self._retrospective_prompt(
+            task_signature=task_signature,
+            task_family=task_family,
+            thread_id=thread_id,
+            last_prompt=last_prompt,
+            last_answer=last_answer,
+            trace=trace,
+        )
+        system_prompt = (
+            "You are Rocky's memory-consolidation engine. "
+            "Turn finished episodes into compact reusable retrospectives and return JSON only."
+        )
+        messages = [Message(role="user", content=prompt)]
+        repair_note = (
+            "Return valid JSON only with the exact requested keys. "
+            "Do not include markdown fences, prose, or commentary."
+        )
+        for _attempt in range(2):
+            try:
+                response = provider.complete(
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    stream=False,
+                    event_handler=None,
+                )
+            except Exception:
+                return None
+            candidate = extract_json_candidate(response.text)
+            if candidate:
+                try:
+                    payload = json.loads(candidate)
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict):
+                    return payload
+            messages = [
+                Message(role="user", content=prompt),
+                Message(role="assistant", content=str(response.text or "")),
+                Message(role="user", content=repair_note),
+            ]
+        return None
+
+    def retrospect_episode(
+        self,
+        *,
+        task_signature: str,
+        last_prompt: str,
+        last_answer: str,
+        trace: dict[str, Any] | None,
+        task_family: str | None = None,
+        thread_id: str | None = None,
+        provider: Any | None = None,
+    ) -> EpisodeRetrospective | None:
+        if provider is None or not self.use_model:
+            return None
+        resolved_trace = trace or {}
+        resolved_task_family = task_family or task_signature.split("/", 1)[0]
+        payload = self._retrospect_with_model(
+            provider,
+            task_signature=task_signature,
+            task_family=resolved_task_family,
+            thread_id=thread_id,
+            last_prompt=last_prompt,
+            last_answer=last_answer,
+            trace=resolved_trace,
+        )
+        if not isinstance(payload, dict):
+            return None
+        verification = resolved_trace.get("verification") or {}
+        query_keywords = list(tokenize_keywords(" ".join([last_prompt, task_signature, resolved_task_family])))[:16]
+        recall_when = self._string_list(payload.get("recall_when"), limit=6)
+        keywords = []
+        for item in [*self._string_list(payload.get("keywords"), limit=12), *query_keywords]:
+            if item and item not in keywords:
+                keywords.append(item)
+        title = str(payload.get("title") or "").strip() or f"{task_signature.replace('/', ' ')} retrospective"
+        summary = self._truncate(payload.get("summary") or "", 220)
+        should_persist = self._bool_value(payload.get("should_persist"), bool(summary))
+        if not summary:
+            should_persist = False
+        return EpisodeRetrospective(
+            title=title,
+            summary=summary,
+            repeat_next_time=self._string_list(payload.get("repeat_next_time"), limit=4),
+            avoid_next_time=self._string_list(payload.get("avoid_next_time"), limit=4),
+            recall_when=recall_when or [task_signature, resolved_task_family],
+            keywords=keywords[:16],
+            evidence=self._string_list(payload.get("evidence"), limit=4),
+            confidence=self._float_value(payload.get("confidence"), 0.6),
+            should_persist=should_persist,
+            task_signature=task_signature,
+            task_family=resolved_task_family,
+            thread_id=thread_id,
+            verification_status=str(verification.get("status") or ""),
+            failure_class=str(verification.get("failure_class") or "") or None,
+            reflection_source="model_retrospective",
+        )
 
     def _failure_class(self, feedback: str, trace: dict[str, Any] | None = None) -> str:
         lowered = feedback.lower()

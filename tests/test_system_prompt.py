@@ -143,3 +143,30 @@ def test_system_prompt_makes_learned_policy_prohibitions_hard_constraints() -> N
     assert "## Learned policies" in prompt
     assert "Do not: Include distinct variants once the established item family is known." in prompt
     assert "Do: Keep only the established item family once it is supported by the evidence." in prompt
+
+
+def test_system_prompt_marks_self_retrospectives_as_soft_conventions() -> None:
+    prompt = build_system_prompt(
+        ContextPackage(
+            instructions=[],
+            memories=[],
+            skills=[],
+            learned_policies=[],
+            tool_families=[],
+            student_notes=[
+                {
+                    "id": "retrospective_1",
+                    "kind": "retrospective",
+                    "title": "Keep greeting turns compact",
+                    "text": "# Self retrospective\n\n## Learned\n\nAnswer greeting-style turns briefly.\n",
+                }
+            ],
+        ),
+        mode="bypass",
+        user_prompt="say hello again",
+    )
+
+    assert "## Student notebook" in prompt
+    assert "Self retrospectives are Rocky's own compact lessons" in prompt
+    assert "Use them as soft conventions" in prompt
+    assert "Keep greeting turns compact [retrospective]" in prompt

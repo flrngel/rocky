@@ -15,6 +15,18 @@ class _CompleteProvider:
         self.calls += 1
         return ProviderResponse(text=self.text)
 
+    def run_with_tools(
+        self,
+        system_prompt,
+        messages,
+        tools,
+        execute_tool,
+        max_rounds=8,
+        event_handler=None,
+    ) -> ProviderResponse:
+        self.calls += 1
+        return ProviderResponse(text=self.text, raw={"rounds": []}, tool_events=[])
+
 
 class _ToolProvider:
     def __init__(self, text: str, tool_events: list[dict] | None = None) -> None:

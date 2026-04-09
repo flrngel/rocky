@@ -339,3 +339,71 @@ def test_live_cli_learning_roundtrip_uses_learned_policy(tmp_path: Path, live_pr
     assert output_path.is_file()
     assert json.loads(output_path.read_text(encoding="utf-8")) == project.expected_output
     assert report.exists()
+
+
+def test_live_cli_auto_self_reflection_recalls_compact_retrospective(
+    tmp_path: Path,
+    live_provider_ready: dict[str, str],
+) -> None:
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "home"
+    workspace.mkdir(parents=True, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True)
+    _copy_live_config(home)
+    env = _scenario_env(home)
+
+    first_prompt = "show me what python versions i have and where they live"
+    second_prompt = "show me what ruby version i have and where it lives"
+    first_payload = _cli_json(workspace, env, first_prompt)
+    retrospectives = sorted((workspace / ".rocky" / "student" / "retrospectives").glob("*.md"))
+    assert retrospectives
+    retrospective_text = retrospectives[-1].read_text(encoding="utf-8")
+    first_trace = dict(first_payload.get("trace") or {})
+    self_learning = dict(first_trace.get("self_learning") or {})
+
+    second_payload = _cli_json(workspace, env, second_prompt)
+    second_trace = dict(second_payload.get("trace") or {})
+    second_notes = list((second_trace.get("context") or {}).get("student_notes") or [])
+    has_empty_prompt = "prompt: ''" in retrospective_text
+    has_empty_answer = "answer: ''" in retrospective_text
+    report = _write_scenario_report(
+        workspace,
+        "auto_self_reflection_recalls_compact_retrospective",
+        [
+            f"mkdir -p {workspace}",
+            f"pipx install --force {REPO_ROOT}",
+            f"rocky --provider {LIVE_PROVIDER} --cwd {workspace} --json {json.dumps(first_prompt)}",
+            f"rocky --provider {LIVE_PROVIDER} --cwd {workspace} --json {json.dumps(second_prompt)}",
+        ],
+        [
+            (
+                "first_episode",
+                "ran installed Rocky on a local runtime-inspection task",
+                "Rocky finishes an episode and writes a compact self-retrospective, even if the first answer still needs correction",
+                f"verification={first_payload['verification']['status']}, route={first_payload['route']['task_signature']}, retrospective={retrospectives[-1].name}",
+            ),
+            (
+                "compact_memory",
+                "read the saved retrospective note directly from disk",
+                "note stores only the learned convention, not copied prompt/answer transcripts",
+                f"contains_prompt_field={has_empty_prompt}, contains_answer_field={has_empty_answer}",
+            ),
+            (
+                "fresh_recall",
+                "ran a second fresh Rocky process on a related runtime-inspection task",
+                "second trace retrieves the earlier retrospective in student notes before answering",
+                f"note_kinds={[note.get('kind') for note in second_notes]}, note_titles={[note.get('title') for note in second_notes]}",
+            ),
+        ],
+    )
+
+    assert first_payload["route"]["task_signature"] == "local/runtime_inspection"
+    assert self_learning.get("persisted") is True
+    assert str((self_learning.get("retrospective") or {}).get("summary") or "").strip()
+    assert has_empty_prompt is True
+    assert has_empty_answer is True
+    assert second_payload["verification"]["status"] == "pass"
+    assert second_payload["route"]["task_signature"] == "local/runtime_inspection"
+    assert second_notes
+    assert any(str(note.get("kind") or "") == "retrospective" for note in second_notes)
+    assert report.exists()

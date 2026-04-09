@@ -228,6 +228,8 @@ class RockyRuntime:
                     self.refresh_knowledge()
             except Exception:
                 pass
+        if not effective_freeze:
+            self._auto_self_reflect(prompt, response)
         return response
 
     def _should_capture_project_memory(self, response: AgentResponse) -> bool:
@@ -238,6 +240,78 @@ class RockyRuntime:
         if response.verification.get("memory_promotion_allowed") is False:
             return False
         return True
+
+    def _should_self_reflect(self, response: AgentResponse) -> bool:
+        if not self.config.learning.enabled or not self.config.learning.auto_self_reflection_enabled:
+            return False
+        if response.route.lane == Lane.META:
+            return False
+        if not response.text.strip():
+            return False
+        return True
+
+    def _reflection_provider(self):
+        primary = getattr(self.provider_registry, "primary", None)
+        if not callable(primary):
+            return None
+        try:
+            return primary()
+        except Exception:
+            return None
+
+    def _persist_trace_update(self, trace: dict[str, Any]) -> None:
+        trace_path = str(trace.get("trace_path") or "").strip()
+        if not trace_path:
+            return
+        try:
+            Path(trace_path).write_text(json.dumps(trace, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except Exception:
+            return
+
+    def _auto_self_reflect(self, prompt: str, response: AgentResponse) -> None:
+        if not self._should_self_reflect(response):
+            return
+        current_thread = ((response.trace.get("thread") or {}).get("current_thread") or {})
+        provider = self._reflection_provider()
+        try:
+            result = self.learning_manager.retrospect_episode(
+                task_signature=str(current_thread.get("task_signature") or response.route.task_signature),
+                prompt=prompt,
+                answer=response.text,
+                trace=response.trace,
+                task_family=str(current_thread.get("task_family") or "") or None,
+                thread_id=str(current_thread.get("thread_id") or "") or None,
+                provider=provider,
+            )
+        except Exception:
+            return
+        if not result.get("persisted"):
+            return
+        retrospective = dict(result.get("retrospective") or {})
+        try:
+            note_result = self.student_store.add(
+                "retrospective",
+                str(retrospective.get("title") or "Self retrospective"),
+                str(result.get("text") or "").strip(),
+                task_signature=str(retrospective.get("task_signature") or response.route.task_signature),
+                thread_id=str(retrospective.get("thread_id") or "") or None,
+                failure_class=str(retrospective.get("failure_class") or "") or None,
+                tags=[str(item) for item in (retrospective.get("keywords") or [])[:12]],
+                origin="self_reflection",
+            )
+        except Exception:
+            return
+        if not note_result.get("ok"):
+            return
+        response.trace["self_learning"] = {
+            "persisted": True,
+            "artifact_path": result.get("artifact_path"),
+            "retrospective": retrospective,
+            "student_note": note_result.get("entry"),
+        }
+        self.agent.last_trace = response.trace
+        self.refresh_knowledge()
+        self._persist_trace_update(response.trace)
 
     def harness_inventory(self) -> dict[str, Any]:
         return {

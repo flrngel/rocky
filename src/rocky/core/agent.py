@@ -1704,7 +1704,7 @@ class AgentCore:
                 provider_response.tool_events,
             )
         if verification_result.status == "pass":
-            verification_result = self._judge_learned_constraints(
+            learned_constraints_result = self._judge_learned_constraints(
                 provider,
                 prompt=prompt,
                 output=normalized_text,
@@ -1712,6 +1712,8 @@ class AgentCore:
                 context=context,
                 tool_events=provider_response.tool_events,
             )
+            if learned_constraints_result.status == "fail":
+                verification_result = learned_constraints_result
         if verification_result.status == "fail" and verification_result.name == "learned_constraints_judge_v1":
             for candidate_text in (
                 self._filter_output_by_teacher_terms(
@@ -1778,7 +1780,7 @@ class AgentCore:
                         provider_response.tool_events,
                     )
                 if verification_result.status == "pass":
-                    verification_result = self._judge_learned_constraints(
+                    learned_constraints_result = self._judge_learned_constraints(
                         provider,
                         prompt=prompt,
                         output=normalized_text,
@@ -1786,6 +1788,8 @@ class AgentCore:
                         context=context,
                         tool_events=provider_response.tool_events,
                     )
+                    if learned_constraints_result.status == "fail":
+                        verification_result = learned_constraints_result
                 if verification_result.status != "fail":
                     break
         if route.tool_families and verification_result.status == "fail":
@@ -1861,7 +1865,7 @@ class AgentCore:
                         provider_response.tool_events,
                     )
                 if verification_result.status == "pass":
-                    verification_result = self._judge_learned_constraints(
+                    learned_constraints_result = self._judge_learned_constraints(
                         provider,
                         prompt=prompt,
                         output=normalized_text,
@@ -1869,6 +1873,8 @@ class AgentCore:
                         context=context,
                         tool_events=provider_response.tool_events,
                     )
+                    if learned_constraints_result.status == "fail":
+                        verification_result = learned_constraints_result
                 if verification_result.status == "fail" and verification_result.name == "learned_constraints_judge_v1":
                     for candidate_text in (
                         self._filter_output_by_teacher_terms(
@@ -1935,7 +1941,7 @@ class AgentCore:
                                 provider_response.tool_events,
                             )
                         if verification_result.status == "pass":
-                            verification_result = self._judge_learned_constraints(
+                            learned_constraints_result = self._judge_learned_constraints(
                                 provider,
                                 prompt=prompt,
                                 output=normalized_text,
@@ -1943,6 +1949,8 @@ class AgentCore:
                                 context=context,
                                 tool_events=provider_response.tool_events,
                             )
+                            if learned_constraints_result.status == "fail":
+                                verification_result = learned_constraints_result
                         if verification_result.status != "fail":
                             break
                 if verification_result.status != "fail":

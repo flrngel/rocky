@@ -47,6 +47,7 @@ DEFAULT_CONFIG_DICT = {
     'learning': {
         'enabled': True,
         'auto_publish_project_skills': True,
+        'auto_self_reflection_enabled': True,
         'slow_learner_enabled': True,
     },
 }

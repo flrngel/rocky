@@ -16,11 +16,58 @@ from rocky.util.time import utc_iso
 class _FakeReflectionProvider:
     def __init__(self, *payloads: object) -> None:
         self.payloads = list(payloads)
+        self.calls: list[dict[str, object]] = []
 
     def complete(self, system_prompt, messages, stream=False, event_handler=None):  # noqa: ANN001
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "messages": messages,
+                "stream": stream,
+            }
+        )
         payload = self.payloads.pop(0)
         text = payload if isinstance(payload, str) else json.dumps(payload)
         return ProviderResponse(text=text)
+
+
+class _SimpleTaskProvider:
+    def __init__(self, text: str = "ok") -> None:
+        self.text = text
+        self.calls: list[dict[str, object]] = []
+
+    def complete(self, system_prompt, messages, stream=False, event_handler=None):  # noqa: ANN001
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "messages": messages,
+                "mode": "complete",
+            }
+        )
+        return ProviderResponse(text=self.text)
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None):  # noqa: ANN001
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "messages": messages,
+                "tools": tools,
+                "mode": "run_with_tools",
+            }
+        )
+        return ProviderResponse(text=self.text, raw={"rounds": []}, tool_events=[])
+
+
+class _CompositeProviderRegistry:
+    def __init__(self, task_provider, reflection_provider) -> None:  # noqa: ANN001
+        self.task_provider = task_provider
+        self.reflection_provider = reflection_provider
+
+    def provider_for_task(self, needs_tools=False):  # noqa: ANN001
+        return self.task_provider
+
+    def primary(self):
+        return self.reflection_provider
 
 
 def test_student_store_can_add_and_retrieve_pattern(tmp_path: Path) -> None:
@@ -37,6 +84,94 @@ def test_student_store_can_add_and_retrieve_pattern(tmp_path: Path) -> None:
     assert rows
     assert rows[0]["kind"] == "pattern"
     assert "do not merge" in rows[0]["text"].lower()
+
+
+def test_student_store_can_add_and_retrieve_retrospective(tmp_path: Path) -> None:
+    store = StudentStore(tmp_path / "student")
+    store.add(
+        "retrospective",
+        "Shell episodes need a reread step",
+        "# Self retrospective\n\n## Learned\n\nReread command output before concluding.\n",
+        task_signature="repo/shell_execution",
+        tags=["shell", "reread", "output"],
+        origin="self_reflection",
+    )
+
+    rows = store.retrieve("reread the shell output before concluding", task_signature="repo/shell_execution")
+
+    assert rows
+    assert rows[0]["kind"] == "retrospective"
+    assert "reread command output" in rows[0]["text"].lower()
+
+
+def test_runtime_auto_self_reflection_persists_compact_retrospective_and_recalls_it_next_session(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    first_runtime = RockyRuntime.load_from(workspace)
+    first_task_provider = _SimpleTaskProvider("Hello there.")
+    first_reflection_provider = _FakeReflectionProvider(
+        {
+            "title": "Keep greeting turns compact",
+            "summary": "For simple greeting-style turns, answer briefly instead of adding extra explanation.",
+            "should_persist": True,
+            "confidence": 0.91,
+            "repeat_next_time": ["Answer in one short sentence for lightweight greeting turns."],
+            "avoid_next_time": ["Do not add workflow narration when the user only wants a greeting."],
+            "recall_when": ["greeting-like prompts", "conversation/general turns"],
+            "keywords": ["greeting", "concise", "conversation"],
+            "evidence": ["The finished turn was a lightweight greeting request and a direct short answer fit the task."],
+        }
+    )
+    first_registry = _CompositeProviderRegistry(first_task_provider, first_reflection_provider)
+    first_runtime.provider_registry = first_registry
+    first_runtime.agent.provider_registry = first_registry
+
+    first_response = first_runtime.run_prompt("say hello politely", continue_session=False)
+
+    assert first_response.text == "Hello there."
+    assert len(first_reflection_provider.calls) == 1
+    assert first_response.trace["self_learning"]["persisted"] is True
+
+    stored_notes = [note for note in first_runtime.student_store.load_all() if note.kind == "retrospective"]
+    assert len(stored_notes) == 1
+    stored_note = stored_notes[0]
+    assert stored_note.prompt == ""
+    assert stored_note.answer == ""
+    assert stored_note.feedback == ""
+    assert "greeting-style turns" in stored_note.text
+
+    second_runtime = RockyRuntime.load_from(workspace)
+    second_task_provider = _SimpleTaskProvider("Hi again.")
+    second_reflection_provider = _FakeReflectionProvider(
+        {
+            "title": "No new durable lesson",
+            "summary": "The prior retrospective already covers this lightweight greeting pattern.",
+            "should_persist": False,
+            "confidence": 0.8,
+            "repeat_next_time": ["Keep direct greeting turns short."],
+            "avoid_next_time": ["Do not restate the whole context."],
+            "recall_when": ["greeting-like prompts"],
+            "keywords": ["greeting", "concise"],
+            "evidence": ["The earlier retrospective already matches this turn."],
+        }
+    )
+    second_registry = _CompositeProviderRegistry(second_task_provider, second_reflection_provider)
+    second_runtime.provider_registry = second_registry
+    second_runtime.agent.provider_registry = second_registry
+
+    second_response = second_runtime.run_prompt("say hello again", continue_session=False)
+
+    assert second_response.text == "Hi again."
+    assert second_response.trace["context"]["student_notes"]
+    assert second_response.trace["context"]["student_notes"][0]["kind"] == "retrospective"
+    assert "Keep greeting turns compact" in str(second_task_provider.calls[0]["system_prompt"])
+    assert "For simple greeting-style turns, answer briefly instead of adding extra explanation." in str(
+        second_task_provider.calls[0]["system_prompt"]
+    )
+    assert "Self retrospectives are Rocky's own compact lessons" in str(second_task_provider.calls[0]["system_prompt"])
 
 
 

@@ -120,6 +120,7 @@ class StudentStore:
         self.knowledge_dir = root / "knowledge"
         self.patterns_dir = root / "patterns"
         self.examples_dir = root / "examples"
+        self.retrospectives_dir = root / "retrospectives"
         if create_layout:
             self.ensure_layout()
 
@@ -128,11 +129,12 @@ class StudentStore:
         self.knowledge_dir.mkdir(parents=True, exist_ok=True)
         self.patterns_dir.mkdir(parents=True, exist_ok=True)
         self.examples_dir.mkdir(parents=True, exist_ok=True)
+        self.retrospectives_dir.mkdir(parents=True, exist_ok=True)
         if not self.readme_path.exists():
             write_text(
                 self.readme_path,
                 "# Rocky student notebook\n\n"
-                "This directory stores teacher feedback, durable domain notes, patterns, and examples.\n",
+                "This directory stores teacher feedback, durable domain notes, compact self-retrospectives, patterns, and examples.\n",
             )
         if not self.profile_path.exists():
             write_text(
@@ -171,7 +173,7 @@ class StudentStore:
         profile = _parse_markdown_note(self.profile_path)
         if profile is not None:
             notes.append(profile)
-        for directory in (self.knowledge_dir, self.patterns_dir, self.examples_dir):
+        for directory in (self.knowledge_dir, self.retrospectives_dir, self.patterns_dir, self.examples_dir):
             for path in sorted(directory.glob("*.md")):
                 note = _parse_markdown_note(path)
                 if note is not None:
@@ -244,6 +246,8 @@ class StudentStore:
             return self.patterns_dir / f"{_slug(title)}.md"
         if kind == "example":
             return self.examples_dir / f"{_slug(title)}.md"
+        if kind == "retrospective":
+            return self.retrospectives_dir / f"{_slug(title)}.md"
         return self.knowledge_dir / f"{_slug(title)}.md"
 
     def add(
@@ -285,7 +289,7 @@ class StudentStore:
 
         path = self._markdown_path_for_kind(kind, title)
         note_id = "student-profile" if kind == "profile" else _note_id(kind, title)
-        if path.exists() and kind in {"knowledge", "pattern", "example"}:
+        if path.exists() and kind in {"knowledge", "retrospective", "pattern", "example"}:
             existing = _parse_markdown_note(path)
             if existing is not None:
                 note_id = existing.id
@@ -363,6 +367,7 @@ class StudentStore:
                 continue
             kind_weight = {
                 "pattern": 5,
+                "retrospective": 4,
                 "knowledge": 4,
                 "example": 3,
                 "lesson": 3,

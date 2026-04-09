@@ -44,6 +44,10 @@ def _append_context_blocks(parts: list[str], context: ContextPackage) -> None:
         parts.append(str(context.student_profile.get("text", ""))[:4000])
     if context.student_notes:
         parts.append("## Student notebook")
+        if any(str(item.get("kind") or "") == "retrospective" for item in context.student_notes):
+            parts.append(
+                "Self retrospectives are Rocky's own compact lessons from earlier episodes. Use them as soft conventions for similar work, but let explicit teacher feedback and learned policies override them when they conflict."
+            )
         for item in context.student_notes[:6]:
             header = f"### {item.get('title', item.get('id', 'note'))} [{item.get('kind', 'note')}]"
             parts.append(header)
