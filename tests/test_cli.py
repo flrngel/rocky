@@ -139,7 +139,7 @@ def test_cli_version_prints_and_exits_without_runtime(monkeypatch, capsys) -> No
     exit_code = main(["--version"])
 
     assert exit_code == 0
-    assert capsys.readouterr().out.strip() == "rocky 1.0.1"
+    assert capsys.readouterr().out.strip() == "rocky 1.0.3"
 
 
 def test_cli_verification_output_is_plain_text(monkeypatch, capsys) -> None:
