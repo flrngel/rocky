@@ -845,7 +845,7 @@ class PolicySynthesizer:
         if task_signature == "repo/shell_execution":
             items.append("Run the requested command or workspace script first, then inspect the produced output or artifact before deciding.")
         if task_signature == "local/runtime_inspection":
-            items.append("Start with `inspect_runtime_versions`, then confirm with at least one shell command.")
+            items.append("Use `run_shell_command` to inspect the exact local runtime paths or versions before answering.")
         if task_signature == "automation/general":
             items.append("Create or edit the script with `write_file`, reread it, then verify with `run_shell_command`.")
         if task_signature == "extract/general":
@@ -1134,7 +1134,7 @@ class PolicySynthesizer:
         inferred_candidates = [
             (
                 "research/live_compare/general",
-                ("web search", "search_web", "fetch_url", "browser_render_page", "live source", "live sources", "real-time", "trending", "latest", "current"),
+                ("web search", "search_web", "fetch_url", "agent_browser", "live source", "live sources", "real-time", "trending", "latest", "current"),
             ),
             (
                 "repo/shell_execution",

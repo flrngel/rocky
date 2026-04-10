@@ -1,97 +1,66 @@
 from __future__ import annotations
 
-from rocky.tools import browser, filesystem, git_tools, python_exec, shell, spreadsheet, web
+from rocky.tools import browser, filesystem, shell, web
 from rocky.tools.base import Tool, ToolContext, ToolResult
 
 
 READ_ONLY_TOOL_NAMES = {
-    "list_files",
-    "stat_path",
-    "glob_paths",
     "read_file",
-    "grep_files",
     "run_shell_command",
-    "inspect_shell_environment",
-    "read_shell_history",
-    "inspect_runtime_versions",
-    "run_python",
     "fetch_url",
     "search_web",
-    "extract_links",
-    "browser_render_page",
-    "browser_screenshot",
-    "inspect_spreadsheet",
-    "read_sheet_range",
-    "git_status",
-    "git_diff",
-    "git_recent_commits",
+    "agent_browser",
+}
+
+READ_ONLY_TASK_SIGNATURES = {
+    "repo/shell_inspection",
+    "local/runtime_inspection",
+    "repo/general",
+    "data/spreadsheet/analysis",
+    "extract/general",
+    "research/live_compare/general",
+    "site/understanding/general",
 }
 
 TASK_TOOL_PRIORITY: dict[str, list[str]] = {
     "repo/shell_execution": [
         "run_shell_command",
-        "grep_files",
-        "list_files",
-        "glob_paths",
-        "run_python",
-        "write_file",
-        "inspect_runtime_versions",
-        "git_status",
-        "git_diff",
-        "git_recent_commits",
         "read_file",
-        "stat_path",
+        "write_file",
     ],
     "repo/shell_inspection": [
-        "inspect_shell_environment",
-        "read_shell_history",
-        "inspect_runtime_versions",
         "run_shell_command",
-        "stat_path",
         "read_file",
     ],
     "local/runtime_inspection": [
-        "inspect_runtime_versions",
         "run_shell_command",
-        "inspect_shell_environment",
-        "read_shell_history",
+        "read_file",
     ],
     "repo/general": [
-        "grep_files",
-        "read_file",
-        "list_files",
-        "glob_paths",
-        "stat_path",
-        "git_status",
-        "git_recent_commits",
-        "git_diff",
-        "run_python",
         "run_shell_command",
+        "read_file",
     ],
     "data/spreadsheet/analysis": [
-        "inspect_spreadsheet",
-        "read_sheet_range",
-        "run_python",
-        "stat_path",
+        "run_shell_command",
         "read_file",
-        "glob_paths",
-        "list_files",
     ],
     "extract/general": [
-        "glob_paths",
-        "stat_path",
-        "run_python",
         "read_file",
-        "grep_files",
-        "list_files",
+        "run_shell_command",
+    ],
+    "research/live_compare/general": [
+        "search_web",
+        "fetch_url",
+        "agent_browser",
+    ],
+    "site/understanding/general": [
+        "fetch_url",
+        "search_web",
+        "agent_browser",
     ],
     "automation/general": [
         "write_file",
         "read_file",
-        "stat_path",
-        "list_files",
-        "glob_paths",
-        "run_python",
         "run_shell_command",
     ],
 }
@@ -101,7 +70,7 @@ class ToolRegistry:
     def __init__(self, context: ToolContext) -> None:
         self.context = context
         items: list[Tool] = []
-        for module in [filesystem, shell, python_exec, web, browser, spreadsheet, git_tools]:
+        for module in [filesystem, shell, web, browser]:
             items.extend(module.tools())
         self.tools = {tool.name: tool for tool in items}
 
@@ -140,7 +109,9 @@ class ToolRegistry:
         task_signature: str,
         user_prompt: str = "",
     ) -> list[Tool]:
-        selected = list(self.tools.values())
+        selected = self.select(families) if families else list(self.tools.values())
+        if task_signature in READ_ONLY_TASK_SIGNATURES:
+            selected = [tool for tool in selected if tool.name in READ_ONLY_TOOL_NAMES]
         priority = TASK_TOOL_PRIORITY.get(task_signature, [])
         order = {name: index for index, name in enumerate(priority)}
         fallback = len(order) + 100

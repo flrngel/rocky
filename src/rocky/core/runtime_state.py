@@ -15,6 +15,38 @@ from rocky.util.time import utc_iso
 CLAIM_WORD_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 PATH_RE = re.compile(r"(?<![A-Za-z0-9])(?:\.{1,2}/)?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+")
 REFERENCE_RE = re.compile(r"\b(?:it|that|those|them|this|these|again|same|continue|resume|rerun|re-run|fix|update|improve|carry on|keep going|keep working|pick up|pick back up|next step|what next|finish it|finish this)\b", re.I)
+LIST_COUNT_RE = re.compile(
+    r"\b(?:at\s+least|minimum(?:\s+of)?|no\s+fewer\s+than|top)\s+"
+    r"(?P<count>\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\b",
+    re.I,
+)
+
+COUNT_WORDS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "fifteen": 15,
+    "twenty": 20,
+}
+LIST_REQUEST_PHRASES = (
+    "show me as a list",
+    "show me a list",
+    "as a list",
+    "give me a list",
+    "return a list",
+    "bullet list",
+    "bulleted list",
+    "numbered list",
+)
 
 
 _PROVENANCE_STRENGTH = {
@@ -23,6 +55,27 @@ _PROVENANCE_STRENGTH = {
     "learned_rule": 2,
     "agent_inferred": 1,
 }
+
+
+def requested_minimum_list_items(prompt: str) -> int:
+    lowered = prompt.lower()
+    for match in LIST_COUNT_RE.finditer(lowered):
+        raw = str(match.group("count") or "").strip()
+        if raw.isdigit():
+            return max(0, int(raw))
+        if raw in COUNT_WORDS:
+            return COUNT_WORDS[raw]
+    return 0
+
+
+def prompt_requests_list_output(prompt: str) -> bool:
+    lowered = prompt.lower()
+    if any(phrase in lowered for phrase in LIST_REQUEST_PHRASES):
+        return True
+    return requested_minimum_list_items(prompt) > 0 and any(
+        phrase in lowered
+        for phrase in ("show me", "give me", "return", "list", "find", "rank", "top ")
+    )
 
 
 def _new_id(prefix: str, text: str = "") -> str:
@@ -303,6 +356,14 @@ class AnswerContract:
 
 
 class AnswerContractBuilder:
+    def _observed_live_item_count(self, evidence_graph: EvidenceGraph) -> int:
+        values = {
+            str(entity.get("value") or "").strip()
+            for entity in evidence_graph.entities
+            if str(entity.get("kind") or "") == "live_item" and str(entity.get("value") or "").strip()
+        }
+        return len(values)
+
     def build(
         self,
         prompt: str,
@@ -340,6 +401,18 @@ class AnswerContractBuilder:
                 requirements = ["Respect the requested structured format."]
         else:
             requirements = []
+        minimum_items = requested_minimum_list_items(prompt)
+        if prompt_requests_list_output(prompt):
+            if minimum_items > 0:
+                requirements.append(f"Present the answer as a list with at least {minimum_items} items if evidence supports them.")
+            else:
+                requirements.append("Present the answer as a list.")
+        if route_task_signature.startswith(("research/", "site/")) and minimum_items > 0:
+            observed_live_items = self._observed_live_item_count(evidence_graph)
+            if observed_live_items < minimum_items:
+                missing.append(
+                    f"Need evidence for at least {minimum_items} live items, but only {observed_live_items} item candidates were observed from opened or extracted live sources so far."
+                )
         short_prompt = len(prompt.split()) <= 18
         do_not_repeat = bool(thread and (short_prompt or REFERENCE_RE.search(prompt)))
         if prior_answer and len(prior_answer.split()) > 60 and short_prompt:
@@ -375,6 +448,15 @@ class EvidenceAccumulator:
         "prefer",
     )
     OUTPUT_LINE_LIMIT = 12
+
+    def _live_item_text(self, value: Any) -> str:
+        cleaned = " ".join(str(value or "").split())
+        if not cleaned:
+            return ""
+        lowered = cleaned.lower()
+        if lowered in {"home", "login", "log in", "join", "pricing", "docs", "documentation"}:
+            return ""
+        return cleaned[:180]
 
     def _informative_output_lines(self, text: str, *, max_lines: int | None = None) -> list[str]:
         limit = max_lines or self.OUTPUT_LINE_LIMIT
@@ -691,10 +773,10 @@ class EvidenceAccumulator:
                             confidence=0.72,
                             status="provisional",
                         )
-            elif name in {"fetch_url", "browser_render_page"}:
+            elif name in {"fetch_url", "browser_render_page", "agent_browser"}:
                 url = str(arguments.get("url") or data.get("url") or data.get("final_url") or "").strip()
                 title = " ".join(str(data.get("title") or "").split())[:240]
-                excerpt = " ".join(str(data.get("text_excerpt") or "").split())[:280]
+                excerpt = " ".join(str(data.get("text_excerpt") or data.get("snapshot") or "").split())[:280]
                 if url:
                     graph.add_artifact("url", url, source=name)
                     graph.add_claim(f"Consulted live source {url}", "tool_observed", name, confidence=0.8)
@@ -721,6 +803,67 @@ class EvidenceAccumulator:
                         confidence=0.74,
                         status="provisional",
                     )
+                for item in list(data.get("link_items") or [])[:16]:
+                    if not isinstance(item, dict):
+                        continue
+                    item_text = self._live_item_text(item.get("text"))
+                    item_url = str(item.get("url") or "").strip()
+                    if item_url:
+                        graph.add_artifact("url", item_url, source=name)
+                    if item_text:
+                        graph.add_entity("live_item", item_text, source=name)
+                        if item_url:
+                            graph.add_claim(
+                                f"Observed linked item {item_text} at {item_url}",
+                                "tool_observed",
+                                name,
+                                confidence=0.78,
+                            )
+                        else:
+                            graph.add_claim(
+                                f"Observed linked item {item_text}",
+                                "tool_observed",
+                                name,
+                                confidence=0.78,
+                            )
+                for item in list(data.get("items") or [])[:16]:
+                    if not isinstance(item, dict):
+                        continue
+                    item_text = self._live_item_text(item.get("name") or item.get("text"))
+                    item_ref = str(item.get("ref") or "").strip()
+                    if item_text:
+                        graph.add_entity("live_item", item_text, source=name)
+                        detail = f" via ref {item_ref}" if item_ref else ""
+                        graph.add_claim(
+                            f"Observed browser item {item_text}{detail}",
+                            "tool_observed",
+                            name,
+                            confidence=0.78,
+                        )
+            elif name == "extract_links" and isinstance(payload_data, list):
+                for item in payload_data[:16]:
+                    if not isinstance(item, dict):
+                        continue
+                    item_text = self._live_item_text(item.get("text") or item.get("title"))
+                    item_url = str(item.get("url") or "").strip()
+                    if item_url:
+                        graph.add_artifact("url", item_url, source=name)
+                    if item_text:
+                        graph.add_entity("live_item", item_text, source=name)
+                        if item_url:
+                            graph.add_claim(
+                                f"Observed extracted item {item_text} at {item_url}",
+                                "tool_observed",
+                                name,
+                                confidence=0.8,
+                            )
+                        else:
+                            graph.add_claim(
+                                f"Observed extracted item {item_text}",
+                                "tool_observed",
+                                name,
+                                confidence=0.8,
+                            )
             elif name == "grep_files" and isinstance(payload.get("data"), list):
                 for item in payload["data"][:10]:
                     if not isinstance(item, dict):

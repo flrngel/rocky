@@ -30,8 +30,8 @@ class _OkProvider:
             tool_events=[
                 {
                     "type": "tool_result",
-                    "name": "inspect_runtime_versions",
-                    "arguments": {"targets": ["python"]},
+                    "name": "run_shell_command",
+                    "arguments": {"command": "which -a python python3 && python3 --version", "timeout_s": 5},
                     "text": "{}",
                     "success": True,
                 }
@@ -51,6 +51,38 @@ class _ConversationalToolProvider:
     def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
         self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
         return ProviderResponse(text="ok", raw={"rounds": []}, tool_events=[])
+
+
+class _StreamingToolEventProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+
+    def complete(self, system_prompt, messages, stream=False, event_handler=None) -> ProviderResponse:
+        return ProviderResponse(text="ok")
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        call_event = {
+            "type": "tool_call",
+            "id": "call_1",
+            "tool_call_id": "call_1",
+            "name": "run_shell_command",
+            "arguments": {"command": "python3 --version", "timeout_s": 5},
+        }
+        if event_handler:
+            event_handler(call_event)
+        result = execute_tool("run_shell_command", {"command": "python3 --version", "timeout_s": 5})
+        result_event = {
+            "type": "tool_result",
+            "name": "run_shell_command",
+            "tool_call_id": "call_1",
+            "arguments": {"command": "python3 --version", "timeout_s": 5},
+            "text": result,
+            "success": True,
+        }
+        if event_handler:
+            event_handler(result_event)
+        return ProviderResponse(text="runtime inspected", raw={"rounds": []}, tool_events=[call_event, result_event])
 
 
 class _ShellJsonProvider:
@@ -261,30 +293,30 @@ class _ShellInspectionHiddenFilesystemProvider:
 
     def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
         self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
-        grep_result = execute_tool("grep_files", {"pattern": "PermissionDenied", "path": "src"})
-        env_result = execute_tool("inspect_shell_environment", {})
-        grep_payload = json.loads(grep_result)
+        history_result = execute_tool("run_shell_command", {"command": "tail -n 10 ~/.zsh_history", "timeout_s": 5})
+        env_result = execute_tool("run_shell_command", {"command": "printf '%s\\n' \"$SHELL\"", "timeout_s": 5})
+        history_payload = json.loads(history_result)
         env_payload = json.loads(env_result)
-        grep_count = len(grep_payload.get("data") or [])
-        shell_name = str((env_payload.get("data") or {}).get("shell_name") or "")
+        history_lines = str((history_payload.get("data") or {}).get("stdout") or "").strip().splitlines()
+        shell_name = str((env_payload.get("data") or {}).get("stdout") or "").strip()
         return ProviderResponse(
             text=(
                 f"Current shell is {shell_name or 'unknown'}. "
-                f"Searching the repo for PermissionDenied found {grep_count} hit(s)."
+                f"Recent shell history returned {len(history_lines)} line(s)."
             ),
             raw={"rounds": []},
             tool_events=[
                 {
                     "type": "tool_result",
-                    "name": "grep_files",
-                    "arguments": {"pattern": "PermissionDenied", "path": "src"},
-                    "text": grep_result,
+                    "name": "run_shell_command",
+                    "arguments": {"command": "tail -n 10 ~/.zsh_history", "timeout_s": 5},
+                    "text": history_result,
                     "success": True,
                 },
                 {
                     "type": "tool_result",
-                    "name": "inspect_shell_environment",
-                    "arguments": {},
+                    "name": "run_shell_command",
+                    "arguments": {"command": "printf '%s\\n' \"$SHELL\"", "timeout_s": 5},
                     "text": env_result,
                     "success": True,
                 },
@@ -751,8 +783,7 @@ class _AutomationPreWriteShellLoopProvider:
 class _ShellFollowUpGuardProvider:
     def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
         first_shell = execute_tool("run_shell_command", {"command": "printf '{\"products\": []}\\n'", "timeout_s": 5})
-        blocked_shell = execute_tool("run_shell_command", {"command": "printf '{\"products\": []}\\n' | jq .", "timeout_s": 5})
-        parsed = execute_tool("run_python", {"code": "print('parsed response')"})
+        parsed_shell = execute_tool("run_shell_command", {"command": "printf '{\"products\": []}\\n' | jq .", "timeout_s": 5})
         return ProviderResponse(
             text="Executed the script and parsed the response.",
             raw={"rounds": []},
@@ -768,14 +799,7 @@ class _ShellFollowUpGuardProvider:
                     "type": "tool_result",
                     "name": "run_shell_command",
                     "arguments": {"command": "printf '{\"products\": []}\\n' | jq .", "timeout_s": 5},
-                    "text": blocked_shell,
-                    "success": False,
-                },
-                {
-                    "type": "tool_result",
-                    "name": "run_python",
-                    "arguments": {"code": "print('parsed response')"},
-                    "text": parsed,
+                    "text": parsed_shell,
                     "success": True,
                 },
             ],
@@ -844,6 +868,26 @@ def test_runtime_trace_uses_no_tools_for_direct_prompt(tmp_path: Path) -> None:
     assert response.trace["selected_tools"]
     assert provider.calls == []
     assert [message.content for message in provider.tool_calls[0]["messages"]] == ["hello"]
+
+
+def test_runtime_streams_each_tool_result_once(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    provider = _StreamingToolEventProvider()
+    _set_provider(runtime, provider)
+
+    streamed_events: list[dict] = []
+    response = runtime.run_prompt(
+        "what python versions do i have",
+        continue_session=False,
+        stream=True,
+        event_handler=streamed_events.append,
+    )
+
+    tool_result_events = [event for event in streamed_events if event.get("type") == "tool_result"]
+
+    assert response.text == "runtime inspected"
+    assert len(tool_result_events) == 1
+    assert tool_result_events[0]["name"] == "run_shell_command"
 
 
 def test_freeze_load_does_not_create_internal_layout(tmp_path: Path, monkeypatch) -> None:
@@ -1167,6 +1211,101 @@ def test_verification_repair_prompt_anchors_unsupported_claims_to_observed_strin
     assert "qualitative interpretations" in repair
 
 
+def test_verification_repair_evidence_reuses_prior_live_research_results(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="test",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    evidence = runtime.agent._verification_repair_evidence(
+        route,
+        [
+            {
+                "type": "tool_result",
+                "name": "search_web",
+                "success": True,
+                "text": '{"success": true, "summary": "Search returned 2 result(s)", "data": [{"title": "A", "url": "https://example.test/a"}]}',
+            },
+            {
+                "type": "tool_result",
+                "name": "agent_browser",
+                "success": True,
+                "text": (
+                    '{"success": true, "summary": "agent-browser `snapshot -i --json` succeeded", "data": {'
+                    '"url": "https://huggingface.co/models",'
+                    '"items": ['
+                    '{"name": "org/Model-One 7B", "role": "link", "ref": "e1"},'
+                    '{"name": "org/Model-Two 8B", "role": "link", "ref": "e2"}'
+                    ']}}'
+                ),
+            },
+        ],
+    )
+
+    assert "Previously gathered" not in evidence
+    assert "Tool `agent_browser` evidence:" in evidence
+    assert "org/Model-One 7B" in evidence
+    assert "org/Model-Two 8B" in evidence
+
+
+def test_duplicate_live_page_guard_blocks_reopening_same_research_url(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="test",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    guarded = runtime.agent._duplicate_live_page_guard(
+        route,
+        "fetch_url",
+        {"url": "https://huggingface.co/models?sort=trending"},
+        {("fetch_url", "https://huggingface.co/models?sort=trending")},
+    )
+
+    assert guarded is not None
+    assert "reuse_previous_live_page_evidence" in guarded
+    assert "already succeeded" in guarded
+
+
+def test_research_follow_up_suggestions_derive_tokens_from_observed_live_items(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+
+    suggestion = runtime.agent._research_follow_up_suggestions(
+        "find trending openweight llm models under 12B and show me as a list",
+        [
+            {
+                "type": "tool_result",
+                "name": "agent_browser",
+                "success": True,
+                "arguments": {"command": "open https://huggingface.co/models?sort=trending"},
+                "text": (
+                    '{"success": true, "data": {'
+                    '"url": "https://huggingface.co/models?sort=trending",'
+                    '"items": ['
+                    '{"name": "HauhauCS/Qwen3.5-9B-Uncensored", "role": "link", "ref": "e1"},'
+                    '{"name": "meta-llama/Llama-3.1-8B-Instruct", "role": "link", "ref": "e2"},'
+                    '{"name": "google/gemma-4-E4B-it", "role": "link", "ref": "e3"}'
+                    ']}}'
+                ),
+            }
+        ],
+    )
+
+    assert "qwen3.5" in suggestion
+    assert "llama" in suggestion
+    assert "gemma" in suggestion
+    assert "same-site filter/search urls" in suggestion.lower()
+
+
 def test_short_workspace_prompt_uses_project_instructions_to_expose_shell_tools(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     workspace = tmp_path / "workspace"
@@ -1249,7 +1388,7 @@ def test_runtime_inspection_prompt_uses_tool_capable_provider(tmp_path: Path, mo
     assert provider.calls == []
     assert len(provider.tool_calls) == 1
     tool_names = {tool["function"]["name"] for tool in provider.tool_calls[0]["tools"]}
-    assert "inspect_runtime_versions" in tool_names
+    assert "run_shell_command" in tool_names
 
 
 def test_live_research_prompt_retries_after_no_op_and_uses_web_tools(tmp_path: Path) -> None:
@@ -1399,11 +1538,8 @@ def test_shell_execution_route_exposes_repo_inspection_tools(tmp_path: Path) -> 
     }
 
     assert "run_shell_command" in selected
-    assert "grep_files" in selected
-    assert "list_files" in selected
-    assert "glob_paths" in selected
-    assert "git_status" in selected
-    assert "git_diff" in selected
+    assert "read_file" in selected
+    assert "write_file" in selected
 
 
 def test_automation_route_exposes_lightweight_inspection_tools(tmp_path: Path) -> None:
@@ -1420,10 +1556,7 @@ def test_automation_route_exposes_lightweight_inspection_tools(tmp_path: Path) -
 
     assert "write_file" in selected
     assert "read_file" in selected
-    assert "stat_path" in selected
-    assert "list_files" in selected
-    assert "glob_paths" in selected
-    assert "run_python" in selected
+    assert "run_shell_command" in selected
 
 
 def test_spreadsheet_route_exposes_file_inspection_tools(tmp_path: Path) -> None:
@@ -1432,20 +1565,17 @@ def test_spreadsheet_route_exposes_file_inspection_tools(tmp_path: Path) -> None
     selected = {
         tool.name
         for tool in runtime.tool_registry.select_for_task(
-            ["filesystem", "data", "python"],
+            ["filesystem", "data", "python", "shell"],
             "data/spreadsheet/analysis",
             "analyze sales.csv and summarize the sheet",
         )
     }
 
-    assert "inspect_spreadsheet" in selected
-    assert "read_sheet_range" in selected
-    assert "stat_path" in selected
+    assert "run_shell_command" in selected
     assert "read_file" in selected
-    assert "glob_paths" in selected
 
 
-def test_runtime_allows_cross_route_tools_from_provider(tmp_path: Path) -> None:
+def test_runtime_blocks_cross_route_tools_from_provider(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
     runtime.permissions.config.mode = "bypass"
 
@@ -1459,8 +1589,8 @@ def test_runtime_allows_cross_route_tools_from_provider(tmp_path: Path) -> None:
     assert response.verification["status"] == "fail"
     tool_result = response.trace["tool_events"][0]
     assert tool_result["name"] == "write_file"
-    assert "\"tool_not_exposed\"" not in tool_result["text"]
-    assert (tmp_path / "oops.txt").exists()
+    assert "tool_not_exposed" in tool_result["text"]
+    assert not (tmp_path / "oops.txt").exists()
 
 
 def test_runtime_allows_safe_hidden_inspection_tool_within_route_family(tmp_path: Path) -> None:
@@ -1474,7 +1604,7 @@ def test_runtime_allows_safe_hidden_inspection_tool_within_route_family(tmp_path
 
     response = runtime.run_prompt("show me 10 last history of current shell", continue_session=False)
 
-    assert response.trace["tool_events"][0]["name"] == "grep_files"
+    assert response.trace["tool_events"][0]["name"] == "run_shell_command"
     assert response.trace["tool_events"][0]["success"] is True
     assert "\"tool_not_exposed\"" not in response.trace["tool_events"][0]["text"]
 
@@ -1640,7 +1770,7 @@ def test_runtime_allows_only_one_lightweight_shell_inspection_before_write_file(
     assert response.trace["tool_events"][2]["name"] == "write_file"
 
 
-def test_runtime_blocks_second_shell_step_when_repo_execution_needs_non_shell_follow_up(tmp_path: Path) -> None:
+def test_runtime_allows_second_shell_step_when_repo_execution_needs_follow_up_parsing(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
     runtime.permissions.config.mode = "bypass"
 
@@ -1657,6 +1787,4 @@ def test_runtime_blocks_second_shell_step_when_repo_execution_needs_non_shell_fo
     assert response.trace["tool_events"][0]["name"] == "run_shell_command"
     assert response.trace["tool_events"][0]["success"] is True
     assert response.trace["tool_events"][1]["name"] == "run_shell_command"
-    assert response.trace["tool_events"][1]["success"] is False
-    assert "use_non_shell_follow_up" in response.trace["tool_events"][1]["text"]
-    assert response.trace["tool_events"][2]["name"] == "run_python"
+    assert response.trace["tool_events"][1]["success"] is True

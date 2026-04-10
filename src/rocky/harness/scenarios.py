@@ -563,15 +563,14 @@ def _build_default_scenarios() -> tuple[Scenario, ...]:
                 prompt=_shell_execution_prompt(bundle, variant),
                 task_class=TaskClass.REPO,
                 task_signature="repo/shell_execution",
-                tool_families=("filesystem", "shell", "python", "git"),
+                tool_families=("filesystem", "shell"),
                 fixture_seed=seed,
                 phase_expectations=PhaseExpectations(
                     anchor_tools=("run_shell_command",),
                     min_successful_tools=2,
                     phase2_required_tools=("run_shell_command",),
-                    phase2_required_any=("read_file", "run_python", "write_file", "stat_path"),
+                    phase2_required_any=("read_file", "write_file", "run_shell_command"),
                     required_tools=("run_shell_command",),
-                    requires_non_shell_follow_up=True,
                     response_markers=tuple(item["product_id"] for item in catalog_decisions["products"]),
                 ),
                 tags=("repo", "shell_execution", "generated"),
@@ -592,9 +591,9 @@ def _build_default_scenarios() -> tuple[Scenario, ...]:
                 tool_families=("shell", "filesystem"),
                 fixture_seed=seed,
                 phase_expectations=PhaseExpectations(
-                    anchor_tools=("inspect_shell_environment", "read_shell_history", "run_shell_command"),
+                    anchor_tools=("run_shell_command",),
                     min_successful_tools=2,
-                    phase2_required_any=("inspect_shell_environment", "read_shell_history", "run_shell_command"),
+                    phase2_required_any=("run_shell_command", "read_file"),
                     response_markers=("rockytester",),
                 ),
                 tags=("repo", "shell_inspection", "generated"),
@@ -611,11 +610,11 @@ def _build_default_scenarios() -> tuple[Scenario, ...]:
                 tool_families=("shell",),
                 fixture_seed=seed,
                 phase_expectations=PhaseExpectations(
-                    anchor_tools=("inspect_runtime_versions",),
+                    anchor_tools=("run_shell_command",),
                     min_successful_tools=2,
-                    phase2_required_tools=("inspect_runtime_versions",),
-                    phase2_required_any=("run_shell_command", "inspect_shell_environment"),
-                    required_tools=("inspect_runtime_versions",),
+                    phase2_required_tools=("run_shell_command",),
+                    phase2_required_any=("run_shell_command",),
+                    required_tools=("run_shell_command",),
                     response_markers=(target,),
                 ),
                 tags=("runtime", "generated"),
@@ -630,12 +629,12 @@ def _build_default_scenarios() -> tuple[Scenario, ...]:
                 prompt=repo_prompt,
                 task_class=TaskClass.REPO,
                 task_signature="repo/general",
-                tool_families=("filesystem", "shell", "git", "python"),
+                tool_families=("filesystem", "shell"),
                 fixture_seed=seed,
                 phase_expectations=PhaseExpectations(
-                    anchor_tools=("grep_files", "list_files", "read_file", "git_status", "git_recent_commits", "git_diff"),
+                    anchor_tools=("run_shell_command", "read_file"),
                     min_successful_tools=2,
-                    phase2_required_any=("read_file", "grep_files", "git_recent_commits", "git_diff", "list_files"),
+                    phase2_required_any=("read_file", "run_shell_command"),
                     response_markers=tuple(Path(path).name for path in repo_paths),
                 ),
                 tags=("repo", "general", "generated"),
@@ -650,14 +649,14 @@ def _build_default_scenarios() -> tuple[Scenario, ...]:
                 prompt=data_prompt,
                 task_class=TaskClass.DATA,
                 task_signature="data/spreadsheet/analysis",
-                tool_families=("filesystem", "data", "python"),
+                tool_families=("filesystem", "shell"),
                 fixture_seed=seed,
                 phase_expectations=PhaseExpectations(
-                    anchor_tools=("inspect_spreadsheet",),
+                    anchor_tools=("run_shell_command", "read_file"),
                     min_successful_tools=2,
-                    phase2_required_tools=("inspect_spreadsheet",),
-                    phase2_required_any=("read_sheet_range", "run_python"),
-                    required_tools=("inspect_spreadsheet",),
+                    phase2_required_tools=("run_shell_command",),
+                    phase2_required_any=("read_file", "run_shell_command"),
+                    required_tools=("run_shell_command",),
                     forbidden_tools=("write_file",),
                     response_markers=tuple(Path(path).name for path in data_paths),
                 ),
@@ -673,13 +672,13 @@ def _build_default_scenarios() -> tuple[Scenario, ...]:
                 prompt=extraction_prompt,
                 task_class=TaskClass.EXTRACTION,
                 task_signature="extract/general",
-                tool_families=("filesystem", "python", "data"),
+                tool_families=("filesystem", "shell"),
                 output_kind="json",
                 fixture_seed=seed,
                 phase_expectations=PhaseExpectations(
-                    anchor_tools=("read_file", "stat_path", "glob_paths", "list_files"),
+                    anchor_tools=("read_file", "run_shell_command"),
                     min_successful_tools=2,
-                    phase2_required_any=("run_python", "read_file", "stat_path"),
+                    phase2_required_any=("run_shell_command", "read_file"),
                     forbidden_tools=("write_file",),
                     requires_json_output=True,
                     response_markers=tuple(Path(path).name for path in extraction_paths),
@@ -696,10 +695,10 @@ def _build_default_scenarios() -> tuple[Scenario, ...]:
                 prompt=automation_prompt,
                 task_class=TaskClass.AUTOMATION,
                 task_signature="automation/general",
-                tool_families=("filesystem", "shell", "python"),
+                tool_families=("filesystem", "shell"),
                 fixture_seed=seed,
                 phase_expectations=PhaseExpectations(
-                    anchor_tools=("write_file", "list_files", "read_file", "run_shell_command"),
+                    anchor_tools=("write_file", "read_file", "run_shell_command"),
                     min_successful_tools=3,
                     phase2_required_tools=("write_file",),
                     phase2_required_any=("run_shell_command",),
@@ -749,7 +748,7 @@ def _build_mini_project_scenarios() -> tuple[MiniProjectScenario, ...]:
                     response_snippets=(script_name, str(expected_output["word_count"]), "line_count"),
                     fixture_seed=seed,
                     phase_expectations=PhaseExpectations(
-                        anchor_tools=("write_file", "list_files", "read_file"),
+                        anchor_tools=("write_file", "read_file"),
                         min_successful_tools=3,
                         required_tools=("write_file", "run_shell_command"),
                     ),
@@ -785,7 +784,7 @@ def _build_mini_project_scenarios() -> tuple[MiniProjectScenario, ...]:
                     response_snippets=(report_script, str(expected_total)),
                     fixture_seed=seed,
                     phase_expectations=PhaseExpectations(
-                        anchor_tools=("write_file", "list_files", "read_file"),
+                        anchor_tools=("write_file", "read_file"),
                         min_successful_tools=3,
                         required_tools=("write_file", "run_shell_command"),
                     ),
@@ -818,7 +817,7 @@ def _build_mini_project_scenarios() -> tuple[MiniProjectScenario, ...]:
                     response_snippets=(script_name, bundle.note_emails[0], bundle.note_emails[1]),
                     fixture_seed=seed,
                     phase_expectations=PhaseExpectations(
-                        anchor_tools=("write_file", "list_files", "read_file"),
+                        anchor_tools=("write_file", "read_file"),
                         min_successful_tools=3,
                         required_tools=("write_file", "run_shell_command"),
                     ),
@@ -858,9 +857,8 @@ def _build_mini_project_scenarios() -> tuple[MiniProjectScenario, ...]:
                     anchor_tools=("run_shell_command", "read_file"),
                     min_successful_tools=3,
                     phase2_required_tools=("run_shell_command",),
-                    phase2_required_any=("run_python", "read_file", "write_file"),
+                    phase2_required_any=("run_shell_command", "read_file", "write_file"),
                     required_tools=("run_shell_command", "read_file"),
-                    requires_non_shell_follow_up=True,
                 ),
                 oracle={
                     "family": "catalog_review",
@@ -943,7 +941,7 @@ def _learning_case_from_project(project: MiniProjectScenario) -> dict[str, objec
             "teach_feedback": (
                 f"When continuing catalog-review work in this workspace, keep `{script_name}` in focus. "
                 "Execute the existing workspace script first. "
-                "If it returns structured data, parse it with `run_python` before making merge decisions. "
+                "If it returns structured data, inspect or parse it with focused shell commands before making merge decisions. "
                 "When the user asks for a result file, write the exact JSON there and reread it before answering."
             ),
             "retry_prompt": (
@@ -953,7 +951,7 @@ def _learning_case_from_project(project: MiniProjectScenario) -> dict[str, objec
                 "then read that file back and tell me the exact JSON."
             ),
             "expected_task_signature": "repo/shell_execution",
-            "expected_tools": ["run_shell_command", "run_python", "write_file", "read_file"],
+            "expected_tools": ["run_shell_command", "write_file", "read_file"],
             "expected_artifacts": [output_path],
             "phases": ["prepare_workspace", "install_and_baseline", "teach", "retry_with_learning", "grade_results"],
         }

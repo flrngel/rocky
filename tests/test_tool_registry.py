@@ -18,7 +18,7 @@ def test_runtime_inspection_prefers_runtime_tools_first(tmp_path: Path) -> None:
         )
     ]
 
-    assert names[:2] == ["inspect_runtime_versions", "run_shell_command"]
+    assert names[:1] == ["run_shell_command"]
 
 
 def test_shell_execution_tools_focus_on_shell_not_filesystem_shortcuts(tmp_path: Path) -> None:
@@ -34,8 +34,7 @@ def test_shell_execution_tools_focus_on_shell_not_filesystem_shortcuts(tmp_path:
     ]
 
     assert names[0] == "run_shell_command"
-    assert "copy_path" in names
-    assert names.index("list_files") < names.index("copy_path")
+    assert names[1:] == ["read_file", "write_file"]
 
 
 def test_data_tasks_prefer_spreadsheet_tools_and_hide_writers(tmp_path: Path) -> None:
@@ -44,16 +43,14 @@ def test_data_tasks_prefer_spreadsheet_tools_and_hide_writers(tmp_path: Path) ->
     names = [
         tool.name
         for tool in runtime.tool_registry.select_for_task(
-            ["filesystem", "data", "python"],
+            ["filesystem", "data", "python", "shell"],
             "data/spreadsheet/analysis",
             "analyze data/sales.csv",
         )
     ]
 
-    assert names[:3] == ["inspect_spreadsheet", "read_sheet_range", "run_python"]
-    assert "stat_path" in names
-    assert "write_file" in names
-    assert "replace_in_file" in names
+    assert names[:2] == ["run_shell_command", "read_file"]
+    assert "write_file" not in names
 
 
 def test_extraction_tasks_are_read_only_and_keep_python(tmp_path: Path) -> None:
@@ -62,18 +59,15 @@ def test_extraction_tasks_are_read_only_and_keep_python(tmp_path: Path) -> None:
     names = [
         tool.name
         for tool in runtime.tool_registry.select_for_task(
-            ["filesystem", "python", "data"],
+            ["filesystem", "python", "data", "shell"],
             "extract/general",
             "normalize the people dataset into json with row count and fields",
         )
     ]
 
-    assert names[:3] == ["glob_paths", "stat_path", "run_python"]
-    assert "run_python" in names
+    assert names[:2] == ["read_file", "run_shell_command"]
     assert "read_file" in names
-    assert "inspect_spreadsheet" in names
-    assert "write_file" in names
-    assert "delete_path" in names
+    assert "write_file" not in names
 
 
 def test_automation_tools_keep_write_and_verify_path(tmp_path: Path) -> None:
@@ -88,9 +82,25 @@ def test_automation_tools_keep_write_and_verify_path(tmp_path: Path) -> None:
         )
     ]
 
-    assert names[:2] == ["write_file", "read_file"]
-    assert names.index("stat_path") < names.index("run_shell_command")
-    assert "glob_paths" in names
+    assert names == ["write_file", "read_file", "run_shell_command"]
+
+
+def test_research_route_exposes_web_tools_and_hides_shell_tools(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+
+    names = [
+        tool.name
+        for tool in runtime.tool_registry.select_for_task(
+            ["web", "browser"],
+            "research/live_compare/general",
+            "find trending openweight llm models under 12B and show me a list",
+        )
+    ]
+
+    assert names[:3] == ["search_web", "fetch_url", "agent_browser"]
+    assert "run_shell_command" not in names
+    assert "write_file" not in names
+    assert "read_file" not in names
 
 
 

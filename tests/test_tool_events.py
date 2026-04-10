@@ -90,3 +90,32 @@ def test_compact_tool_result_event_offloads_large_raw_output(tmp_path: Path) -> 
     assert Path(compacted["raw_ref"]).read_text(encoding="utf-8") == event["raw_text"]
     assert len(compacted["raw_text"]) < len(event["raw_text"])
     assert "full raw output saved to" in tool_event_debug_text(compacted)
+
+
+def test_normalize_tool_result_event_summarizes_agent_browser_snapshot_items() -> None:
+    event = normalize_tool_result_event(
+        "agent_browser",
+        {"command": "snapshot -i --json"},
+        {
+            "success": True,
+            "summary": "agent-browser `snapshot -i --json` succeeded for https://huggingface.co/models",
+            "data": {
+                "command": "snapshot -i --json",
+                "url": "https://huggingface.co/models?sort=trending",
+                "snapshot": '- link "org/Model-One 7B" [ref=e1]\n- link "org/Model-Two 8B" [ref=e2]',
+                "items": [
+                    {"name": "org/Model-One 7B", "role": "link", "ref": "e1"},
+                    {"name": "org/Model-Two 8B", "role": "link", "ref": "e2"},
+                    {"name": "org/Model-Three 9B", "role": "link", "ref": "e3"},
+                ],
+            },
+        },
+        tool_call_id="call_web",
+    )
+
+    fact_texts = [fact["text"] for fact in event["facts"]]
+
+    assert any(text.startswith("URL: https://huggingface.co/models") for text in fact_texts)
+    assert any("org/Model-One 7B" in text for text in fact_texts)
+    assert "org/Model-Two 8B" in event["model_text"]
+    assert any(artifact["kind"] == "url" for artifact in event["artifacts"])

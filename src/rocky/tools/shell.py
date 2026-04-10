@@ -312,32 +312,4 @@ def tools() -> list[Tool]:
             'shell',
             run_shell_command,
         ),
-        Tool(
-            'inspect_shell_environment',
-            'Inspect the active shell, user, home directory, cwd, and history file path',
-            {'type': 'object', 'properties': {}},
-            'shell',
-            inspect_shell_environment,
-        ),
-        Tool(
-            'read_shell_history',
-            'Read recent commands from the current shell history file',
-            {'type': 'object', 'properties': {'limit': {'type': 'integer'}}},
-            'shell',
-            read_shell_history,
-        ),
-        Tool(
-            'inspect_runtime_versions',
-            'Inspect locally installed executable variants and their versions',
-            {
-                'type': 'object',
-                'properties': {
-                    'targets': {'type': 'array', 'items': {'type': 'string'}},
-                    'max_variants': {'type': 'integer'},
-                },
-                'required': ['targets'],
-            },
-            'shell',
-            inspect_runtime_versions,
-        ),
     ]

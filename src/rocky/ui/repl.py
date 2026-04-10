@@ -81,6 +81,7 @@ class EventPrinter:
         messages = {
             "search_web": "Searching the web...",
             "fetch_url": "Opening the source...",
+            "agent_browser": "Browsing the page...",
             "extract_links": "Scanning page links...",
             "browser_render_page": "Opening the page...",
             "browser_screenshot": "Capturing the page...",
@@ -112,6 +113,7 @@ class EventPrinter:
         messages = {
             "search_web": "Couldn't search the web.",
             "fetch_url": "Couldn't open that source.",
+            "agent_browser": "Couldn't browse that page.",
             "extract_links": "Couldn't scan links from that page.",
             "browser_render_page": "Couldn't open that page.",
             "browser_screenshot": "Couldn't capture that page.",

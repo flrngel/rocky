@@ -129,7 +129,7 @@ class Router:
             'lane': Lane.STANDARD,
             'task_class': TaskClass.REPO,
             'risk': 'medium',
-            'tool_families': ['filesystem', 'shell', 'python', 'git'],
+            'tool_families': ['filesystem', 'shell'],
         },
         'repo/shell_inspection': {
             'lane': Lane.STANDARD,
@@ -159,25 +159,25 @@ class Router:
             'lane': Lane.STANDARD,
             'task_class': TaskClass.EXTRACTION,
             'risk': 'low',
-            'tool_families': ['filesystem', 'python', 'data'],
+            'tool_families': ['filesystem', 'shell'],
         },
         'data/spreadsheet/analysis': {
             'lane': Lane.STANDARD,
             'task_class': TaskClass.DATA,
             'risk': 'medium',
-            'tool_families': ['filesystem', 'data', 'python'],
+            'tool_families': ['filesystem', 'shell'],
         },
         'repo/general': {
             'lane': Lane.STANDARD,
             'task_class': TaskClass.REPO,
             'risk': 'medium',
-            'tool_families': ['filesystem', 'shell', 'git', 'python'],
+            'tool_families': ['filesystem', 'shell'],
         },
         'automation/general': {
             'lane': Lane.STANDARD,
             'task_class': TaskClass.AUTOMATION,
             'risk': 'medium',
-            'tool_families': ['filesystem', 'shell', 'python'],
+            'tool_families': ['filesystem', 'shell'],
         },
         'conversation/general': {
             'lane': Lane.STANDARD,
@@ -305,6 +305,31 @@ class Router:
         'leaderboards',
         'stock',
         'stocks',
+        'model',
+        'models',
+        'llm',
+        'llms',
+        'openweight',
+        'openweights',
+        'open-weight',
+        'package',
+        'packages',
+        'library',
+        'libraries',
+        'plugin',
+        'plugins',
+        'dataset',
+        'datasets',
+        'collection',
+        'collections',
+        'download',
+        'downloads',
+        'release',
+        'releases',
+        'app',
+        'apps',
+        'extension',
+        'extensions',
     }
 
     def __init__(self) -> None:
@@ -490,14 +515,14 @@ class Router:
                 TaskClass.AUTOMATION,
                 'medium',
                 'Workspace build or scaffold request that should create files and verify them',
-                ['filesystem', 'shell', 'python'],
+                ['filesystem', 'shell'],
                 'automation/general',
                 0.83,
                 'lexical',
             )
         if any(word in lowered for word in ['spreadsheet', 'excel', '.xlsx', '.csv', 'dataframe', 'analyze sheet']):
             lane = Lane.DEEP if len(text) > 120 else Lane.STANDARD
-            return RouteDecision(lane, TaskClass.DATA, 'medium', 'Structured data task', ['filesystem', 'data', 'python'], 'data/spreadsheet/analysis', 0.8, 'lexical')
+            return RouteDecision(lane, TaskClass.DATA, 'medium', 'Structured data task', ['filesystem', 'shell'], 'data/spreadsheet/analysis', 0.8, 'lexical')
         if self._looks_like_shell_task(text, lowered):
             lane = Lane.DEEP if len(text) > 180 else Lane.STANDARD
             return RouteDecision(
@@ -505,7 +530,7 @@ class Router:
                 TaskClass.REPO,
                 'medium',
                 'Explicit shell command or execution request',
-                ['filesystem', 'shell', 'python', 'git'],
+                ['filesystem', 'shell'],
                 'repo/shell_execution',
                 0.84,
                 'lexical',
@@ -534,16 +559,16 @@ class Router:
                 'lexical',
             )
         if any(word in lowered for word in ['crawl', 'website', 'browser', 'click', 'scrape', 'site']):
-            return RouteDecision(Lane.STANDARD, TaskClass.SITE, 'medium', 'Site/browser task', ['web', 'browser', 'filesystem'], 'site/understanding/general', 0.75, 'lexical')
+            return RouteDecision(Lane.STANDARD, TaskClass.SITE, 'medium', 'Site/browser task', ['web', 'browser'], 'site/understanding/general', 0.75, 'lexical')
         if self._looks_like_research_task(lowered, text):
             return RouteDecision(Lane.STANDARD, TaskClass.RESEARCH, 'medium', 'Research or live-source task', ['web', 'browser'], 'research/live_compare/general', 0.72, 'lexical')
         if any(word in lowered for word in ['extract', 'normalize', 'classify', 'label', 'schema', 'json']):
-            return RouteDecision(Lane.STANDARD, TaskClass.EXTRACTION, 'low', 'Extraction or structured-output task', ['filesystem', 'python', 'data'], 'extract/general', 0.74, 'lexical')
+            return RouteDecision(Lane.STANDARD, TaskClass.EXTRACTION, 'low', 'Extraction or structured-output task', ['filesystem', 'shell'], 'extract/general', 0.74, 'lexical')
         if self._looks_like_repo_task(lowered):
             lane = Lane.DEEP if len(text) > 180 else Lane.STANDARD
-            return RouteDecision(lane, TaskClass.REPO, 'medium', 'Repo or file task', ['filesystem', 'shell', 'git', 'python'], 'repo/general', 0.7, 'lexical')
+            return RouteDecision(lane, TaskClass.REPO, 'medium', 'Repo or file task', ['filesystem', 'shell'], 'repo/general', 0.7, 'lexical')
         if any(word in lowered for word in ['automate', 'workflow', 'repeat', 'script']):
-            return RouteDecision(Lane.STANDARD, TaskClass.AUTOMATION, 'medium', 'Automation task', ['filesystem', 'shell', 'python'], 'automation/general', 0.68, 'lexical')
+            return RouteDecision(Lane.STANDARD, TaskClass.AUTOMATION, 'medium', 'Automation task', ['filesystem', 'shell'], 'automation/general', 0.68, 'lexical')
         if len(text) < 80:
             return RouteDecision(Lane.DIRECT, TaskClass.CONVERSATION, 'low', 'Short direct prompt', [], 'conversation/general', 0.45, 'lexical')
         return RouteDecision(Lane.STANDARD, TaskClass.CONVERSATION, 'low', 'General conversation', [], 'conversation/general', 0.42, 'lexical')

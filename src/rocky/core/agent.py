@@ -6,11 +6,19 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import httpx
 
 from rocky.core.context import ContextBuilder
-from rocky.core.runtime_state import AnswerContractBuilder, EvidenceAccumulator, EvidenceGraph, ThreadRegistry
+from rocky.core.runtime_state import (
+    AnswerContractBuilder,
+    EvidenceAccumulator,
+    EvidenceGraph,
+    ThreadRegistry,
+    prompt_requests_list_output,
+    requested_minimum_list_items,
+)
 from rocky.core.messages import Message
 from rocky.core.router import Lane, RouteDecision, Router
 from rocky.core.system_prompt import build_system_prompt
@@ -100,6 +108,24 @@ class AgentCore:
         "uv run ",
         "workflow",
     )
+    _RESEARCH_TOKEN_STOPWORDS = {
+        "chat",
+        "edit",
+        "generation",
+        "gguf",
+        "image",
+        "instruct",
+        "it",
+        "large",
+        "mini",
+        "mlx",
+        "model",
+        "small",
+        "text",
+        "thinking",
+        "uncensored",
+        "video",
+    }
 
     def __init__(
         self,
@@ -400,7 +426,6 @@ class AgentCore:
         self,
         name: str,
         arguments: dict[str, Any],
-        event_handler: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
         try:
             result = self.tool_registry.run(name, arguments)
@@ -411,14 +436,9 @@ class AgentCore:
                 "data": {},
                 "metadata": {"error": "tool_exception"},
             }
-            text = safe_json(payload)
-            if event_handler:
-                event_handler({"type": "tool_result", "name": name, "text": text, "success": False})
-            return text
-        text = result.as_text(limit=self.tool_registry.context.config.tools.max_tool_output_chars)
-        if event_handler:
-            event_handler({"type": "tool_result", "name": name, "text": text, "success": result.success})
-        return text
+            return safe_json(payload)
+        # Providers emit the canonical tool_result event after execute_tool returns.
+        return result.as_text(limit=self.tool_registry.context.config.tools.max_tool_output_chars)
 
     def _run_selected_tool(
         self,
@@ -426,9 +446,23 @@ class AgentCore:
         allowed_names: set[str],
         name: str,
         arguments: dict[str, Any],
-        event_handler: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
-        return self._run_tool(name, arguments, event_handler=event_handler)
+        if allowed_names and name not in allowed_names:
+            payload = {
+                "success": False,
+                "summary": (
+                    f"Tool `{name}` is not exposed for route `{route.task_signature}`. "
+                    "Use one of the selected tools for this task instead."
+                ),
+                "data": {
+                    "requested_tool": name,
+                    "allowed_tools": sorted(allowed_names),
+                    "route": route.task_signature,
+                },
+                "metadata": {"error": "tool_not_exposed"},
+            }
+            return safe_json(payload)
+        return self._run_tool(name, arguments)
 
     def _finalize(
         self,
@@ -766,6 +800,8 @@ class AgentCore:
     def _tool_loop_rounds(self, route: RouteDecision) -> int:
         if route.task_signature == "automation/general":
             return 12
+        if route.task_signature in {"research/live_compare/general", "site/understanding/general"}:
+            return 10
         if route.lane == Lane.DEEP:
             return 10
         if route.task_signature in {"extract/general", "data/spreadsheet/analysis"}:
@@ -1077,16 +1113,14 @@ class AgentCore:
             if any(phrase in prompt.lower() for phrase in ("explore the response", "analyze the response", "inspect the response", "candidates to merge", "candidate", "merge")):
                 route_hint = (
                     "Execute the referenced workspace command or script first. Then use a separate follow-up parsing "
-                    "step, such as `run_python`, to inspect the observed response before making decisions. If the "
+                    "step, usually another focused shell command or `read_file`, to inspect the observed response before making decisions. If the "
                     "user asked for a result file, create it from the observed data and reread or verify it before "
                     "answering. If the user did not ask for a file, keep the decision output in the final answer "
                     "instead of creating new files. If the script is not executable or returns permission denied, "
                     "rerun it through an interpreter such as `sh x.sh` or `python3 tool.py`. If the live response "
                     "returns an auth, permission, network, or other error payload, report that you cannot make the "
                     "requested decision from live evidence instead of using previous traces or memories as a "
-                    "substitute. Do not stop after only printing or paraphrasing the raw command output. Do not stay "
-                    "in shell-only loops; make the non-shell follow-up parsing or file-inspection step within your "
-                    "next few successful tool calls."
+                    "substitute. Do not stop after only printing or paraphrasing the raw command output."
                 )
             lowered = prompt.lower()
             if any(term in lowered for term in ("price", "stock", "quote")) and any(
@@ -1103,18 +1137,17 @@ class AgentCore:
                 )
         elif route.task_signature == "data/spreadsheet/analysis":
             route_hint = (
-                "Use more than one spreadsheet-analysis step. After `inspect_spreadsheet`, "
-                "follow up with `read_sheet_range` or `run_python` before answering."
+                "Use more than one spreadsheet-analysis step. Inspect the named CSV or workbook with shell first, "
+                "then follow up with another shell command or `read_file` before answering."
             )
         elif route.task_signature == "extract/general":
             route_hint = (
-                "Use at least two extraction steps: inspect or discover the source, then parse or classify it, "
+                "Use at least two extraction steps: inspect or discover the source, then parse or classify it with shell or `read_file`, "
                 "and return the final JSON only."
             )
         elif route.task_signature == "local/runtime_inspection":
             route_hint = (
-                "Start with `inspect_runtime_versions`, then confirm paths or versions with a shell inspection step "
-                "before answering."
+                "Start with `run_shell_command` and inspect the exact local runtime paths or versions directly before answering."
             )
         elif route.task_signature == "automation/general":
             route_hint = (
@@ -1129,6 +1162,29 @@ class AgentCore:
                 "three successful tool steps for the finished automation flow: `write_file`, then `read_file` to "
                 "reread the created script, then `run_shell_command` to execute it."
             )
+        elif route.task_signature in {"research/live_compare/general", "site/understanding/general"}:
+            minimum_items = requested_minimum_list_items(prompt)
+            route_hint = (
+                "Use live research tools to gather stronger evidence before answering. Search first when needed, "
+                "then open or inspect a live source page. If `agent_browser` fails or is unavailable, do not try "
+                "to install browsers or packages from the shell; fall back to `fetch_url`."
+            )
+            if prompt_requests_list_output(prompt):
+                if minimum_items > 0:
+                    route_hint += (
+                        f" The user asked for at least {minimum_items} items. Do not stop at search-result titles "
+                        "alone. Open a listing page, inspect observed candidate items, and only include items whose names or "
+                        "URLs were observed in live tool output. If one page does not yield enough items, continue "
+                        "with different filter or search pages on the same live source and aggregate unique observed "
+                        "items across pages. Do not reopen the same page repeatedly. If you still cannot verify "
+                        "enough items, say that clearly instead of padding the list with guesses."
+                    )
+                else:
+                    route_hint += (
+                        " For list-style live research, do not stop at search-result titles alone. Open a listing "
+                        "page, inspect candidate items, and only include items whose names or URLs were observed in "
+                        "live tool output."
+                    )
         if "learned constraint" in verification_message.lower():
             extra_hint = (
                 "If a learned rule excludes a candidate, claim, file, or action, remove it from the final deliverable "
@@ -1147,6 +1203,117 @@ class AgentCore:
             f"{extra_hint}"
             "Continue the task now, use more tools if needed, and return the corrected final answer."
         )
+
+    def _verification_repair_evidence(
+        self,
+        route: RouteDecision,
+        tool_events: list[dict[str, Any]],
+    ) -> str:
+        successful_results = [
+            ensure_tool_result_event(event)
+            for event in tool_events
+            if event.get("type") == "tool_result" and event.get("success", True)
+        ]
+        if not successful_results:
+            return ""
+        if route.task_signature in {"research/live_compare/general", "site/understanding/general"}:
+            prioritized = [
+                event
+                for event in successful_results
+                if event.get("name") in {"agent_browser", "fetch_url", "search_web"}
+            ]
+            selected = prioritized[-4:] or successful_results[-3:]
+        else:
+            selected = successful_results[-3:]
+        blocks: list[str] = []
+        remaining = 2500
+        for event in selected:
+            name = str(event.get("name") or "tool_result")
+            brief = tool_event_brief_for_prompt(event, limit=min(900, remaining))
+            if not brief:
+                continue
+            block = f"Tool `{name}` evidence:\n{brief}"
+            if len(block) > remaining:
+                block = block[:remaining].rstrip()
+            if not block:
+                continue
+            blocks.append(block)
+            remaining -= len(block) + 2
+            if remaining <= 0:
+                break
+        return "\n\n".join(blocks).strip()
+
+    def _successful_live_tool_targets(self, tool_events: list[dict[str, Any]]) -> set[tuple[str, str]]:
+        targets: set[tuple[str, str]] = set()
+        for event in tool_events:
+            if event.get("type") != "tool_result" or not event.get("success", True):
+                continue
+            name = str(event.get("name") or "")
+            if name not in {"fetch_url", "agent_browser"}:
+                continue
+            arguments = event.get("arguments") or {}
+            payload = tool_event_payload(event, exact=True)
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            url = self._live_tool_requested_url(name, arguments) or str(data.get("url") or data.get("final_url") or "").strip()
+            if url:
+                targets.add((name, url))
+        return targets
+
+    def _research_follow_up_suggestions(self, prompt: str, tool_events: list[dict[str, Any]]) -> str:
+        if not prompt_requests_list_output(prompt):
+            return ""
+        tokens: dict[str, int] = {}
+        for event in tool_events:
+            if event.get("type") != "tool_result" or not event.get("success", True):
+                continue
+            if str(event.get("name") or "") not in {"fetch_url", "agent_browser"}:
+                continue
+            payload = tool_event_payload(event, exact=True)
+            data = payload.get("data")
+            items: list[dict[str, Any]] = []
+            if isinstance(data, dict):
+                if str(event.get("name") or "") == "agent_browser":
+                    items = [item for item in list(data.get("items") or []) if isinstance(item, dict)]
+                else:
+                    items = [item for item in list(data.get("link_items") or []) if isinstance(item, dict)]
+            elif isinstance(data, list):
+                items = [item for item in data if isinstance(item, dict)]
+            for item in items[:20]:
+                url = str(item.get("url") or "").strip()
+                if not url:
+                    text = str(item.get("name") or item.get("text") or "").strip()
+                    if "/" in text and " " not in text:
+                        url = f"https://huggingface.co/{text}"
+                parts = [part for part in urlparse(url).path.split("/") if part]
+                if len(parts) < 2:
+                    continue
+                model_segment = parts[-1]
+                for raw_token in re.findall(r"[A-Za-z][A-Za-z0-9.+-]{2,}", model_segment):
+                    normalized = raw_token.lower().strip(".-+")
+                    if normalized in self._RESEARCH_TOKEN_STOPWORDS:
+                        continue
+                    if len(normalized) < 4:
+                        continue
+                    tokens[normalized] = tokens.get(normalized, 0) + 1
+        ranked = [token for token, _count in sorted(tokens.items(), key=lambda item: (-item[1], item[0]))[:5]]
+        if not ranked:
+            return ""
+        return (
+            "Observed candidate family tokens from prior live pages: "
+            + ", ".join(ranked)
+            + ". If you still need more verified items, try one or two new same-site filter/search URLs using those tokens instead of repeating the same page or the same failed external search."
+        )
+
+    def _live_tool_requested_url(self, name: str, arguments: dict[str, Any]) -> str:
+        if name == "fetch_url":
+            return str(arguments.get("url") or "").strip()
+        if name == "agent_browser":
+            command = str(arguments.get("command") or "").strip()
+            if command.startswith("open "):
+                parts = command.split(maxsplit=1)
+                if len(parts) == 2 and parts[1].startswith(("http://", "https://")):
+                    return parts[1].strip()
+        return ""
 
     def _automation_shell_write_guard(
         self,
@@ -1186,37 +1353,78 @@ class AgentCore:
         name: str,
         successful_tool_names: list[str],
     ) -> str | None:
-        if route.task_signature != "repo/shell_execution" or name != "run_shell_command":
+        return None
+
+    def _browser_dependency_install_guard(
+        self,
+        route: RouteDecision,
+        prompt: str,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> str | None:
+        if route.task_signature not in {"research/live_compare/general", "site/understanding/general"}:
+            return None
+        if name != "run_shell_command":
             return None
         lowered_prompt = prompt.lower()
-        needs_response_analysis = any(
+        if any(
             phrase in lowered_prompt
             for phrase in (
-                "explore the response",
-                "analyze the response",
-                "inspect the response",
-                "response",
-                "decide",
-                "classify",
-                "candidate",
-                "merge",
+                "install playwright",
+                "playwright install",
+                "install browser",
+                "set up playwright",
+                "setup playwright",
             )
+        ):
+            return None
+        lowered_command = str(arguments.get("command") or "").lower()
+        install_markers = (
+            "playwright install",
+            "python -m playwright install",
+            "python3 -m playwright install",
+            "pip install playwright",
+            "python -m pip install playwright",
+            "python3 -m pip install playwright",
+            "npm install playwright",
+            "npx playwright install",
+            "brew install playwright",
         )
-        if not needs_response_analysis:
-            return None
-        if "run_shell_command" not in successful_tool_names:
-            return None
-        if any(tool_name != "run_shell_command" for tool_name in successful_tool_names):
+        if not any(marker in lowered_command for marker in install_markers):
             return None
         payload = {
             "success": False,
             "summary": (
-                "The command already ran successfully. Use a non-shell follow-up step now, such as `run_python`, "
-                "`read_file`, `stat_path`, or `write_file`, to inspect or structure the observed result before "
-                "making a decision."
+                "Use the dedicated `agent_browser` tool for browser work. Do not install browsers or Playwright from "
+                "shell during live research. Fall back to `fetch_url` when browser automation is unavailable."
             ),
             "data": {},
-            "metadata": {"error": "use_non_shell_follow_up"},
+            "metadata": {"error": "use_web_fallback_after_browser_failure"},
+        }
+        return safe_json(payload)
+
+    def _duplicate_live_page_guard(
+        self,
+        route: RouteDecision,
+        name: str,
+        arguments: dict[str, Any],
+        successful_live_targets: set[tuple[str, str]],
+    ) -> str | None:
+        if route.task_signature not in {"research/live_compare/general", "site/understanding/general"}:
+            return None
+        if name not in {"fetch_url", "agent_browser"}:
+            return None
+        url = self._live_tool_requested_url(name, arguments)
+        if not url or (name, url) not in successful_live_targets:
+            return None
+        payload = {
+            "success": False,
+            "summary": (
+                f"`{name}` already succeeded for {url}. Reuse the evidence from that page. "
+                "If you still need more items, choose a different live page or a different filter/search URL."
+            ),
+            "data": {"url": url, "tool": name},
+            "metadata": {"error": "reuse_previous_live_page_evidence"},
         }
         return safe_json(payload)
 
@@ -1349,11 +1557,13 @@ class AgentCore:
         verification_message: str,
         normalized_text: str,
         prompt: str,
+        prior_tool_events: list[dict[str, Any]],
         *,
         stream: bool,
         event_handler: Callable[[dict[str, Any]], None] | None = None,
     ):
         successful_tool_names: list[str] = []
+        successful_live_targets = self._successful_live_tool_targets(prior_tool_events)
 
         def execute_tool(name: str, arguments: dict[str, Any]) -> str:
             guarded = self._automation_shell_write_guard(
@@ -1364,8 +1574,6 @@ class AgentCore:
                 successful_tool_names,
             )
             if guarded is not None:
-                if event_handler:
-                    event_handler({"type": "tool_result", "name": name, "text": guarded, "success": False})
                 return guarded
             guarded = self._shell_follow_up_guard(
                 route,
@@ -1374,15 +1582,20 @@ class AgentCore:
                 successful_tool_names,
             )
             if guarded is not None:
-                if event_handler:
-                    event_handler({"type": "tool_result", "name": name, "text": guarded, "success": False})
+                return guarded
+            guarded = self._duplicate_live_page_guard(
+                route,
+                name,
+                arguments,
+                successful_live_targets,
+            )
+            if guarded is not None:
                 return guarded
             text = self._run_selected_tool(
                 route,
                 selected_tool_names,
                 name,
                 arguments,
-                event_handler=event_handler,
             )
             try:
                 payload = json.loads(text)
@@ -1390,18 +1603,33 @@ class AgentCore:
                 payload = {}
             if payload.get("success", False):
                 successful_tool_names.append(name)
+                data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                url = self._live_tool_requested_url(name, arguments) or str(data.get("url") or data.get("final_url") or "").strip()
+                if name in {"fetch_url", "agent_browser"} and url:
+                    successful_live_targets.add((name, url))
             return text
 
+        repair_prompt = self._verification_repair_prompt(
+            messages[-1].content if messages else "",
+            route,
+            verification_message,
+        )
+        prior_evidence = self._verification_repair_evidence(route, prior_tool_events)
+        if prior_evidence:
+            repair_prompt += (
+                "\n\nPreviously gathered tool evidence from the failed attempt:\n"
+                f"{prior_evidence}\n\n"
+                "Reuse this evidence instead of restarting from scratch. Only make additional tool calls when you still need missing evidence."
+            )
+        follow_up_suggestions = self._research_follow_up_suggestions(prompt, prior_tool_events)
+        if follow_up_suggestions:
+            repair_prompt += "\n\n" + follow_up_suggestions
         retry_messages = [
             *messages,
             Message(role="assistant", content=normalized_text),
             Message(
                 role="user",
-                content=self._verification_repair_prompt(
-                    messages[-1].content if messages else "",
-                    route,
-                    verification_message,
-                ),
+                content=repair_prompt,
             ),
         ]
         return provider.run_with_tools(
@@ -1583,8 +1811,17 @@ class AgentCore:
         attempts = 3
         for attempt in range(attempts):
             successful_tool_names: list[str] = []
+            successful_live_targets: set[tuple[str, str]] = set()
 
             def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+                guarded = self._browser_dependency_install_guard(
+                    route,
+                    prompt,
+                    name,
+                    arguments,
+                )
+                if guarded is not None:
+                    return guarded
                 guarded = self._automation_shell_write_guard(
                     route,
                     prompt,
@@ -1593,8 +1830,6 @@ class AgentCore:
                     successful_tool_names,
                 )
                 if guarded is not None:
-                    if event_handler:
-                        event_handler({"type": "tool_result", "name": name, "text": guarded, "success": False})
                     return guarded
                 guarded = self._shell_follow_up_guard(
                     route,
@@ -1603,15 +1838,20 @@ class AgentCore:
                     successful_tool_names,
                 )
                 if guarded is not None:
-                    if event_handler:
-                        event_handler({"type": "tool_result", "name": name, "text": guarded, "success": False})
+                    return guarded
+                guarded = self._duplicate_live_page_guard(
+                    route,
+                    name,
+                    arguments,
+                    successful_live_targets,
+                )
+                if guarded is not None:
                     return guarded
                 text = self._run_selected_tool(
                     route,
                     selected_tool_names,
                     name,
                     arguments,
-                    event_handler=event_handler,
                 )
                 try:
                     payload = json.loads(text)
@@ -1619,6 +1859,10 @@ class AgentCore:
                     payload = {}
                 if payload.get("success", False):
                     successful_tool_names.append(name)
+                    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                    url = self._live_tool_requested_url(name, arguments) or str(data.get("url") or data.get("final_url") or "").strip()
+                    if name in {"fetch_url", "agent_browser"} and url:
+                        successful_live_targets.add((name, url))
                 return text
 
             try:
@@ -1833,6 +2077,7 @@ class AgentCore:
                     verification_result.message,
                     normalized_text,
                     prompt,
+                    provider_response.tool_events,
                     stream=stream,
                     event_handler=event_handler,
                 )

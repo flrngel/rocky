@@ -7,7 +7,13 @@ from typing import Any
 import re
 
 from rocky.core.router import RouteDecision, TaskClass
-from rocky.core.runtime_state import ActiveTaskThread, AnswerContract, EvidenceGraph
+from rocky.core.runtime_state import (
+    ActiveTaskThread,
+    AnswerContract,
+    EvidenceGraph,
+    prompt_requests_list_output,
+    requested_minimum_list_items,
+)
 from rocky.tool_events import tool_event_payload
 from rocky.util.text import extract_json_candidate
 
@@ -17,6 +23,7 @@ SCRIPT_REFERENCE_RE = re.compile(
     re.I,
 )
 MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$")
+LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)")
 
 
 @dataclass(slots=True)
@@ -558,6 +565,24 @@ class VerifierRegistry:
         }
         return bool(failed_names) and failed_names.issubset(successful_names_after_failure)
 
+    def _successful_live_url_count(self, tool_events: list[dict]) -> int:
+        urls: set[str] = set()
+        for event in tool_events:
+            if event.get("type") != "tool_result" or not event.get("success", True):
+                continue
+            name = str(event.get("name", ""))
+            if name not in {"fetch_url", "browser_render_page", "agent_browser"}:
+                continue
+            arguments = event.get("arguments") or {}
+            payload = self._tool_payload(event)
+            data = payload.get("data")
+            url = str(arguments.get("url") or "").strip()
+            if not url and isinstance(data, dict):
+                url = str(data.get("url") or data.get("final_url") or "").strip()
+            if url:
+                urls.add(url)
+        return len(urls)
+
     def _route_validity(
         self,
         prompt: str,
@@ -612,6 +637,13 @@ class VerifierRegistry:
                 continue
             claims.append(stripped[:280])
         return claims[:12]
+
+    def _output_list_count(self, output: str) -> int:
+        count = 0
+        for line in output.splitlines():
+            if LIST_ITEM_RE.match(line):
+                count += 1
+        return count
 
     def _claim_support(
         self,
@@ -719,6 +751,64 @@ class VerifierRegistry:
             missing_evidence_ids=list(answer_contract.missing_evidence),
         )
 
+    def _list_requirements(
+        self,
+        prompt: str,
+        route: RouteDecision,
+        output: str,
+        tool_events: list[dict],
+        answer_contract: AnswerContract | None,
+    ) -> VerificationResult:
+        minimum_items = requested_minimum_list_items(prompt)
+        if minimum_items <= 0 and not prompt_requests_list_output(prompt):
+            return VerificationResult("list_requirements_v1", "pass", "")
+        if self._acknowledges_missing_evidence(output):
+            if route.task_signature.startswith(("research/", "site/")) and minimum_items > 0:
+                successful_live_steps = sum(
+                    1
+                    for event in tool_events
+                    if event.get("type") == "tool_result"
+                    and event.get("success", True)
+                    and str(event.get("name", "")) in {"search_web", "fetch_url", "browser_render_page", "agent_browser"}
+                )
+                if successful_live_steps < 5 or self._successful_live_url_count(tool_events) < 3:
+                    return VerificationResult(
+                        "list_requirements_v1",
+                        "fail",
+                        "Rocky stopped the counted live-research search too early. Continue with additional live pages or filters before concluding that not enough verified items exist.",
+                        failure_class="counted_list_search_stopped_too_early",
+                    )
+            return VerificationResult("list_requirements_v1", "pass", "")
+        observed_count = self._output_list_count(output)
+        if minimum_items > 0 and observed_count < minimum_items:
+            return VerificationResult(
+                "list_requirements_v1",
+                "fail",
+                f"Expected at least {minimum_items} list items in the final answer, or an explicit statement that enough verified items could not be found yet.",
+                failure_class="minimum_list_count_not_met",
+            )
+        if prompt_requests_list_output(prompt) and observed_count == 0:
+            return VerificationResult(
+                "list_requirements_v1",
+                "fail",
+                "Expected the final answer to be formatted as a list.",
+                failure_class="requested_list_format_missing",
+            )
+        if (
+            route.task_signature.startswith(("research/", "site/"))
+            and minimum_items > 0
+            and answer_contract is not None
+            and answer_contract.missing_evidence
+        ):
+            return VerificationResult(
+                "list_requirements_v1",
+                "fail",
+                "Rocky presented a complete counted list even though live item evidence is still missing. Gather more live item evidence or say clearly that you could not verify enough items yet.",
+                failure_class="counted_list_missing_live_evidence",
+                missing_evidence_ids=list(answer_contract.missing_evidence),
+            )
+        return VerificationResult("list_requirements_v1", "pass", "")
+
     def verify(
         self,
         prompt: str,
@@ -758,6 +848,11 @@ class VerifierRegistry:
         if result.status != "pass":
             return result
         result = self._non_empty_output(prompt, output)
+        if result.status != "pass":
+            result.memory_promotion_allowed = False
+            result.learning_promotion_allowed = False
+            return result
+        result = self._list_requirements(prompt, route, output, tool_events, answer_contract)
         if result.status != "pass":
             result.memory_promotion_allowed = False
             result.learning_promotion_allowed = False
@@ -886,11 +981,11 @@ class VerifierRegistry:
                     "fail",
                     "Expected Rocky to inspect the local runtime with tools, but no tools were used",
                 )
-            if "inspect_runtime_versions" not in result_names:
+            if "run_shell_command" not in result_names:
                 return VerificationResult(
                     "tool_expectation_v1",
                     "fail",
-                    "Expected Rocky to inspect the local runtime with `inspect_runtime_versions`",
+                    "Expected Rocky to inspect the local runtime with `run_shell_command`",
                 )
             if any(
                 phrase in lowered
@@ -902,13 +997,14 @@ class VerifierRegistry:
                     "which executable",
                     "which executables",
                 )
-            ) and not (result_names & {"run_shell_command", "inspect_shell_environment"}):
+            ) and "run_shell_command" not in result_names:
                 return VerificationResult(
                     "tool_expectation_v1",
                     "fail",
-                    "Expected Rocky to confirm runtime version or path claims with a shell inspection step after `inspect_runtime_versions`",
+                    "Expected Rocky to confirm runtime version or path claims with shell inspection commands before answering",
                 )
         if route.task_signature in {"research/live_compare/general", "site/understanding/general"}:
+            minimum_items = requested_minimum_list_items(prompt)
             if not used_tools:
                 return VerificationResult(
                     "tool_expectation_v1",
@@ -918,9 +1014,9 @@ class VerifierRegistry:
             live_research_names = result_names & {
                 "search_web",
                 "fetch_url",
-                "extract_links",
                 "browser_render_page",
                 "browser_screenshot",
+                "agent_browser",
             }
             if not live_research_names:
                 return VerificationResult(
@@ -934,21 +1030,34 @@ class VerifierRegistry:
                     "fail",
                     "Expected Rocky to take at least two live research steps before answering this request",
                 )
+            if minimum_items > 0:
+                if len(successful_names) < 3:
+                    return VerificationResult(
+                        "tool_expectation_v1",
+                        "fail",
+                        f"Expected Rocky to keep researching until it had enough grounded evidence for at least {minimum_items} items before answering",
+                    )
+                if not (result_names & {"fetch_url", "browser_render_page", "agent_browser"}):
+                    return VerificationResult(
+                        "tool_expectation_v1",
+                        "fail",
+                        "Expected Rocky to open or inspect a live listing/source page before assembling a counted live-research list",
+                    )
             if any(
                 phrase in lowered
                 for phrase in ("tell me about", "who is ", "who are ", "biography", "biographies", "leader", "leaders", "member", "members")
-            ) and not (result_names & {"fetch_url", "browser_render_page"}):
+            ) and not (result_names & {"fetch_url", "browser_render_page", "agent_browser"}):
                 return VerificationResult(
                     "tool_expectation_v1",
                     "fail",
                     "Expected Rocky to open at least one retrieved live source before making people or role claims",
                 )
         if route.task_signature == "data/spreadsheet/analysis":
-            if "inspect_spreadsheet" not in result_names:
+            if not (result_names & {"run_shell_command", "read_file"}):
                 return VerificationResult(
                     "tool_expectation_v1",
                     "fail",
-                    "Expected Rocky to start spreadsheet analysis with `inspect_spreadsheet` on the named CSV/XLSX file",
+                    "Expected Rocky to inspect the named CSV/XLSX file with `run_shell_command` or `read_file` before answering",
                 )
             if len(successful_names) < 2:
                 return VerificationResult(
@@ -971,17 +1080,23 @@ class VerifierRegistry:
                     "sum",
                 )
             )
-            if needs_follow_up_range and not (result_names & {"read_sheet_range", "run_python"}):
+            if needs_follow_up_range and len(successful_names) < 2:
                 return VerificationResult(
                     "tool_expectation_v1",
                     "fail",
-                    "Expected Rocky to follow spreadsheet inspection with `read_sheet_range` or `run_python` for the requested detail",
+                    "Expected Rocky to follow spreadsheet inspection with another shell or read step for the requested detail",
                 )
         if route.task_signature == "extract/general" and len(successful_names) < 2:
             return VerificationResult(
                 "tool_expectation_v1",
                 "fail",
                 "Expected Rocky to use at least two extraction steps before answering",
+            )
+        if route.task_signature == "extract/general" and not (result_names & {"run_shell_command", "read_file"}):
+            return VerificationResult(
+                "tool_expectation_v1",
+                "fail",
+                "Expected Rocky to use `run_shell_command` or `read_file` for extraction work",
             )
         if route.task_signature == "automation/general":
             automation_build_terms = ("build", "create", "script", "scaffold", "project", "automation", "repeatable")
@@ -1070,6 +1185,31 @@ class VerifierRegistry:
             and self._can_gracefully_fail_current_price_lookup(output, tool_events)
         ):
             return VerificationResult("tool_failure_v1", "pass", "")
+        if failures and route.task_signature in {"research/live_compare/general", "site/understanding/general"}:
+            successful_live_names = {
+                str(event.get("name", ""))
+                for event in tool_events
+                if event.get("type") == "tool_result" and event.get("success", True)
+            }
+            failure_names = {str(event.get("name", "")) for event in failures if event.get("name")}
+            if successful_live_names & {"fetch_url", "browser_render_page", "agent_browser"} and failure_names <= {
+                "search_web",
+                "browser_render_page",
+                "browser_screenshot",
+            }:
+                return VerificationResult("tool_failure_v1", "pass", "")
+            last_failure_index = max(
+                index
+                for index, event in enumerate(tool_events)
+                if event.get("type") == "tool_result" and not event.get("success", True)
+            )
+            successful_names_after_failure = {
+                str(event.get("name", ""))
+                for event in tool_events[last_failure_index + 1 :]
+                if event.get("type") == "tool_result" and event.get("success", True)
+            }
+            if successful_names_after_failure & {"fetch_url", "browser_render_page", "agent_browser"}:
+                return VerificationResult("tool_failure_v1", "pass", "")
         if failures and route.task_signature == "automation/general":
             successful_names = {
                 str(event.get("name", ""))
@@ -1110,7 +1250,7 @@ class VerifierRegistry:
             if (
                 "run_shell_command" in successful_names
                 and "read_file" in successful_names_after_failure
-                and successful_names_after_failure & {"run_shell_command", "write_file", "stat_path", "run_python"}
+                and successful_names_after_failure & {"run_shell_command", "write_file", "read_file"}
             ):
                 return VerificationResult("tool_failure_v1", "pass", "")
         if failures:
@@ -1236,9 +1376,9 @@ class VerifierRegistry:
             in {
                 "fetch_url",
                 "search_web",
-                "extract_links",
                 "browser_render_page",
                 "browser_screenshot",
+                "agent_browser",
             }
             for event in tool_events
             if event.get("type") == "tool_result"

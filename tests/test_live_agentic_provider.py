@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -104,6 +105,10 @@ def _selected_policies(payload: dict[str, object]) -> list[str]:
     return [str(item) for item in list(trace.get("selected_policies") or [])]
 
 
+def _list_item_count(text: str) -> int:
+    return sum(1 for line in str(text or "").splitlines() if re.match(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", line))
+
+
 def _write_scenario_report(
     workspace: Path,
     scenario_name: str,
@@ -141,7 +146,7 @@ def _learning_case(project) -> dict[str, object]:
         "feedback": (
             f"When continuing catalog-review work in this workspace, keep `{script_name}` in focus. "
             "Execute the existing workspace script first. "
-            "If it returns structured data, parse it with `run_python` before making merge decisions. "
+            "If it returns structured data, inspect or parse it with focused shell commands before making merge decisions. "
             "When the user asks for a result file, write the exact JSON there and reread it before answering."
         ),
         "retry_prompt": (
@@ -406,4 +411,65 @@ def test_live_cli_auto_self_reflection_recalls_compact_retrospective(
     assert second_payload["route"]["task_signature"] == "local/runtime_inspection"
     assert second_notes
     assert any(str(note.get("kind") or "") == "retrospective" for note in second_notes)
+    assert report.exists()
+
+
+def test_live_cli_trending_models_research_list_scenario(
+    tmp_path: Path,
+    live_provider_ready: dict[str, str],
+) -> None:
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "home"
+    workspace.mkdir(parents=True, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True)
+    _copy_live_config(home)
+    env = _scenario_env(home)
+
+    prompt = (
+        "find huggingface openweight llm models that are trending right now. "
+        "filter models that have parameters under 12B. "
+        "you should find at least 10 models and show me as a list."
+    )
+    payload = _cli_json(workspace, env, prompt)
+    trace = dict(payload.get("trace") or {})
+    tools = _successful_tool_names(payload)
+    selected_tools = [str(item) for item in list(trace.get("selected_tools") or [])]
+    output = str(payload.get("text") or "")
+    list_items = _list_item_count(output)
+    report = _write_scenario_report(
+        workspace,
+        "trending_models_research_list_scenario",
+        [
+            f"mkdir -p {workspace}",
+            f"pipx install --force {REPO_ROOT}",
+            f"rocky --provider {LIVE_PROVIDER} --cwd {workspace} --json {json.dumps(prompt)}",
+        ],
+        [
+            (
+                "prepare_workspace",
+                "created a fresh temp workspace and temp HOME under /tmp-style pytest temp storage",
+                "isolated workspace with copied Rocky config",
+                f"workspace={workspace}, home={home}",
+            ),
+            (
+                "run_installed_cli",
+                "ran installed Rocky against the live Hugging Face trending-models prompt",
+                "research route, live web tool chaining, and a grounded counted list",
+                f"route={payload['route']['task_signature']}, verification={payload['verification']['status']}, selected_tools={selected_tools}",
+            ),
+            (
+                "grade_results",
+                "checked the final answer and trace together",
+                "at least 10 list items, web-fetch/extract evidence, and no shell tool exposure in this route",
+                f"successful_tools={tools}, list_items={list_items}, trace={trace.get('trace_path')}",
+            ),
+        ],
+    )
+
+    assert payload["route"]["task_signature"] == "research/live_compare/general"
+    assert payload["verification"]["status"] == "pass"
+    assert list_items >= 10
+    assert "search_web" in tools
+    assert any(tool in tools for tool in ("fetch_url", "agent_browser", "browser_render_page"))
+    assert "run_shell_command" not in selected_tools
     assert report.exists()

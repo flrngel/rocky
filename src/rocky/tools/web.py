@@ -64,6 +64,64 @@ NO_RESULTS_MARKERS = (
     "search returned 0 result",
     "did not match any documents",
 )
+GENERIC_LINK_TEXTS = {
+    "",
+    "home",
+    "login",
+    "log in",
+    "sign in",
+    "sign up",
+    "join",
+    "pricing",
+    "docs",
+    "documentation",
+    "enterprise",
+    "about",
+    "blog",
+    "contact",
+    "terms",
+    "privacy",
+    "models",
+    "datasets",
+    "spaces",
+    "storage",
+}
+GENERIC_PATH_SEGMENTS = {
+    "",
+    "about",
+    "app",
+    "apps",
+    "blog",
+    "collection",
+    "collections",
+    "contact",
+    "dataset",
+    "datasets",
+    "doc",
+    "docs",
+    "documentation",
+    "enterprise",
+    "explore",
+    "join",
+    "library",
+    "libraries",
+    "login",
+    "logout",
+    "model",
+    "models",
+    "news",
+    "pricing",
+    "privacy",
+    "search",
+    "settings",
+    "signin",
+    "signup",
+    "space",
+    "spaces",
+    "tag",
+    "tags",
+    "terms",
+}
 
 
 def _client(timeout_s: int = 20, *, verify: bool = True) -> httpx.Client:
@@ -155,6 +213,96 @@ def _normalize_page_link(href: str | None, base_url: str) -> str | None:
     if parsed.scheme in {"http", "https"}:
         return absolute
     return None
+
+
+def _link_text(anchor) -> str:
+    return " ".join(anchor.get_text(" ", strip=True).split())[:120]
+
+
+def _preferred_link_items(html: str, base_url: str, *, max_links: int = 20) -> list[dict[str, str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    base_host = urlparse(base_url).netloc.lower()
+    scored: dict[str, tuple[int, int, dict[str, str]]] = {}
+    order = 0
+    roots: list[tuple[Any, int]] = []
+    for candidate in (
+        soup.find("main"),
+        soup.find(attrs={"role": "main"}),
+        soup.find("article"),
+        soup.body,
+        soup,
+    ):
+        if candidate is not None:
+            bonus = 6 if getattr(candidate, "name", "") in {"main", "article"} else 0
+            roots.append((candidate, bonus))
+    seen_roots: set[int] = set()
+    deduped_roots: list[tuple[Any, int]] = []
+    for root, bonus in roots:
+        marker = id(root)
+        if marker in seen_roots:
+            continue
+        seen_roots.add(marker)
+        deduped_roots.append((root, bonus))
+    for root, root_bonus in deduped_roots:
+        for anchor in root.find_all("a", href=True):
+            normalized = _normalize_page_link(anchor.get("href"), base_url)
+            if not normalized:
+                continue
+            text = _link_text(anchor)
+            parsed = urlparse(normalized)
+            host = parsed.netloc.lower()
+            parts = [part for part in parsed.path.split("/") if part]
+            lowered_parts = [part.lower() for part in parts]
+            score = root_bonus
+            if host == base_host:
+                score += 3
+            if parts:
+                score += min(len(parts), 3)
+            else:
+                score -= 3
+            if (
+                len(parts) >= 2
+                and not parsed.query
+                and all(part not in GENERIC_PATH_SEGMENTS for part in lowered_parts[:2])
+            ):
+                score += 5
+            if parsed.query:
+                score -= 2
+                if len(parts) <= 1 or (lowered_parts and lowered_parts[0] in GENERIC_PATH_SEGMENTS):
+                    score -= 5
+            if lowered_parts and lowered_parts[0] in GENERIC_PATH_SEGMENTS:
+                score -= 3
+            if "search" in lowered_parts[:2]:
+                score -= 5
+            if anchor.find_parent(["nav", "header", "footer", "aside"]) is not None:
+                score -= 6
+            lowered_text = text.lower()
+            if lowered_text in GENERIC_LINK_TEXTS:
+                score -= 4
+            elif text:
+                score += 2
+                if len(text.split()) <= 12:
+                    score += 1
+                if "/" in text and len(text.split()) <= 10:
+                    score += 2
+            else:
+                score -= 1
+            lowered_url = normalized.lower()
+            if any(marker in lowered_url for marker in ("/login", "/join", "/pricing", "/docs", "/enterprise")):
+                score -= 4
+            candidate = {"text": text, "url": normalized}
+            existing = scored.get(normalized)
+            if existing is None or score > existing[0]:
+                scored[normalized] = (score, order, candidate)
+            order += 1
+    ranked = sorted(scored.values(), key=lambda item: (-item[0], item[1]))
+    items = [item for score, _order, item in ranked if score >= 1]
+    if items:
+        return items[:max_links]
+    fallback: list[dict[str, str]] = []
+    for _score, _order, item in ranked[:max_links]:
+        fallback.append(item)
+    return fallback
 
 
 def _challenge_result(response: httpx.Response, *, requested_url: str, attempts: int) -> ToolResult:
@@ -345,16 +493,8 @@ def fetch_url(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     assert response is not None
     soup = BeautifulSoup(response.text, "html.parser")
     title = soup.title.string.strip() if soup.title and soup.title.string else ""
-    links: list[str] = []
-    seen_links: set[str] = set()
-    for anchor in soup.find_all("a", href=True):
-        normalized = _normalize_page_link(anchor.get("href"), str(response.url))
-        if not normalized or normalized in seen_links:
-            continue
-        links.append(normalized)
-        seen_links.add(normalized)
-        if len(links) >= 20:
-            break
+    link_items = _preferred_link_items(response.text, str(response.url), max_links=20)
+    links = [item["url"] for item in link_items]
     return ToolResult(
         True,
         {
@@ -362,6 +502,7 @@ def fetch_url(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             "status_code": response.status_code,
             "title": title,
             "text_excerpt": _response_text_excerpt(response),
+            "link_items": link_items,
             "links": links,
             "content_type": response.headers.get("content-type", ""),
         },
@@ -381,23 +522,8 @@ def extract_links(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     if error is not None:
         return error
     assert response is not None
-    soup = BeautifulSoup(response.text, "html.parser")
-    links: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
     max_links = int(args.get("max_links", 50))
-    for anchor in soup.find_all("a", href=True):
-        normalized = _normalize_page_link(anchor.get("href"), str(response.url))
-        if not normalized or normalized in seen_urls:
-            continue
-        links.append(
-            {
-                "text": anchor.get_text(" ", strip=True)[:120],
-                "url": normalized,
-            }
-        )
-        seen_urls.add(normalized)
-        if len(links) >= max_links:
-            break
+    links = _preferred_link_items(response.text, str(response.url), max_links=max_links)
     return ToolResult(
         True,
         links,
@@ -484,12 +610,5 @@ def tools() -> list[Tool]:
             {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}, "timeout_s": {"type": "integer"}}, "required": ["query"]},
             "web",
             search_web,
-        ),
-        Tool(
-            "extract_links",
-            "Extract links from a web page",
-            {"type": "object", "properties": {"url": {"type": "string"}, "max_links": {"type": "integer"}, "timeout_s": {"type": "integer"}}, "required": ["url"]},
-            "web",
-            extract_links,
         ),
     ]

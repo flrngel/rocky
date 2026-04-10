@@ -5,17 +5,41 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from rocky.tools.base import ToolResult
 from rocky.util.text import safe_json, truncate
 
 
-MODEL_TEXT_LIMIT = 1200
-MODEL_TEXT_TOTAL_LIMIT = 5000
+MODEL_TEXT_LIMIT = 2200
+MODEL_TEXT_TOTAL_LIMIT = 9000
 RAW_TEXT_INLINE_LIMIT = 4000
 RAW_PREVIEW_LIMIT = 1000
 DEFAULT_FACT_LIMIT = 8
+WEB_FACT_LIMIT = 14
 PATH_RE = re.compile(r"(?<![A-Za-z0-9])(?:\.{1,2}/)?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+")
+GENERIC_WEB_PATH_SEGMENTS = {
+    "",
+    "about",
+    "blog",
+    "collection",
+    "collections",
+    "dataset",
+    "datasets",
+    "doc",
+    "docs",
+    "documentation",
+    "explore",
+    "library",
+    "libraries",
+    "model",
+    "models",
+    "search",
+    "space",
+    "spaces",
+    "tag",
+    "tags",
+}
 
 
 def _payload_from_output(output: Any) -> tuple[dict[str, Any], str]:
@@ -98,6 +122,37 @@ def _append_path_artifacts(target: list[dict[str, Any]], text: str, *, source: s
             break
 
 
+def _rank_web_item(item: dict[str, Any], *, index: int) -> tuple[int, int]:
+    url = str(item.get("url") or "").strip()
+    title = str(item.get("title") or item.get("text") or "").strip()
+    parsed = urlparse(url) if url else None
+    parts = [part for part in (parsed.path.split("/") if parsed else []) if part]
+    lowered_parts = [part.lower() for part in parts]
+    score = 0
+    if url:
+        score += 1
+    if (
+        len(parts) >= 2
+        and parsed is not None
+        and not parsed.query
+        and all(part not in GENERIC_WEB_PATH_SEGMENTS for part in lowered_parts[:2])
+    ):
+        score += 8
+    if parsed is not None and parsed.query:
+        score -= 2
+        if len(parts) <= 1 or (lowered_parts and lowered_parts[0] in GENERIC_WEB_PATH_SEGMENTS):
+            score -= 6
+    if lowered_parts and lowered_parts[0] in GENERIC_WEB_PATH_SEGMENTS:
+        score -= 4
+    if "search" in lowered_parts[:2]:
+        score -= 5
+    if "/" in title and len(title.split()) <= 10:
+        score += 3
+    if title:
+        score += 1
+    return (-score, index)
+
+
 def _summarize_shell_like(
     *,
     name: str,
@@ -127,6 +182,46 @@ def _summarize_shell_like(
         artifacts.append(artifact)
     if summary_text and not facts:
         facts.append(_fact("summary", summary_text))
+
+
+def _summarize_agent_browser(
+    *,
+    name: str,
+    arguments: dict[str, Any],
+    data: dict[str, Any],
+    summary_text: str,
+    facts: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+) -> None:
+    _summarize_shell_like(
+        name=name,
+        arguments=arguments,
+        data=data,
+        summary_text=summary_text,
+        facts=facts,
+        artifacts=artifacts,
+    )
+    url = str(data.get("url") or "").strip()
+    if url:
+        facts.append(_fact("url", f"URL: {url}", url=url))
+        if artifact := _artifact("url", url, source=name):
+            artifacts.append(artifact)
+    title = str(data.get("title") or "").strip()
+    if title:
+        facts.append(_fact("title", f"Title: {title}", title=title))
+    for line in _informative_lines(str(data.get("snapshot") or ""), limit=4):
+        facts.append(_fact("snapshot", f"Snapshot: {line}", snapshot=line))
+    for item in list(data.get("items") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        item_name = str(item.get("name") or "").strip()
+        item_role = str(item.get("role") or "").strip()
+        item_ref = str(item.get("ref") or "").strip()
+        label = item_name or item_ref
+        if item_role:
+            label = f"{label} [{item_role}]"
+        if label:
+            facts.append(_fact("item", f"Item: {label[:220]}", ref=item_ref, role=item_role))
 
 
 def _summarize_file_read(
@@ -217,6 +312,25 @@ def _summarize_web_fetch(
     excerpt = str(data.get("text_excerpt") or "").strip()
     for line in _informative_lines(excerpt, limit=3):
         facts.append(_fact("excerpt", f"Excerpt: {line}", excerpt=line))
+    link_items = data.get("link_items") or []
+    if isinstance(link_items, list):
+        ranked_items = sorted(
+            ((index, item) for index, item in enumerate(link_items) if isinstance(item, dict)),
+            key=lambda pair: _rank_web_item(pair[1], index=pair[0]),
+        )
+        for _index, item in ranked_items[:WEB_FACT_LIMIT]:
+            if not isinstance(item, dict):
+                continue
+            link_url = str(item.get("url") or "").strip()
+            link_text = str(item.get("text") or "").strip()
+            label = f"{link_text} ({link_url})" if link_text and link_url else (link_text or link_url)
+            if not label:
+                continue
+            facts.append(_fact("link_item", f"Link item: {label[:220]}", title=link_text, url=link_url))
+            if link_url and (artifact := _artifact("url", link_url, source=name)):
+                artifacts.append(artifact)
+        if link_items:
+            return
     for link in list(data.get("links") or [])[:4]:
         normalized = str(link or "").strip()
         if not normalized:
@@ -233,7 +347,11 @@ def _summarize_web_list(
     facts: list[dict[str, Any]],
     artifacts: list[dict[str, Any]],
 ) -> None:
-    for item in data[:5]:
+    ranked_items = sorted(
+        ((index, item) for index, item in enumerate(data) if isinstance(item, dict)),
+        key=lambda pair: _rank_web_item(pair[1], index=pair[0]),
+    )
+    for _index, item in ranked_items[:WEB_FACT_LIMIT]:
         if not isinstance(item, dict):
             continue
         url = str(item.get("url") or "").strip()
@@ -318,7 +436,16 @@ def derive_tool_event_details(
     if error_code:
         facts.append(_fact("error_code", f"Guard: {error_code}", error_code=error_code))
 
-    if name in {"run_shell_command", "run_python"} and isinstance(data, dict):
+    if name == "agent_browser" and isinstance(data, dict):
+        _summarize_agent_browser(
+            name=name,
+            arguments=arguments,
+            data=data,
+            summary_text=summary_text,
+            facts=facts,
+            artifacts=artifacts,
+        )
+    elif name in {"run_shell_command", "run_python"} and isinstance(data, dict):
         _summarize_shell_like(
             name=name,
             arguments=arguments,
@@ -365,7 +492,8 @@ def derive_tool_event_details(
         else:
             status = "succeeded" if success else "failed"
             summary_text = f"{name} {status}"
-    return summary_text, facts[:DEFAULT_FACT_LIMIT], artifacts[:DEFAULT_FACT_LIMIT]
+    fact_limit = WEB_FACT_LIMIT if name in {"fetch_url", "search_web", "extract_links", "agent_browser"} else DEFAULT_FACT_LIMIT
+    return summary_text, facts[:fact_limit], artifacts[:fact_limit]
 
 
 def build_model_text(
@@ -380,7 +508,8 @@ def build_model_text(
     lines = [summary_text.strip() or f"{name} {'succeeded' if success else 'failed'}"]
     fact_lines = [str(item.get("text") or "").strip() for item in facts if str(item.get("text") or "").strip()]
     if fact_lines:
-        lines.extend(fact_lines[:6])
+        fact_line_limit = 12 if name in {"fetch_url", "search_web", "extract_links", "agent_browser"} else 6
+        lines.extend(fact_lines[:fact_line_limit])
     if not fact_lines and artifacts:
         refs = [str(item.get("ref") or "").strip() for item in artifacts if str(item.get("ref") or "").strip()]
         if refs:

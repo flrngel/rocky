@@ -250,40 +250,6 @@ def delete_path(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
 def tools() -> list[Tool]:
     return [
         Tool(
-            "list_files",
-            "List files under a workspace path",
-            {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "glob": {"type": "string"},
-                    "max_items": {"type": "integer"},
-                    "max_depth": {"type": "integer"},
-                },
-                "required": [],
-            },
-            "filesystem",
-            list_files,
-        ),
-        Tool(
-            "stat_path",
-            "Inspect a file or directory path",
-            {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
-            "filesystem",
-            stat_path,
-        ),
-        Tool(
-            "glob_paths",
-            "Find workspace paths by glob pattern",
-            {
-                "type": "object",
-                "properties": {"pattern": {"type": "string"}, "max_items": {"type": "integer"}},
-                "required": ["pattern"],
-            },
-            "filesystem",
-            glob_paths,
-        ),
-        Tool(
             "read_file",
             "Read a text file with line numbers",
             {
@@ -312,73 +278,5 @@ def tools() -> list[Tool]:
             },
             "filesystem",
             write_file,
-        ),
-        Tool(
-            "replace_in_file",
-            "Replace text in a file with conflict detection",
-            {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "old": {"type": "string"},
-                    "new": {"type": "string"},
-                    "count": {"type": "integer"},
-                    "expected_sha256": {"type": "string"},
-                },
-                "required": ["path", "old", "new"],
-            },
-            "filesystem",
-            replace_in_file,
-        ),
-        Tool(
-            "grep_files",
-            "Search files by regex pattern",
-            {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string"},
-                    "path": {"type": "string"},
-                    "glob": {"type": "string"},
-                    "ignore_case": {"type": "boolean"},
-                    "max_hits": {"type": "integer"},
-                    "max_depth": {"type": "integer"},
-                },
-                "required": ["pattern"],
-            },
-            "filesystem",
-            grep_files,
-        ),
-        Tool(
-            "move_path",
-            "Move or rename a workspace path",
-            {
-                "type": "object",
-                "properties": {"src": {"type": "string"}, "dst": {"type": "string"}},
-                "required": ["src", "dst"],
-            },
-            "filesystem",
-            move_path,
-        ),
-        Tool(
-            "copy_path",
-            "Copy a file or directory inside the workspace",
-            {
-                "type": "object",
-                "properties": {
-                    "src": {"type": "string"},
-                    "dst": {"type": "string"},
-                    "overwrite": {"type": "boolean"},
-                },
-                "required": ["src", "dst"],
-            },
-            "filesystem",
-            copy_path,
-        ),
-        Tool(
-            "delete_path",
-            "Delete a file or directory inside the workspace",
-            {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
-            "filesystem",
-            delete_path,
         ),
     ]

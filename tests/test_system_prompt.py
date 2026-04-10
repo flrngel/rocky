@@ -30,32 +30,31 @@ def test_system_prompt_pushes_multi_step_tool_use() -> None:
     assert "do not answer from parametric memory" in prompt
     assert "cannot determine the answer from evidence yet" in prompt
     assert "After each tool result, decide whether another tool is needed" in prompt
-    assert "start with `inspect_runtime_versions`, then use at least one confirming shell command" in prompt
+    assert "installed software, versions, or executable paths" in prompt
+    assert "start with `run_shell_command`" in prompt
 
 
 def test_system_prompt_guides_data_and_extraction_tasks() -> None:
     data_prompt = build_system_prompt(
-        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["filesystem", "data", "python"]),
+        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["filesystem", "data", "python", "shell"]),
         mode="bypass",
         user_prompt="analyze sales.csv",
         task_signature="data/spreadsheet/analysis",
     )
     extraction_prompt = build_system_prompt(
-        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["filesystem", "data", "python"]),
+        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["filesystem", "data", "python", "shell"]),
         mode="bypass",
         user_prompt="classify tickets.txt into json",
         task_signature="extract/general",
     )
 
-    assert "first tool call must be `inspect_spreadsheet`" in data_prompt
-    assert "`inspect_spreadsheet` works for CSV files too" in data_prompt
-    assert "Do not use `run_python` as your first spreadsheet step" in data_prompt
+    assert "inspect the named CSV/XLSX file with `run_shell_command` first" in data_prompt
     assert "use that exact path first instead of searching or guessing" in data_prompt
-    assert "Do not stop after `inspect_spreadsheet` alone" in data_prompt
+    assert "Do not stop after a single inspection command" in data_prompt
     assert "return the requested JSON directly" in extraction_prompt
     assert "Do not write output files unless the user explicitly asked" in extraction_prompt
-    assert "prefer `run_python` to read and parse the source directly" in extraction_prompt
-    assert "use `glob_paths` first and then `stat_path` or `read_file`" in extraction_prompt
+    assert "Use `read_file` for quick inspection and `run_shell_command` for parsing" in extraction_prompt
+    assert "discover it with shell commands such as `find`, `rg --files`, or `ls`" in extraction_prompt
     assert "Use at least two steps for extraction work" in extraction_prompt
     assert "line prefixes" in extraction_prompt
     assert "Never create or mention output files" in extraction_prompt
@@ -76,7 +75,7 @@ def test_system_prompt_guides_shell_and_automation_tasks() -> None:
     )
 
     assert "the first tool call should be `run_shell_command`" in shell_prompt
-    assert "keep them inside the workspace instead of using `/tmp`" in shell_prompt
+    assert "keep commands inside the workspace instead of using `/tmp` or a fake root" in shell_prompt
     assert "do not collapse that into one tool call" in shell_prompt
     assert "such as `x.sh`" in shell_prompt
     assert "execute that workspace file directly" in shell_prompt
@@ -106,9 +105,8 @@ def test_system_prompt_guides_repo_lookup_follow_up_reads() -> None:
         task_signature="repo/general",
     )
 
-    assert "do not stop at search hits alone" in prompt
-    assert "After `grep_files` or `list_files`, read the most likely file" in prompt
-    assert "Repeated search-only loops" in prompt
+    assert "do not stop after directory listings or grep-style shell output alone" in prompt
+    assert "After discovery, read the most likely file" in prompt
 
 
 def test_system_prompt_makes_learned_policy_prohibitions_hard_constraints() -> None:
