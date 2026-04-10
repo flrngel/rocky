@@ -425,6 +425,8 @@ class RockyRuntime:
             "learned_policies": len(self.policy_retriever.policies),
             "memories": len(self.memory_retriever.notes),
             "student": self.student_store.status(),
+            "session_usage": self.current_session_usage(),
+            "last_turn_usage": self.last_turn_usage(),
             "context_usage": self.context_usage(),
             "learned_generation": self.learning_manager.current_generation(),
             "global_settings": self._config_source_snapshot("global", self.global_root / "config.yaml"),
@@ -461,6 +463,14 @@ class RockyRuntime:
             "student_notes": len(context.get("student_notes") or []),
             "handoffs": len(context.get("handoffs") or []),
         }
+
+    def current_session_usage(self) -> dict[str, int]:
+        current = self._status_session()
+        return self.sessions.session_usage(current)
+
+    def last_turn_usage(self) -> dict[str, int]:
+        current = self._status_session()
+        return self.sessions.last_turn_usage(current)
 
     def why(self) -> dict[str, Any]:
         return self.agent.last_trace or {"status": "No task has been run yet."}

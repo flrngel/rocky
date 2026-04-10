@@ -25,6 +25,18 @@ def test_runtime_meta_and_init(tmp_path: Path, monkeypatch) -> None:
         "student_notes": 0,
         "handoffs": 0,
     }
+    assert status["session_usage"] == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "requests": 0,
+    }
+    assert status["last_turn_usage"] == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "requests": 0,
+    }
     assert status["global_settings"]["path"].endswith("config.yaml")
     assert status["project_settings"]["project"]["path"].endswith(".rocky/config.yaml")
     assert status["effective_settings"]["active_provider"] == runtime.config.active_provider
@@ -63,3 +75,45 @@ def test_freeze_command_toggles_process_local_state(tmp_path: Path, monkeypatch)
     assert on.data["freeze_mode"] is True
     assert status.data["freeze_mode"] is True
     assert off.data["freeze_mode"] is False
+
+
+def test_runtime_status_reports_session_token_usage(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    runtime = RockyRuntime.load_from(workspace)
+    session = runtime.sessions.ensure_current()
+
+    runtime.sessions.record_turn(
+        session,
+        prompt="inspect the repo",
+        answer="done",
+        task_signature="repo/general",
+        verification={"status": "pass"},
+        trace={},
+        usage={"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16},
+    )
+    runtime.sessions.record_turn(
+        session,
+        prompt="summarize the change",
+        answer="ok",
+        task_signature="repo/general",
+        verification={"status": "pass"},
+        trace={},
+        usage={"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+    )
+
+    status = runtime.status()
+
+    assert status["session_usage"] == {
+        "prompt_tokens": 18,
+        "completion_tokens": 8,
+        "total_tokens": 26,
+        "requests": 2,
+    }
+    assert status["last_turn_usage"] == {
+        "prompt_tokens": 7,
+        "completion_tokens": 3,
+        "total_tokens": 10,
+        "requests": 1,
+    }

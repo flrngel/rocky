@@ -27,6 +27,12 @@ def _make_runtime(tmp_path: Path) -> MagicMock:
         "student_notes": [],
         "handoffs": [],
     }
+    runtime.current_session_usage.return_value = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "requests": 0,
+    }
     return runtime
 
 
@@ -103,6 +109,7 @@ def test_freeze_repl_uses_in_memory_history_and_toolbar(tmp_path):
     assert isinstance(repl.session.history, InMemoryHistory)
     assert "Freeze: ON" in repl._toolbar().value
     assert "Verbose: OFF" in repl._toolbar().value
+    assert "Tok P0 C0 T0" in repl._toolbar().value
     assert "Ctx I0 M0 S0 P0 N0 H0" in repl._toolbar().value
     assert "freeze" in repl._prompt_message().value
 
@@ -136,6 +143,20 @@ def test_repl_toolbar_shows_context_usage_counts(tmp_path):
     repl = RockyRepl(runtime)
 
     assert "Ctx I1 M2 S1 P1 N3 H1" in repl._toolbar().value
+
+
+def test_repl_toolbar_shows_session_token_usage(tmp_path):
+    runtime = _make_runtime(tmp_path)
+    runtime.current_session_usage.return_value = {
+        "prompt_tokens": 120,
+        "completion_tokens": 45,
+        "total_tokens": 165,
+        "requests": 3,
+    }
+
+    repl = RockyRepl(runtime)
+
+    assert "Tok P120 C45 T165" in repl._toolbar().value
 
 
 def test_slash_command_completion_matches_prefix(tmp_path):

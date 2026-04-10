@@ -53,6 +53,52 @@ def _tool_names(tool_events: list[dict[str, Any]]) -> list[str]:
     return ordered
 
 
+def _empty_usage() -> dict[str, int]:
+    return {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "requests": 0,
+    }
+
+
+def _usage_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except Exception:
+        return 0
+
+
+def _normalize_usage(payload: Any) -> dict[str, int]:
+    if not isinstance(payload, dict):
+        return _empty_usage()
+    prompt_tokens = _usage_int(payload.get("prompt_tokens", payload.get("input_tokens")))
+    completion_tokens = _usage_int(payload.get("completion_tokens", payload.get("output_tokens")))
+    total_tokens = _usage_int(payload.get("total_tokens"))
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+    requests = _usage_int(payload.get("requests"))
+    if requests <= 0 and (prompt_tokens or completion_tokens or total_tokens):
+        requests = 1
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "requests": requests,
+    }
+
+
+def _merge_usage(*parts: Any) -> dict[str, int]:
+    totals = _empty_usage()
+    for payload in parts:
+        usage = _normalize_usage(payload)
+        for key in totals:
+            totals[key] += usage[key]
+    if totals["total_tokens"] <= 0:
+        totals["total_tokens"] = totals["prompt_tokens"] + totals["completion_tokens"]
+    return totals
+
+
 @dataclass(slots=True)
 class Session:
     id: str
@@ -187,6 +233,28 @@ class SessionStore:
         self.save(session)
         return {"compacted": True, "removed_messages": removed, "remaining_messages": len(kept)}
 
+    def session_usage(self, session: Session | None = None) -> dict[str, int]:
+        if session is None:
+            session = self.peek_current()
+        if session is None:
+            return _empty_usage()
+        meta = session.meta or {}
+        stored = _normalize_usage(meta.get("usage_totals"))
+        if any(stored.values()):
+            return stored
+        totals = _empty_usage()
+        for item in meta.get("turn_summaries") or []:
+            totals = _merge_usage(totals, (item or {}).get("usage"))
+        return totals
+
+    def last_turn_usage(self, session: Session | None = None) -> dict[str, int]:
+        if session is None:
+            session = self.peek_current()
+        if session is None:
+            return _empty_usage()
+        meta = session.meta or {}
+        return _normalize_usage((meta.get("last_turn_summary") or {}).get("usage"))
+
     def record_turn(
         self,
         session: Session,
@@ -196,6 +264,7 @@ class SessionStore:
         task_signature: str,
         verification: dict[str, Any],
         trace: dict[str, Any],
+        usage: dict[str, Any] | None = None,
         execution_cwd: str = ".",
         trace_path: str | None = None,
     ) -> dict[str, Any]:
@@ -204,6 +273,8 @@ class SessionStore:
         verification_status = str(verification.get("status") or "")
         answer_excerpt = _excerpt(answer, 260)
         prompt_excerpt = _excerpt(prompt, 180)
+        prior_usage = self.session_usage(session)
+        turn_usage = _normalize_usage(usage)
         tool_summaries = "\n".join(
             tool_event_summary_text(event)
             for event in tool_events[-8:]
@@ -252,6 +323,7 @@ class SessionStore:
             "important_paths": paths,
             "execution_cwd": execution_cwd or ".",
             "project_keywords": keywords,
+            "usage": turn_usage,
             "thread_id": thread.get("thread_id"),
             "trace_path": trace_path,
             "text": "\n".join(summary_lines),
@@ -263,6 +335,8 @@ class SessionStore:
         if trace_path:
             session.meta["last_trace_path"] = trace_path
         session.meta["project_keywords"] = keywords
+        session.meta["last_usage"] = turn_usage
+        session.meta["usage_totals"] = _merge_usage(prior_usage, turn_usage)
         if thread.get("thread_id"):
             session.meta["last_thread_id"] = thread.get("thread_id")
             thread_summary = {

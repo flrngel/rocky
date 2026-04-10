@@ -457,6 +457,7 @@ class AgentCore:
                     task_signature=route.task_signature,
                     verification=verification,
                     trace=trace,
+                    usage=usage,
                     execution_cwd=self.tool_registry.context.execution_relative,
                     trace_path=trace_path,
                 )

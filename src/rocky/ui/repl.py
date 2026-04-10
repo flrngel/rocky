@@ -326,6 +326,14 @@ class RockyRepl:
             "handoffs": 0,
         }
 
+    def _default_session_usage(self) -> dict[str, int]:
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "requests": 0,
+        }
+
     def _summarize_context_usage(self, context: object) -> dict[str, int]:
         if not isinstance(context, dict):
             return self._default_context_usage()
@@ -368,6 +376,36 @@ class RockyRepl:
                 pass
         return self._default_context_usage()
 
+    def _normalize_session_usage(self, payload: object) -> dict[str, int]:
+        if not isinstance(payload, dict):
+            return self._default_session_usage()
+        normalized = {}
+        for key in self._default_session_usage():
+            try:
+                normalized[key] = max(0, int(payload.get(key) or 0))
+            except Exception:
+                normalized[key] = 0
+        if normalized["total_tokens"] <= 0:
+            normalized["total_tokens"] = normalized["prompt_tokens"] + normalized["completion_tokens"]
+        return normalized
+
+    def _safe_session_usage(self) -> dict[str, int]:
+        method = getattr(type(self.runtime), "current_session_usage", None)
+        if method is not None:
+            try:
+                payload = method(self.runtime)
+                if isinstance(payload, dict):
+                    return self._normalize_session_usage(payload)
+            except Exception:
+                pass
+        fallback = getattr(self.runtime, "current_session_usage", None)
+        if callable(fallback):
+            try:
+                return self._normalize_session_usage(fallback())
+            except Exception:
+                pass
+        return self._default_session_usage()
+
     def _context_usage_label(self) -> str:
         usage = self._safe_context_usage()
         return (
@@ -377,6 +415,14 @@ class RockyRepl:
             f" P{usage['learned_policies']}"
             f" N{usage['student_notes']}"
             f" H{usage['handoffs']}"
+        )
+
+    def _session_usage_label(self) -> str:
+        usage = self._safe_session_usage()
+        return (
+            f"Tok P{usage['prompt_tokens']}"
+            f" C{usage['completion_tokens']}"
+            f" T{usage['total_tokens']}"
         )
 
     def _toolbar(self) -> HTML:
@@ -392,6 +438,7 @@ class RockyRepl:
             "Ctrl-G student",
             freeze_label,
             verbose_label,
+            self._session_usage_label(),
             self._context_usage_label(),
         ]
         session_id = self._safe_session_id()
