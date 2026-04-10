@@ -388,6 +388,49 @@ def test_fetch_url_follows_redirects_and_filters_links(tmp_path: Path, monkeypat
     assert result.metadata["redirect_chain"] == ["https://end.example/docs"]
 
 
+def test_fetch_url_prioritizes_main_content_links_over_navigation(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text="""
+            <html>
+              <head><title>Trending</title></head>
+              <body>
+                <header>
+                  <nav>
+                    <a href="/login">Login</a>
+                    <a href="/models">Models</a>
+                  </nav>
+                </header>
+                <main>
+                  <a href="/Qwen/Qwen3-8B">Qwen3-8B</a>
+                  <a href="/meta-llama/Llama-3.2-3B-Instruct">Llama-3.2-3B-Instruct</a>
+                </main>
+                <footer>
+                  <a href="/pricing">Pricing</a>
+                </footer>
+              </body>
+            </html>
+            """,
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://huggingface.co/models?sort=trending"})
+
+    assert result.success is True
+    assert result.data["link_items"][:2] == [
+        {"text": "Qwen3-8B", "url": "https://huggingface.co/Qwen/Qwen3-8B"},
+        {"text": "Llama-3.2-3B-Instruct", "url": "https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct"},
+    ]
+    assert "https://huggingface.co/login" not in result.data["links"]
+    assert "https://huggingface.co/pricing" not in result.data["links"]
+
+
 def test_extract_links_normalizes_relative_and_duckduckgo_redirect_urls(tmp_path: Path, monkeypatch) -> None:
     ctx = _tool_context(tmp_path)
 
@@ -416,4 +459,39 @@ def test_extract_links_normalizes_relative_and_duckduckgo_redirect_urls(tmp_path
     assert result.data == [
         {"text": "Local page", "url": "https://page.example/local"},
         {"text": "Story", "url": "https://example.com/story"},
+    ]
+
+
+def test_extract_links_prioritizes_main_content_items_over_navigation(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text="""
+            <html>
+              <body>
+                <nav>
+                  <a href="/docs">Docs</a>
+                  <a href="/enterprise">Enterprise</a>
+                </nav>
+                <main>
+                  <a href="/google/gemma-3-4b-it">Gemma-3-4B-It</a>
+                  <a href="/Qwen/Qwen2.5-7B-Instruct">Qwen2.5-7B-Instruct</a>
+                </main>
+              </body>
+            </html>
+            """,
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.extract_links(ctx, {"url": "https://huggingface.co/models", "max_links": 4})
+
+    assert result.success is True
+    assert result.data[:2] == [
+        {"text": "Gemma-3-4B-It", "url": "https://huggingface.co/google/gemma-3-4b-it"},
+        {"text": "Qwen2.5-7B-Instruct", "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct"},
     ]

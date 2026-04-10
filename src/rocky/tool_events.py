@@ -359,13 +359,11 @@ def _summarize_web_list(
             continue
         url = str(item.get("url") or "").strip()
         title = str(item.get("title") or item.get("text") or "").strip()
-        snippet = str(item.get("snippet") or "").strip()
         text = title or url
         if text:
             detail = f"{text} ({url})" if url and url not in text else text
-            facts.append(_fact("result", detail[:240], title=title, url=url))
-        if snippet:
-            facts.append(_fact("snippet", f"Snippet: {snippet[:180]}", url=url))
+            lead_prefix = "Lead: " if name == "search_web" else ""
+            facts.append(_fact("result", f"{lead_prefix}{detail[:232]}", title=title, url=url))
         if url and (artifact := _artifact("url", url, source=name)):
             artifacts.append(artifact)
 

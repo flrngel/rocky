@@ -9,7 +9,7 @@ def test_router_meta_and_data() -> None:
     assert meta.lane == Lane.META
     data = router.route('analyze this spreadsheet and tell me the key columns')
     assert data.task_class == TaskClass.DATA
-    assert 'data' in data.tool_families
+    assert data.tool_families == ['filesystem', 'shell']
 
 
 def test_router_detects_shell_execution_requests() -> None:
@@ -39,7 +39,7 @@ def test_router_prefers_repo_route_for_git_status_question() -> None:
 
     assert route.task_class == TaskClass.REPO
     assert route.task_signature == 'repo/general'
-    assert 'git' in route.tool_families
+    assert route.tool_families == ['filesystem', 'shell']
 
 
 def test_router_prefers_repo_route_for_shell_history_code_lookup() -> None:
@@ -181,6 +181,19 @@ def test_router_treats_person_profile_investigation_as_research() -> None:
     assert route.task_class == TaskClass.RESEARCH
     assert route.task_signature == 'research/live_compare/general'
     assert 'web' in route.tool_families
+
+
+def test_router_treats_trending_openweight_model_query_as_research() -> None:
+    router = Router()
+
+    route = router.route(
+        "find huggingface openweight llm models that are trending right now. "
+        "filter models that have parameters under 12B. you should find at least 10 models and show me as a list."
+    )
+
+    assert route.task_class == TaskClass.RESEARCH
+    assert route.task_signature == "research/live_compare/general"
+    assert "web" in route.tool_families
 
 
 def test_router_prefers_automation_for_empty_workspace_python_project() -> None:

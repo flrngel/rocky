@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from rocky.core.router import RouteDecision, Lane, TaskClass
 from rocky.core.runtime_state import AnswerContract, EvidenceGraph
 from rocky.core.verifiers import VerifierRegistry
@@ -159,6 +161,437 @@ def test_verifier_accepts_uncertainty_when_evidence_is_missing() -> None:
     )
 
     assert result.status == "pass"
+
+
+def test_verifier_rejects_short_counted_list_for_live_research() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="Research request",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    result = verifier.verify(
+        prompt=(
+            "find huggingface openweight llm models that are trending right now. "
+            "filter models that have parameters under 12B. you should find at least 10 models and show me as a list."
+        ),
+        route=route,
+        task_class=route.task_class,
+        output=(
+            "- Qwen3-8B\n"
+            "- Gemma-3-4B-It\n"
+            "- Llama-3.2-3B-Instruct\n\n"
+            "Sources: https://huggingface.co/models?sort=trending"
+        ),
+        tool_events=[
+            {"type": "tool_result", "name": "search_web", "success": True, "text": '{"success": true, "data": []}'},
+            {
+                "type": "tool_result",
+                "name": "fetch_url",
+                "success": True,
+                "text": (
+                    '{"success": true, "data": {"url": "https://huggingface.co/models?sort=trending", '
+                    '"link_items": [{"text": "Qwen3-8B", "url": "https://huggingface.co/Qwen/Qwen3-8B"}]}}'
+                ),
+            },
+            {
+                "type": "tool_result",
+                "name": "extract_links",
+                "success": True,
+                "text": '[{"text": "Qwen3-8B", "url": "https://huggingface.co/Qwen/Qwen3-8B"}]',
+            },
+        ],
+    )
+
+    assert result.status == "fail"
+    assert result.failure_class == "minimum_list_count_not_met"
+
+
+def test_verifier_rejects_counted_live_list_without_enough_live_item_evidence() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="Research request",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    result = verifier.verify(
+        prompt=(
+            "find huggingface openweight llm models that are trending right now. "
+            "filter models that have parameters under 12B. you should find at least 10 models and show me as a list."
+        ),
+        route=route,
+        task_class=route.task_class,
+        output="\n".join(f"- Model {index}" for index in range(1, 11))
+        + "\n\nSources: https://huggingface.co/models?sort=trending",
+        tool_events=[
+            {"type": "tool_result", "name": "search_web", "success": True, "text": '{"success": true, "data": []}'},
+            {
+                "type": "tool_result",
+                "name": "fetch_url",
+                "success": True,
+                "text": (
+                    '{"success": true, "data": {"url": "https://huggingface.co/models?sort=trending", '
+                    '"link_items": [{"text": "Qwen3-8B", "url": "https://huggingface.co/Qwen/Qwen3-8B"}]}}'
+                ),
+            },
+            {
+                "type": "tool_result",
+                "name": "extract_links",
+                "success": True,
+                "text": '[{"text": "Gemma-3-4B-It", "url": "https://huggingface.co/google/gemma-3-4b-it"}]',
+            },
+        ],
+        answer_contract=AnswerContract(
+            current_question="find huggingface openweight llm models under 12B",
+            target_scope="research",
+            missing_evidence=["Need evidence for at least 10 live items, but only 2 item candidates were observed."],
+            uncertainty_required=True,
+            format_requirements=["Present the answer as a list with at least 10 items if evidence supports them."],
+        ),
+    )
+
+    assert result.status == "fail"
+    assert result.failure_class == "counted_list_missing_live_evidence"
+
+
+def test_verifier_rejects_counted_research_list_with_unobserved_item_url() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="Research request",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+    graph = EvidenceGraph(thread_id="thread_test")
+    link_items = [
+        {"text": f"Org/Model-{index}-7B Text Generation • 7B", "url": f"https://huggingface.co/Org/Model-{index}-7B"}
+        for index in range(1, 11)
+    ]
+    for item in link_items:
+        graph.add_claim(
+            f"Observed linked item {item['text']} at {item['url']}",
+            "tool_observed",
+            "fetch_url",
+            confidence=0.78,
+        )
+    tool_events = [
+        {
+            "type": "tool_result",
+            "name": "search_web",
+            "success": True,
+            "text": '{"success": true, "data": [{"title": "Models", "url": "https://huggingface.co/models"}]}',
+        },
+        {
+            "type": "tool_result",
+            "name": "fetch_url",
+            "success": True,
+            "arguments": {"url": "https://huggingface.co/models?sort=trending"},
+            "text": json.dumps(
+                {
+                    "success": True,
+                    "summary": "Fetched https://huggingface.co/models?sort=trending",
+                    "data": {
+                        "url": "https://huggingface.co/models?sort=trending",
+                        "link_items": link_items[:5],
+                    },
+                }
+            ),
+        },
+        {
+            "type": "tool_result",
+            "name": "fetch_url",
+            "success": True,
+            "arguments": {"url": "https://huggingface.co/models?sort=downloads"},
+            "text": json.dumps(
+                {
+                    "success": True,
+                    "summary": "Fetched https://huggingface.co/models?sort=downloads",
+                    "data": {
+                        "url": "https://huggingface.co/models?sort=downloads",
+                        "link_items": link_items[5:],
+                    },
+                }
+            ),
+        },
+    ]
+    output_lines = [
+        f"{index}. **Org/Model-{index}-7B** (7B) - https://huggingface.co/Org/Model-{index}-7B"
+        for index in range(1, 11)
+    ]
+    output_lines[2] = "3. **Org/Model-3-7B** (7B) - https://hugging/Org/Model-3-7B"
+
+    result = verifier.verify(
+        prompt="find trending openweight llm models under 12B. you should find at least 10 models and show me as a list.",
+        route=route,
+        task_class=route.task_class,
+        output="\n".join(output_lines) + "\n\nSources:\n- https://huggingface.co/models?sort=trending",
+        tool_events=tool_events,
+        evidence_graph=graph,
+        answer_contract=AnswerContract(
+            current_question="find trending openweight llm models under 12B",
+            target_scope="research",
+            missing_evidence=[],
+            uncertainty_required=False,
+        ),
+    )
+
+    assert result.status == "fail"
+    assert result.failure_class == "research_list_item_url_unverified"
+
+
+def test_verifier_rejects_counted_research_list_without_parameter_evidence() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="Research request",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+    graph = EvidenceGraph(thread_id="thread_test")
+    link_items = [
+        {"text": f"Org/Model-{index}-7B Text Generation • 7B", "url": f"https://huggingface.co/Org/Model-{index}-7B"}
+        for index in range(1, 11)
+    ]
+    link_items[6] = {"text": "Org/Model-7 Text Generation", "url": "https://huggingface.co/Org/Model-7"}
+    for item in link_items:
+        graph.add_claim(
+            f"Observed linked item {item['text']} at {item['url']}",
+            "tool_observed",
+            "fetch_url",
+            confidence=0.78,
+        )
+    tool_events = [
+        {
+            "type": "tool_result",
+            "name": "search_web",
+            "success": True,
+            "text": '{"success": true, "data": [{"title": "Models", "url": "https://huggingface.co/models"}]}',
+        },
+        {
+            "type": "tool_result",
+            "name": "fetch_url",
+            "success": True,
+            "arguments": {"url": "https://huggingface.co/models?sort=trending"},
+            "text": json.dumps(
+                {
+                    "success": True,
+                    "summary": "Fetched https://huggingface.co/models?sort=trending",
+                    "data": {
+                        "url": "https://huggingface.co/models?sort=trending",
+                        "link_items": link_items,
+                    },
+                }
+            ),
+        },
+        {
+            "type": "tool_result",
+            "name": "fetch_url",
+            "success": True,
+            "arguments": {"url": "https://huggingface.co/models?sort=downloads"},
+            "text": '{"success": true, "data": {"url": "https://huggingface.co/models?sort=downloads"}}',
+        },
+    ]
+    output_lines = [
+        f"{index}. **Org/Model-{index}-7B** (7B) - https://huggingface.co/Org/Model-{index}-7B"
+        for index in range(1, 11)
+    ]
+    output_lines[6] = "7. **Org/Model-7** - https://huggingface.co/Org/Model-7"
+
+    result = verifier.verify(
+        prompt="find trending openweight llm models under 12B. you should find at least 10 models and show me as a list.",
+        route=route,
+        task_class=route.task_class,
+        output="\n".join(output_lines) + "\n\nSources:\n- https://huggingface.co/models?sort=trending",
+        tool_events=tool_events,
+        evidence_graph=graph,
+        answer_contract=AnswerContract(
+            current_question="find trending openweight llm models under 12B",
+            target_scope="research",
+            missing_evidence=[],
+            uncertainty_required=False,
+        ),
+    )
+
+    assert result.status == "fail"
+    assert result.failure_class == "research_list_parameter_filter_unverified"
+
+
+def test_verifier_accepts_research_recovery_after_browser_failure_and_fetch_success() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="Research request",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    result = verifier.verify(
+        prompt="find the latest trending openweight llm models under 12B",
+        route=route,
+        task_class=route.task_class,
+        output=(
+            "I could not determine enough verified items yet.\n\n"
+            "Sources: https://huggingface.co/models?sort=trending"
+        ),
+        tool_events=[
+            {"type": "tool_result", "name": "search_web", "success": True, "text": '{"success": true, "data": []}'},
+            {
+                "type": "tool_result",
+                "name": "browser_render_page",
+                "success": False,
+                "text": '{"success": false, "data": {"error": "browser unavailable"}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "fetch_url",
+                "success": True,
+                "text": '{"success": true, "data": {"url": "https://huggingface.co/models?sort=trending"}}',
+            },
+        ],
+        answer_contract=AnswerContract(
+            current_question="find the latest trending openweight llm models under 12B",
+            target_scope="research",
+            missing_evidence=["Need evidence for at least 10 live items, but only 0 item candidates were observed."],
+            uncertainty_required=True,
+        ),
+    )
+
+    assert result.status == "pass"
+
+
+def test_verifier_rejects_early_counted_list_insufficiency_for_shallow_research() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="Research request",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    result = verifier.verify(
+        prompt=(
+            "find huggingface openweight llm models that are trending right now. "
+            "filter models that have parameters under 12B. you should find at least 10 models and show me as a list."
+        ),
+        route=route,
+        task_class=route.task_class,
+        output=(
+            "I could not determine enough verified models yet.\n\n"
+            "Sources: https://huggingface.co/models?sort=trending&pipeline_tag=text-generation"
+        ),
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "search_web",
+                "success": True,
+                "text": '{"success": true, "data": [{"title": "Trending models", "url": "https://huggingface.co/models?sort=trending"}]}',
+            },
+            {
+                "type": "tool_result",
+                "name": "fetch_url",
+                "success": True,
+                "arguments": {"url": "https://huggingface.co/models?sort=trending"},
+                "text": '{"success": true, "data": {"url": "https://huggingface.co/models?sort=trending"}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "extract_links",
+                "success": True,
+                "arguments": {"url": "https://huggingface.co/models?sort=trending&pipeline_tag=text-generation"},
+                "text": '{"success": true, "data": []}',
+            },
+            {
+                "type": "tool_result",
+                "name": "search_web",
+                "success": False,
+                "text": '{"success": false, "data": {"error": "anti-bot challenge"}}',
+            },
+        ],
+        answer_contract=AnswerContract(
+            current_question="find huggingface openweight llm models under 12B",
+            target_scope="research",
+            missing_evidence=["Need evidence for at least 10 live items, but only 4 item candidates were observed."],
+            uncertainty_required=True,
+        ),
+    )
+
+    assert result.status == "fail"
+    assert result.failure_class == "counted_list_search_stopped_too_early"
+
+
+def test_verifier_moves_past_late_search_failures_to_counted_list_checks() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="Research request",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    result = verifier.verify(
+        prompt=(
+            "find the latest trending openweight llm models under 12B. "
+            "you should find at least 10 models and show me as a list."
+        ),
+        route=route,
+        task_class=route.task_class,
+            output="I could not determine enough verified items yet.\n\nSources: https://huggingface.co/models?sort=trending",
+        tool_events=[
+            {
+                "type": "tool_result",
+                "name": "search_web",
+                "success": True,
+                "text": '{"success": true, "data": [{"title": "Trending models", "url": "https://huggingface.co/models?sort=trending"}]}',
+            },
+            {
+                "type": "tool_result",
+                "name": "fetch_url",
+                "success": True,
+                "arguments": {"url": "https://huggingface.co/models?sort=trending"},
+                "text": '{"success": true, "data": {"url": "https://huggingface.co/models?sort=trending"}}',
+            },
+            {
+                "type": "tool_result",
+                "name": "extract_links",
+                "success": True,
+                "arguments": {"url": "https://huggingface.co/models?sort=trending"},
+                "text": '{"success": true, "data": []}',
+            },
+            {
+                "type": "tool_result",
+                "name": "search_web",
+                "success": False,
+                "text": '{"success": false, "data": {"error": "anti-bot challenge"}}',
+            },
+        ],
+        answer_contract=AnswerContract(
+            current_question="find the latest trending openweight llm models under 12B",
+            target_scope="research",
+            missing_evidence=["Need evidence for at least 10 live items, but only 2 item candidates were observed."],
+            uncertainty_required=True,
+        ),
+    )
+
+    assert result.status == "fail"
+    assert result.failure_class == "counted_list_search_stopped_too_early"
 
 
 def test_verifier_rejects_empty_final_answer_even_without_tools() -> None:
@@ -453,7 +886,7 @@ def test_verifier_accepts_graceful_live_price_failure_even_with_some_tool_failur
     assert result.status == "pass"
 
 
-def test_verifier_requires_runtime_inspection_tool() -> None:
+def test_verifier_accepts_shell_runtime_inspection_tool() -> None:
     verifier = VerifierRegistry()
     route = RouteDecision(
         lane=Lane.STANDARD,
@@ -474,8 +907,7 @@ def test_verifier_requires_runtime_inspection_tool() -> None:
         ],
     )
 
-    assert result.status == "fail"
-    assert "inspect_runtime_versions" in result.message
+    assert result.status == "pass"
 
 
 def test_verifier_requires_execution_for_verifying_automation() -> None:
@@ -803,7 +1235,7 @@ def test_verifier_requires_multiple_steps_for_spreadsheet_analysis() -> None:
     )
 
     assert result.status == "fail"
-    assert "two spreadsheet-analysis steps" in result.message.lower()
+    assert "run_shell_command" in result.message or "read_file" in result.message
 
 
 def test_verifier_accepts_recovered_automation_shell_retries() -> None:
@@ -1201,6 +1633,40 @@ def test_claim_support_accepts_fact_supported_by_multiple_observed_claims() -> N
 
     result = verifier._claim_support(
         "- **C1104** (matches P1102 exactly)",
+        graph,
+        contract,
+        route,
+    )
+
+    assert result.status == "pass"
+
+
+def test_claim_support_ignores_generic_found_list_intro() -> None:
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.REPO,
+        risk="medium",
+        reasoning="Local runtime inspection",
+        tool_families=["shell"],
+        task_signature="local/runtime_inspection",
+    )
+    graph = EvidenceGraph(thread_id="thread_1")
+    ruby_claim = graph.add_claim(
+        "Stdout: /opt/homebrew/opt/ruby/bin/ruby Ruby 3.4.2",
+        "tool_observed",
+        "run_shell_command",
+        confidence=0.9,
+    )
+    contract = AnswerContract(
+        current_question="show me what ruby version i have and where it lives",
+        target_scope="local",
+        relevant_claim_ids=[ruby_claim.claim_id],
+        allowed_claim_ids=[ruby_claim.claim_id],
+    )
+
+    result = verifier._claim_support(
+        "The following Ruby versions and locations were found:\n\n- Ruby 3.4.2: `/opt/homebrew/opt/ruby/bin/ruby`",
         graph,
         contract,
         route,

@@ -71,6 +71,24 @@ def test_answer_contract_forbids_inference_without_support() -> None:
     assert uncertain.missing_evidence
 
 
+def test_answer_contract_requires_enough_live_items_for_counted_research_lists() -> None:
+    graph = EvidenceGraph(thread_id="thread_live")
+    graph.add_entity("live_item", "Model Alpha 7B", source="fetch_url")
+    graph.add_entity("live_item", "Model Beta 8B", source="extract_links")
+
+    builder = AnswerContractBuilder()
+    contract = builder.build(
+        "find huggingface openweight llm models that are trending right now. "
+        "filter models that have parameters under 12B. you should find at least 10 models and show me as a list.",
+        "research/live_compare/general",
+        None,
+        graph,
+    )
+
+    assert "Present the answer as a list with at least 10 items if evidence supports them." in contract.format_requirements
+    assert contract.uncertainty_required is True
+    assert any("Need evidence for at least 10 live items" in item for item in contract.missing_evidence)
+
 
 def test_memory_capture_uses_supported_claims_not_answer_rhetoric(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path / "project", tmp_path / "global")
@@ -286,3 +304,59 @@ def test_evidence_accumulator_captures_spreadsheet_headers_and_sheet_rows() -> N
     assert any("Sheet Summary in data/metrics.xlsx: 10 rows, 3 columns, headers month, total, region" == text for text in claim_texts)
     assert any("Sheet Summary sample row in data/metrics.xlsx: jan, 101, US" == text for text in claim_texts)
     assert any("Sheet Regions in data/metrics.xlsx: 5 rows, 2 columns, headers region, sales" == text for text in claim_texts)
+
+
+def test_evidence_accumulator_captures_live_items_from_web_listing_tools() -> None:
+    graph = EvidenceGraph(thread_id="thread_live")
+    accumulator = EvidenceAccumulator()
+    fetch_payload = {
+        "success": True,
+        "data": {
+            "url": "https://huggingface.co/models?sort=trending",
+            "title": "Trending models",
+            "text_excerpt": "Trending open-weight models on Hugging Face.",
+            "link_items": [
+                {"text": "Qwen3-8B", "url": "https://huggingface.co/Qwen/Qwen3-8B"},
+                {"text": "Llama-3.2-3B-Instruct", "url": "https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct"},
+            ],
+        },
+    }
+    extract_payload = {
+        "success": True,
+        "data": [
+            {"text": "Mistral-Small-3.1-24B", "url": "https://huggingface.co/mistralai/Mistral-Small-3.1-24B"},
+            {"text": "Gemma-3-4B-It", "url": "https://huggingface.co/google/gemma-3-4b-it"},
+        ],
+    }
+
+    accumulator.ingest_tool_events(
+        graph,
+        [
+            {
+                "type": "tool_result",
+                "name": "fetch_url",
+                "success": True,
+                "arguments": {"url": "https://huggingface.co/models?sort=trending"},
+                "text": json.dumps(fetch_payload),
+            },
+            {
+                "type": "tool_result",
+                "name": "extract_links",
+                "success": True,
+                "arguments": {"url": "https://huggingface.co/models?sort=trending"},
+                "text": json.dumps(extract_payload),
+            },
+        ],
+    )
+
+    entity_values = [entity["value"] for entity in graph.entities if entity["kind"] == "live_item"]
+    artifact_refs = [artifact["ref"] for artifact in graph.artifacts]
+    claim_texts = [claim.text for claim in graph.claims]
+
+    assert "Qwen3-8B" in entity_values
+    assert "Llama-3.2-3B-Instruct" in entity_values
+    assert "Gemma-3-4B-It" in entity_values
+    assert "https://huggingface.co/Qwen/Qwen3-8B" in artifact_refs
+    assert "https://huggingface.co/google/gemma-3-4b-it" in artifact_refs
+    assert any("Observed linked item Qwen3-8B at https://huggingface.co/Qwen/Qwen3-8B" == text for text in claim_texts)
+    assert any("Observed extracted item Gemma-3-4B-It at https://huggingface.co/google/gemma-3-4b-it" == text for text in claim_texts)

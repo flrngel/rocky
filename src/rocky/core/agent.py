@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 import httpx
 
 from rocky.core.context import ContextBuilder
+from rocky.core.research_synthesis import build_counted_research_list_answer
+from rocky.core.run_flow import RunFlowManager
 from rocky.core.runtime_state import (
     AnswerContractBuilder,
     EvidenceAccumulator,
@@ -379,6 +381,117 @@ class AgentCore:
             )
         return prepared
 
+    def _merge_usage(self, *payloads: dict[str, Any] | None) -> dict[str, int]:
+        totals = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "requests": 0,
+        }
+        for payload in payloads:
+            if not isinstance(payload, dict):
+                continue
+            prompt_tokens = int(payload.get("prompt_tokens", payload.get("input_tokens", 0)) or 0)
+            completion_tokens = int(payload.get("completion_tokens", payload.get("output_tokens", 0)) or 0)
+            total_tokens = int(payload.get("total_tokens", 0) or 0)
+            if total_tokens <= 0:
+                total_tokens = prompt_tokens + completion_tokens
+            totals["prompt_tokens"] += max(0, prompt_tokens)
+            totals["completion_tokens"] += max(0, completion_tokens)
+            totals["total_tokens"] += max(0, total_tokens)
+            request_count = int(payload.get("requests", 0) or 0)
+            if request_count <= 0 and (prompt_tokens or completion_tokens or total_tokens):
+                request_count = 1
+            totals["requests"] += max(0, request_count)
+        if totals["total_tokens"] <= 0:
+            totals["total_tokens"] = totals["prompt_tokens"] + totals["completion_tokens"]
+        return totals
+
+    def _should_use_flow_loop(self, route: RouteDecision) -> bool:
+        return bool(route.tool_families) and route.task_signature.startswith(("research/", "site/"))
+
+    def _verification_needs_more_evidence(self, route: RouteDecision, result: VerificationResult) -> bool:
+        if not route.task_signature.startswith(("research/", "site/")):
+            return False
+        failure_class = str(result.failure_class or "")
+        if failure_class in {
+            "answer_claimed_knowledge_without_reference",
+            "minimum_list_count_not_met",
+            "counted_list_missing_live_evidence",
+            "counted_list_live_pages_too_shallow",
+            "counted_list_search_stopped_too_early",
+            "unsupported_claim_introduced",
+        }:
+            return True
+        message = str(result.message or "").lower()
+        return any(
+            phrase in message
+            for phrase in (
+                "missing evidence",
+                "unsupported",
+                "gather more",
+                "open more",
+                "live item evidence",
+                "stopped the counted",
+                "too early",
+                "tool failures observed",
+            )
+        )
+
+    def _research_evidence_backed_answer(
+        self,
+        prompt: str,
+        route: RouteDecision,
+        tool_events: list[dict[str, Any]],
+    ) -> str:
+        return build_counted_research_list_answer(prompt, route.task_signature, tool_events)
+
+    def _try_research_evidence_backed_answer(
+        self,
+        *,
+        prompt: str,
+        route: RouteDecision,
+        active_thread,
+        evidence_graph,
+        tool_events: list[dict[str, Any]],
+    ) -> tuple[str, Any, VerificationResult] | None:
+        candidate_text = self._research_evidence_backed_answer(prompt, route, tool_events)
+        if not candidate_text:
+            return None
+        answer_contract = self.answer_contract_builder.build(
+            prompt,
+            route.task_signature,
+            active_thread,
+            evidence_graph,
+            prior_answer=self.last_answer,
+        )
+        verification_result = self.verifier_registry.verify(
+            prompt=prompt,
+            route=route,
+            task_class=route.task_class,
+            output=candidate_text,
+            tool_events=tool_events,
+            active_thread=active_thread,
+            evidence_graph=evidence_graph,
+            answer_contract=answer_contract,
+            prior_answer=self.last_answer,
+            continuation_expected=False,
+        )
+        if verification_result.status != "pass":
+            return None
+        return candidate_text, answer_contract, verification_result
+
+    def _system_prompt_with_flow(self, system_prompt: str, flow: RunFlowManager) -> str:
+        return (
+            f"{system_prompt}\n\n"
+            "## Run flow\n"
+            "You are working inside a run-local flow controller. Think from the flow and the active task note, not from broad transcript memory.\n"
+            "Only the active task may drive the next burst. Finished tasks should influence you only through imported rollups.\n\n"
+            f"{flow.flow_prompt_block()}\n\n"
+            "## Active task note\n"
+            f"{flow.active_task_prompt_block()}\n"
+        )
+
     def _session_title(self, prompt: str) -> str:
         head = " ".join(prompt.strip().split())
         return head[:60] or "session"
@@ -693,12 +806,7 @@ class AgentCore:
                 except Exception:
                     payload = None
                 if payload is not None:
-                    return safe_json(
-                        {
-                            "output_path": output_path,
-                            "verified_output": payload,
-                        }
-                    )
+                    return safe_json(payload)
         if wants_json_only and route.task_signature == "automation/general":
             observation = self._latest_successful_shell_observation(tool_events)
             if observation is not None:
@@ -1003,6 +1111,8 @@ class AgentCore:
         try:
             payload = json.loads(candidate)
         except Exception:
+            return VerificationResult("learned_constraints_judge_v1", "pass", "")
+        if not isinstance(payload, dict):
             return VerificationResult("learned_constraints_judge_v1", "pass", "")
         status = str(payload.get("status", "pass")).strip().lower()
         reason = str(payload.get("reason", "")).strip()
@@ -1835,11 +1945,596 @@ class AgentCore:
                 continue
             if allowed and claim.claim_id not in allowed:
                 continue
-            claims.append(claim.as_record())
+                claims.append(claim.as_record())
         return claims[:24]
 
     def _verification_payload(self, result: VerificationResult) -> dict[str, Any]:
         return result.as_record()
+
+    def _run_flow_controlled_loop(
+        self,
+        *,
+        prompt: str,
+        route: RouteDecision,
+        active_thread,
+        evidence_graph,
+        context,
+        system_prompt: str,
+        provider,
+        selected_tool_objects: list[Any],
+        selected_tool_names: set[str],
+        stream: bool,
+        event_handler: Callable[[dict[str, Any]], None] | None,
+        provider_name: str,
+    ) -> tuple[ProviderResponse, str, Any, VerificationResult, dict[str, Any]]:
+        run_flow = RunFlowManager(
+            self.tool_registry.context.workspace_root / ".rocky" / "runs",
+            prompt=prompt,
+            task_signature=route.task_signature,
+            task_class=route.task_class.value if hasattr(route.task_class, "value") else str(route.task_class),
+            execution_cwd=self.tool_registry.context.execution_relative,
+            minimum_list_items=requested_minimum_list_items(prompt),
+        )
+        aggregate_tool_events: list[dict[str, Any]] = []
+        aggregate_usage: dict[str, Any] = {}
+        raw_bursts: list[dict[str, Any]] = []
+        final_text = ""
+        answer_contract = self.answer_contract_builder.build(
+            prompt,
+            route.task_signature,
+            active_thread,
+            evidence_graph,
+            prior_answer=self.last_answer,
+        )
+        verification_result = VerificationResult(
+            "flow_task_loop_v1",
+            "fail",
+            "Flow-controlled task loop ended before producing a verified final answer.",
+            memory_promotion_allowed=False,
+            learning_promotion_allowed=False,
+        )
+        max_bursts = 8 if route.task_signature.startswith(("research/", "site/")) else 4
+        prompt_url = self._explicit_live_url_in_prompt(prompt)
+        pending_explicit_fetch_url = bool(prompt_url)
+        browser_runtime_unavailable = False
+        attempted_fetch_urls: set[str] = set()
+        successful_live_targets: set[tuple[str, str]] = set()
+
+        for _burst_index in range(max_bursts):
+            current_task = run_flow.run.active_task()
+            burst_system_prompt = self._system_prompt_with_flow(system_prompt, run_flow)
+            burst_messages = [Message(role="user", content=run_flow.user_prompt_for_burst())]
+
+            successful_tool_names: list[str] = []
+
+            def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+                nonlocal pending_explicit_fetch_url, browser_runtime_unavailable
+                guarded = self._browser_dependency_install_guard(route, prompt, name, arguments)
+                if guarded is not None:
+                    event = ensure_tool_result_event({"type": "tool_result", "name": name, "arguments": arguments, "text": guarded})
+                    run_flow.ingest_tool_event(event)
+                    return guarded
+                guarded = self._research_explicit_url_guard(
+                    route,
+                    prompt,
+                    name,
+                    arguments,
+                    pending_explicit_fetch_url,
+                )
+                if guarded is not None:
+                    event = ensure_tool_result_event({"type": "tool_result", "name": name, "arguments": arguments, "text": guarded})
+                    run_flow.ingest_tool_event(event)
+                    return guarded
+                guarded = self._research_fetch_before_browser_guard(
+                    route,
+                    name,
+                    arguments,
+                    attempted_fetch_urls,
+                )
+                if guarded is not None:
+                    event = ensure_tool_result_event({"type": "tool_result", "name": name, "arguments": arguments, "text": guarded})
+                    run_flow.ingest_tool_event(event)
+                    return guarded
+                guarded = self._automation_shell_write_guard(
+                    route,
+                    prompt,
+                    name,
+                    arguments,
+                    successful_tool_names,
+                )
+                if guarded is not None:
+                    event = ensure_tool_result_event({"type": "tool_result", "name": name, "arguments": arguments, "text": guarded})
+                    run_flow.ingest_tool_event(event)
+                    return guarded
+                guarded = self._shell_follow_up_guard(
+                    route,
+                    prompt,
+                    name,
+                    successful_tool_names,
+                )
+                if guarded is not None:
+                    event = ensure_tool_result_event({"type": "tool_result", "name": name, "arguments": arguments, "text": guarded})
+                    run_flow.ingest_tool_event(event)
+                    return guarded
+                guarded = self._browser_runtime_unavailable_guard(
+                    route,
+                    name,
+                    browser_runtime_unavailable,
+                )
+                if guarded is not None:
+                    event = ensure_tool_result_event({"type": "tool_result", "name": name, "arguments": arguments, "text": guarded})
+                    run_flow.ingest_tool_event(event)
+                    return guarded
+                guarded = self._duplicate_live_page_guard(
+                    route,
+                    name,
+                    arguments,
+                    successful_live_targets,
+                )
+                if guarded is not None:
+                    event = ensure_tool_result_event(
+                        {
+                            "type": "tool_result",
+                            "name": name,
+                            "arguments": arguments,
+                            "text": guarded,
+                        }
+                    )
+                    run_flow.ingest_tool_event(event)
+                    return guarded
+                text = self._run_selected_tool(route, selected_tool_names, name, arguments)
+                event = ensure_tool_result_event(
+                    {
+                        "type": "tool_result",
+                        "name": name,
+                        "arguments": arguments,
+                        "text": text,
+                        "success": True,
+                    }
+                )
+                try:
+                    payload = json.loads(text)
+                except Exception:
+                    payload = {}
+                requested_url = str(arguments.get("url") or "").strip().rstrip(").,;:!?]")
+                if name == "fetch_url" and requested_url:
+                    attempted_fetch_urls.add(requested_url)
+                if payload.get("success", False):
+                    successful_tool_names.append(name)
+                    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                    if name == "fetch_url" and pending_explicit_fetch_url and prompt_url and requested_url == prompt_url:
+                        pending_explicit_fetch_url = False
+                    url = self._live_tool_requested_url(name, arguments) or str(data.get("url") or data.get("final_url") or "").strip()
+                    if name in {"fetch_url", "agent_browser"} and url:
+                        successful_live_targets.add((name, url))
+                elif name == "fetch_url" and pending_explicit_fetch_url and prompt_url and requested_url == prompt_url:
+                    pending_explicit_fetch_url = False
+                if name == "agent_browser" and self._payload_error_code(payload) == "browser_runtime_unavailable":
+                    browser_runtime_unavailable = True
+                run_flow.ingest_tool_event(event)
+                return text
+
+            prefetch_url = run_flow.suggested_fetch_url()
+            if prefetch_url and "fetch_url" in selected_tool_names and prefetch_url not in attempted_fetch_urls:
+                prefetch_text = execute_tool("fetch_url", {"url": prefetch_url})
+                prefetch_events = self._prepare_tool_events(
+                    [
+                        ensure_tool_result_event(
+                            {
+                                "type": "tool_result",
+                                "name": "fetch_url",
+                                "arguments": {"url": prefetch_url},
+                                "text": prefetch_text,
+                            }
+                        )
+                    ]
+                )
+                aggregate_tool_events.extend(prefetch_events)
+                raw_bursts.append({"task_id": current_task.task_id, "direct_tool": "fetch_url", "url": prefetch_url})
+                self.evidence_accumulator.ingest_tool_events(evidence_graph, prefetch_events)
+                active_thread.add_tool_events(prefetch_events)
+                self._sync_thread_from_evidence(active_thread, evidence_graph)
+                evidence_backed = self._try_research_evidence_backed_answer(
+                    prompt=prompt,
+                    route=route,
+                    active_thread=active_thread,
+                    evidence_graph=evidence_graph,
+                    tool_events=aggregate_tool_events,
+                )
+                if evidence_backed is not None:
+                    final_text, answer_contract, verification_result = evidence_backed
+                    run_flow.advance(
+                        evidence_graph=evidence_graph,
+                        tool_events=aggregate_tool_events,
+                        final_output_ready=True,
+                    )
+                    aggregate_response = ProviderResponse(
+                        text=final_text,
+                        usage=aggregate_usage,
+                        raw={"bursts": raw_bursts, "evidence_backed_final": True},
+                        tool_events=aggregate_tool_events,
+                    )
+                    return aggregate_response, final_text, answer_contract, verification_result, {
+                        **run_flow.run_summary,
+                        "provider": provider_name,
+                    }
+                run_flow.advance(
+                    evidence_graph=evidence_graph,
+                    tool_events=aggregate_tool_events,
+                    final_output_ready=False,
+                )
+                current_task = run_flow.run.active_task()
+                burst_system_prompt = self._system_prompt_with_flow(system_prompt, run_flow)
+                burst_messages = [Message(role="user", content=run_flow.user_prompt_for_burst())]
+
+            burst_response = provider.run_with_tools(
+                system_prompt=burst_system_prompt,
+                messages=burst_messages,
+                tools=[tool.openai_schema() for tool in selected_tool_objects],
+                execute_tool=execute_tool,
+                max_rounds=self._tool_loop_rounds(route),
+                event_handler=event_handler if stream else None,
+            )
+            burst_response = ProviderResponse(
+                text=burst_response.text,
+                usage=burst_response.usage,
+                raw=burst_response.raw,
+                tool_events=self._prepare_tool_events(burst_response.tool_events),
+            )
+            raw_bursts.append({"task_id": current_task.task_id, "raw": burst_response.raw})
+            aggregate_tool_events.extend(burst_response.tool_events)
+            aggregate_usage = self._merge_usage(aggregate_usage, burst_response.usage)
+            self.evidence_accumulator.ingest_tool_events(evidence_graph, burst_response.tool_events)
+            active_thread.add_tool_events(burst_response.tool_events)
+            self._sync_thread_from_evidence(active_thread, evidence_graph)
+            run_flow.note_burst_output(burst_response.text)
+
+            if current_task.kind != "finalize":
+                if burst_response.text.strip():
+                    candidate_text = self._normalize_output(
+                        route,
+                        burst_response.text,
+                        prompt,
+                        aggregate_tool_events,
+                    )
+                    candidate_text = self._repair_structured_output(
+                        provider,
+                        burst_system_prompt,
+                        prompt,
+                        route,
+                        candidate_text,
+                        aggregate_tool_events,
+                        stream=stream,
+                    )
+                    candidate_contract = self.answer_contract_builder.build(
+                        prompt,
+                        route.task_signature,
+                        active_thread,
+                        evidence_graph,
+                        prior_answer=self.last_answer,
+                    )
+                    candidate_verification = self.verifier_registry.verify(
+                        prompt=prompt,
+                        route=route,
+                        task_class=route.task_class,
+                        output=candidate_text,
+                        tool_events=aggregate_tool_events,
+                        active_thread=active_thread,
+                        evidence_graph=evidence_graph,
+                        answer_contract=candidate_contract,
+                        prior_answer=self.last_answer,
+                        continuation_expected=False,
+                    )
+                    if candidate_verification.status == "pass":
+                        learned_constraints_result = self._judge_learned_constraints(
+                            provider,
+                            prompt=prompt,
+                            output=candidate_text,
+                            route=route,
+                            context=context,
+                            tool_events=aggregate_tool_events,
+                        )
+                        if learned_constraints_result.status == "pass":
+                            run_flow.advance(
+                                evidence_graph=evidence_graph,
+                                tool_events=aggregate_tool_events,
+                                final_output_ready=True,
+                            )
+                            aggregate_response = ProviderResponse(
+                                text=candidate_text,
+                                usage=aggregate_usage,
+                                raw={"bursts": raw_bursts},
+                                tool_events=aggregate_tool_events,
+                            )
+                            return aggregate_response, candidate_text, candidate_contract, candidate_verification, {
+                                **run_flow.run_summary,
+                                "provider": provider_name,
+                            }
+                evidence_backed = self._try_research_evidence_backed_answer(
+                    prompt=prompt,
+                    route=route,
+                    active_thread=active_thread,
+                    evidence_graph=evidence_graph,
+                    tool_events=aggregate_tool_events,
+                )
+                if evidence_backed is not None:
+                    final_text, answer_contract, verification_result = evidence_backed
+                    run_flow.advance(
+                        evidence_graph=evidence_graph,
+                        tool_events=aggregate_tool_events,
+                        final_output_ready=True,
+                    )
+                    aggregate_response = ProviderResponse(
+                        text=final_text,
+                        usage=aggregate_usage,
+                        raw={"bursts": raw_bursts, "evidence_backed_final": True},
+                        tool_events=aggregate_tool_events,
+                    )
+                    return aggregate_response, final_text, answer_contract, verification_result, {
+                        **run_flow.run_summary,
+                        "provider": provider_name,
+                    }
+                run_flow.advance(
+                    evidence_graph=evidence_graph,
+                    tool_events=aggregate_tool_events,
+                    final_output_ready=False,
+                )
+                continue
+
+            final_text = self._normalize_output(
+                route,
+                burst_response.text,
+                prompt,
+                aggregate_tool_events,
+            )
+            final_text = self._repair_structured_output(
+                provider,
+                burst_system_prompt,
+                prompt,
+                route,
+                final_text,
+                aggregate_tool_events,
+                stream=stream,
+            )
+            answer_contract = self.answer_contract_builder.build(
+                prompt,
+                route.task_signature,
+                active_thread,
+                evidence_graph,
+                prior_answer=self.last_answer,
+            )
+            verification_result = self.verifier_registry.verify(
+                prompt=prompt,
+                route=route,
+                task_class=route.task_class,
+                output=final_text,
+                tool_events=aggregate_tool_events,
+                active_thread=active_thread,
+                evidence_graph=evidence_graph,
+                answer_contract=answer_contract,
+                prior_answer=self.last_answer,
+                continuation_expected=False,
+            )
+            if verification_result.status == "pass" and self._should_judge_automation_output(
+                route,
+                prompt,
+                aggregate_tool_events,
+                stream=stream,
+            ):
+                verification_result = self._judge_automation_output(provider, prompt, aggregate_tool_events)
+            if verification_result.status == "pass":
+                learned_constraints_result = self._judge_learned_constraints(
+                    provider,
+                    prompt=prompt,
+                    output=final_text,
+                    route=route,
+                    context=context,
+                    tool_events=aggregate_tool_events,
+                )
+                if learned_constraints_result.status == "fail":
+                    verification_result = learned_constraints_result
+            if verification_result.status == "pass":
+                run_flow.advance(
+                    evidence_graph=evidence_graph,
+                    tool_events=aggregate_tool_events,
+                    final_output_ready=True,
+                )
+                aggregate_response = ProviderResponse(
+                    text=final_text,
+                    usage=aggregate_usage,
+                    raw={"bursts": raw_bursts},
+                    tool_events=aggregate_tool_events,
+                )
+                return aggregate_response, final_text, answer_contract, verification_result, {
+                    **run_flow.run_summary,
+                    "provider": provider_name,
+                }
+
+            evidence_backed = self._try_research_evidence_backed_answer(
+                prompt=prompt,
+                route=route,
+                active_thread=active_thread,
+                evidence_graph=evidence_graph,
+                tool_events=aggregate_tool_events,
+            )
+            if evidence_backed is not None:
+                final_text, answer_contract, verification_result = evidence_backed
+                run_flow.advance(
+                    evidence_graph=evidence_graph,
+                    tool_events=aggregate_tool_events,
+                    final_output_ready=True,
+                )
+                aggregate_response = ProviderResponse(
+                    text=final_text,
+                    usage=aggregate_usage,
+                    raw={"bursts": raw_bursts, "evidence_backed_final": True},
+                    tool_events=aggregate_tool_events,
+                )
+                return aggregate_response, final_text, answer_contract, verification_result, {
+                    **run_flow.run_summary,
+                    "provider": provider_name,
+                }
+
+            run_flow.note_verification_failure(verification_result)
+            if self._verification_needs_more_evidence(route, verification_result):
+                continue
+            if route.tool_families:
+                retry_response = self._retry_after_verification_failure(
+                    provider,
+                    burst_system_prompt,
+                    burst_messages,
+                    route,
+                    selected_tool_objects,
+                    selected_tool_names,
+                    verification_result.message,
+                    final_text,
+                    prompt,
+                    aggregate_tool_events,
+                    stream=stream,
+                    event_handler=event_handler,
+                )
+                retry_response = ProviderResponse(
+                    text=retry_response.text,
+                    usage=retry_response.usage,
+                    raw=retry_response.raw,
+                    tool_events=self._prepare_tool_events(retry_response.tool_events),
+                )
+                raw_bursts.append({"task_id": current_task.task_id, "raw": retry_response.raw, "retry": True})
+                aggregate_tool_events.extend(retry_response.tool_events)
+                aggregate_usage = self._merge_usage(aggregate_usage, retry_response.usage)
+                self.evidence_accumulator.ingest_tool_events(evidence_graph, retry_response.tool_events)
+                active_thread.add_tool_events(retry_response.tool_events)
+                self._sync_thread_from_evidence(active_thread, evidence_graph)
+                run_flow.note_burst_output(retry_response.text)
+                final_text = self._normalize_output(
+                    route,
+                    retry_response.text,
+                    prompt,
+                    aggregate_tool_events,
+                )
+                final_text = self._repair_structured_output(
+                    provider,
+                    burst_system_prompt,
+                    prompt,
+                    route,
+                    final_text,
+                    aggregate_tool_events,
+                    stream=stream,
+                )
+                answer_contract = self.answer_contract_builder.build(
+                    prompt,
+                    route.task_signature,
+                    active_thread,
+                    evidence_graph,
+                    prior_answer=self.last_answer,
+                )
+                verification_result = self.verifier_registry.verify(
+                    prompt=prompt,
+                    route=route,
+                    task_class=route.task_class,
+                    output=final_text,
+                    tool_events=aggregate_tool_events,
+                    active_thread=active_thread,
+                    evidence_graph=evidence_graph,
+                    answer_contract=answer_contract,
+                    prior_answer=self.last_answer,
+                    continuation_expected=False,
+                )
+                if verification_result.status == "pass" and self._should_judge_automation_output(
+                    route,
+                    prompt,
+                    aggregate_tool_events,
+                    stream=stream,
+                ):
+                    verification_result = self._judge_automation_output(provider, prompt, aggregate_tool_events)
+                if verification_result.status == "pass":
+                    learned_constraints_result = self._judge_learned_constraints(
+                        provider,
+                        prompt=prompt,
+                        output=final_text,
+                        route=route,
+                        context=context,
+                        tool_events=aggregate_tool_events,
+                    )
+                    if learned_constraints_result.status == "fail":
+                        verification_result = learned_constraints_result
+                if verification_result.status == "pass":
+                    run_flow.advance(
+                        evidence_graph=evidence_graph,
+                        tool_events=aggregate_tool_events,
+                        final_output_ready=True,
+                    )
+                    aggregate_response = ProviderResponse(
+                        text=final_text,
+                        usage=aggregate_usage,
+                        raw={"bursts": raw_bursts},
+                        tool_events=aggregate_tool_events,
+                    )
+                    return aggregate_response, final_text, answer_contract, verification_result, {
+                        **run_flow.run_summary,
+                        "provider": provider_name,
+                    }
+
+                evidence_backed = self._try_research_evidence_backed_answer(
+                    prompt=prompt,
+                    route=route,
+                    active_thread=active_thread,
+                    evidence_graph=evidence_graph,
+                    tool_events=aggregate_tool_events,
+                )
+                if evidence_backed is not None:
+                    final_text, answer_contract, verification_result = evidence_backed
+                    run_flow.advance(
+                        evidence_graph=evidence_graph,
+                        tool_events=aggregate_tool_events,
+                        final_output_ready=True,
+                    )
+                    aggregate_response = ProviderResponse(
+                        text=final_text,
+                        usage=aggregate_usage,
+                        raw={"bursts": raw_bursts, "evidence_backed_final": True},
+                        tool_events=aggregate_tool_events,
+                    )
+                    return aggregate_response, final_text, answer_contract, verification_result, {
+                        **run_flow.run_summary,
+                        "provider": provider_name,
+                    }
+
+        evidence_backed = self._try_research_evidence_backed_answer(
+            prompt=prompt,
+            route=route,
+            active_thread=active_thread,
+            evidence_graph=evidence_graph,
+            tool_events=aggregate_tool_events,
+        )
+        if evidence_backed is not None:
+            final_text, answer_contract, verification_result = evidence_backed
+            run_flow.advance(
+                evidence_graph=evidence_graph,
+                tool_events=aggregate_tool_events,
+                final_output_ready=True,
+            )
+            aggregate_response = ProviderResponse(
+                text=final_text,
+                usage=aggregate_usage,
+                raw={"bursts": raw_bursts, "evidence_backed_final": True},
+                tool_events=aggregate_tool_events,
+            )
+            return aggregate_response, final_text, answer_contract, verification_result, {
+                **run_flow.run_summary,
+                "provider": provider_name,
+            }
+
+        aggregate_response = ProviderResponse(
+            text=final_text or "Rocky did not finish the task.",
+            usage=aggregate_usage,
+            raw={"bursts": raw_bursts},
+            tool_events=aggregate_tool_events,
+        )
+        return aggregate_response, aggregate_response.text, answer_contract, verification_result, {
+            **run_flow.run_summary,
+            "provider": provider_name,
+        }
 
     def run(
         self,
@@ -1985,6 +2680,64 @@ class AgentCore:
         selected_skills = [item["name"] for item in context.skills]
         selected_policies = [item["name"] for item in context.learned_policies]
         provider_name = provider.__class__.__name__
+
+        if self._should_use_flow_loop(route):
+            provider_response, normalized_text, answer_contract, verification_result, flow_state = self._run_flow_controlled_loop(
+                prompt=prompt,
+                route=route,
+                active_thread=active_thread,
+                evidence_graph=evidence_graph,
+                context=context,
+                system_prompt=system_prompt,
+                provider=provider,
+                selected_tool_objects=selected_tool_objects,
+                selected_tool_names=selected_tool_names,
+                stream=stream,
+                event_handler=event_handler,
+                provider_name=provider_name,
+            )
+            verification = self._verification_payload(verification_result)
+            active_thread.add_answer(normalized_text)
+            active_thread.add_verification(verification)
+            self._sync_thread_from_evidence(active_thread, evidence_graph)
+            thread_registry.save()
+            trace = {
+                "route": asdict(route),
+                "continuation": {
+                    "action": continuation.action,
+                    "thread_id": continuation.thread_id,
+                    "confidence": continuation.confidence,
+                    "score": continuation.score,
+                    "reasons": continuation.reasons,
+                },
+                "selected_tools": selected_tools,
+                "selected_skills": selected_skills,
+                "selected_policies": selected_policies,
+                "provider": provider_name,
+                "verification": verification,
+                "usage": provider_response.usage,
+                "tool_events": provider_response.tool_events,
+                "context": context_summary,
+                "raw_provider_keys": sorted(provider_response.raw.keys()),
+                "thread": thread_registry.snapshot(active_thread.thread_id),
+                "answer_contract": answer_contract.as_record(),
+                "supported_claims": self._supported_claim_records(evidence_graph, answer_contract),
+                "run_state": flow_state,
+            }
+            current_thread = trace.get("thread", {}).get("current_thread") or {}
+            if current_thread:
+                current_thread["summary_text"] = active_thread.summary_text()
+                trace["thread"]["current_thread"] = current_thread
+            return self._finalize(
+                session=session,
+                prompt=prompt,
+                text=normalized_text,
+                route=route,
+                verification=verification,
+                usage=provider_response.usage,
+                trace=trace,
+                options=options,
+            )
 
         provider_response = None
         attempts = 3

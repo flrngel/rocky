@@ -364,6 +364,16 @@ class AnswerContractBuilder:
         }
         return len(values)
 
+    def _opened_live_url_count(self, evidence_graph: EvidenceGraph) -> int:
+        refs = {
+            str(item.get("ref") or "").strip()
+            for item in evidence_graph.artifacts
+            if str(item.get("kind") or "") == "url"
+            and str(item.get("source") or "") in {"fetch_url", "agent_browser", "browser_render_page"}
+            and str(item.get("ref") or "").strip()
+        }
+        return len(refs)
+
     def build(
         self,
         prompt: str,
@@ -409,10 +419,19 @@ class AnswerContractBuilder:
                 requirements.append("Present the answer as a list.")
         if route_task_signature.startswith(("research/", "site/")) and minimum_items > 0:
             observed_live_items = self._observed_live_item_count(evidence_graph)
+            opened_live_urls = self._opened_live_url_count(evidence_graph)
+            if opened_live_urls < 2:
+                missing.append(
+                    f"Need more than one opened live page before finalizing a counted live-research list; only {opened_live_urls} opened live page(s) are in evidence so far."
+                )
             if observed_live_items < minimum_items:
                 missing.append(
                     f"Need evidence for at least {minimum_items} live items, but only {observed_live_items} item candidates were observed from opened or extracted live sources so far."
                 )
+        elif route_task_signature.startswith(("research/", "site/")) and prompt_requests_list_output(prompt):
+            opened_live_urls = self._opened_live_url_count(evidence_graph)
+            if opened_live_urls < 1:
+                missing.append("Need at least one opened live page before finalizing a live-research list.")
         short_prompt = len(prompt.split()) <= 18
         do_not_repeat = bool(thread and (short_prompt or REFERENCE_RE.search(prompt)))
         if prior_answer and len(prior_answer.split()) > 60 and short_prompt:
@@ -753,26 +772,12 @@ class EvidenceAccumulator:
                         continue
                     url = str(item.get("url") or "").strip()
                     title = " ".join(str(item.get("title") or "").split())[:240]
-                    snippet = " ".join(str(item.get("snippet") or "").split())[:240]
                     if url:
                         graph.add_artifact("url", url, source=name)
-                        graph.add_claim(f"Consulted live source {url}", "tool_observed", name, confidence=0.8)
+                        graph.add_entity("lead_url", url, source=name)
                     if title:
                         prefix = f'Search result for "{query}": ' if query else "Search result: "
-                        graph.add_claim(
-                            f"{prefix}{title}",
-                            "tool_observed",
-                            name,
-                            confidence=0.8,
-                        )
-                    if title and snippet:
-                        graph.add_claim(
-                            f'Search snippet for "{title}": {snippet}',
-                            "tool_observed",
-                            name,
-                            confidence=0.72,
-                            status="provisional",
-                        )
+                        graph.add_decision(f"{prefix}{title}", source=name)
             elif name in {"fetch_url", "browser_render_page", "agent_browser"}:
                 url = str(arguments.get("url") or data.get("url") or data.get("final_url") or "").strip()
                 title = " ".join(str(data.get("title") or "").split())[:240]

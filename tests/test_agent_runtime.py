@@ -166,9 +166,9 @@ class _RepairingExtractionProvider:
             tool_events=[
                 {
                     "type": "tool_result",
-                    "name": "run_python",
-                    "arguments": {"code": "print(...)"},
-                    "text": '{"success": true, "data": {"stdout": "{\\"rows\\": 2, \\"fields\\": [\\"name\\", \\"role\\"]}"}}',
+                    "name": "run_shell_command",
+                    "arguments": {"command": "printf '{\"rows\": 2, \"fields\": [\"name\", \"role\"]}\\n'", "timeout_s": 5},
+                    "text": '{"success": true, "data": {"command": "printf", "stdout": "{\\"rows\\": 2, \\"fields\\": [\\"name\\", \\"role\\"]}"}}',
                     "success": True,
                 }
             ],
@@ -1867,10 +1867,7 @@ def test_runtime_normalizes_repo_json_file_answers_with_output_path(tmp_path: Pa
         continue_session=False,
     )
 
-    assert json.loads(response.text) == {
-        "output_path": "decisions.json",
-        "verified_output": {"products": [{"product_id": "P1", "merge": ["C1"], "skip": ["C2"]}]},
-    }
+    assert json.loads(response.text) == {"products": [{"product_id": "P1", "merge": ["C1"], "skip": ["C2"]}]}
     assert response.verification["status"] == "pass"
 
 

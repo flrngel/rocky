@@ -14,7 +14,7 @@ from rocky.core.runtime_state import (
     prompt_requests_list_output,
     requested_minimum_list_items,
 )
-from rocky.tool_events import tool_event_payload
+from rocky.tool_events import tool_event_artifacts, tool_event_payload
 from rocky.util.text import extract_json_candidate
 
 SCRIPT_REFERENCE_RE = re.compile(
@@ -144,6 +144,13 @@ class VerifierRegistry:
 
     def _tool_payload(self, event: dict) -> dict:
         return tool_event_payload(event, exact=True)
+
+    def _tool_error_code(self, event: dict) -> str:
+        payload = self._tool_payload(event)
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            return str(metadata.get("error") or "").strip()
+        return ""
 
     def _shell_output_text(self, event: dict) -> str:
         payload = self._tool_payload(event)
@@ -635,15 +642,190 @@ class VerifierRegistry:
             plain_tokens = re.findall(r"[a-z0-9_.+-]+", plain.lower())
             if plain.endswith(":") and len(plain_tokens) <= 6:
                 continue
+            if re.match(r"^the following .{1,80}\b(?:was|were) found:$", plain, flags=re.I):
+                continue
             claims.append(stripped[:280])
         return claims[:12]
 
     def _output_list_count(self, output: str) -> int:
-        count = 0
+        return len(self._output_list_item_lines(output))
+
+    def _output_list_item_lines(self, output: str) -> list[str]:
+        lines: list[str] = []
+        in_sources = False
         for line in output.splitlines():
+            stripped = line.strip()
+            plain = re.sub(r"[`*_#]+", "", stripped).strip().lower()
+            if plain.startswith(("sources:", "source:", "references:", "reference:", "citations:", "citation:")):
+                in_sources = True
+                continue
+            if in_sources:
+                continue
             if LIST_ITEM_RE.match(line):
-                count += 1
-        return count
+                lines.append(stripped)
+        return lines
+
+    def _research_under_parameter_limit(self, prompt: str) -> float | None:
+        match = re.search(r"\b(?:under|below|less than)\s+(\d+(?:\.\d+)?)\s*b\b", prompt, flags=re.I)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+
+    def _parameter_b_sizes(self, text: str) -> list[float]:
+        sizes: list[float] = []
+        for match in re.finditer(r"(?<![a-z0-9])(\d+(?:\.\d+)?)\s*b\b", text, flags=re.I):
+            try:
+                sizes.append(float(match.group(1)))
+            except ValueError:
+                continue
+        return sizes
+
+    def _urls_in_text(self, text: str) -> list[str]:
+        return [match.rstrip(").,;:!?]") for match in re.findall(r"https?://[^\s)]+", text or "")]
+
+    def _research_counted_list_item_grounding(
+        self,
+        prompt: str,
+        route: RouteDecision,
+        output: str,
+        tool_events: list[dict],
+        evidence_graph: EvidenceGraph | None,
+    ) -> VerificationResult:
+        minimum_items = requested_minimum_list_items(prompt)
+        if minimum_items <= 0 or not route.task_signature.startswith(("research/", "site/")):
+            return VerificationResult("research_list_grounding_v1", "pass", "")
+        item_lines = self._output_list_item_lines(output)
+        if len(item_lines) < minimum_items:
+            return VerificationResult("research_list_grounding_v1", "pass", "")
+
+        artifact_urls: set[str] = set()
+        for event in tool_events:
+            if event.get("type") != "tool_result":
+                continue
+            for artifact in tool_event_artifacts(event):
+                if str(artifact.get("kind") or "") == "url":
+                    ref = str(artifact.get("ref") or "").strip().rstrip(").,;:!?]")
+                    if ref:
+                        artifact_urls.add(ref)
+            if str(event.get("name") or "") in {"fetch_url", "browser_render_page", "agent_browser", "extract_links"}:
+                payload = tool_event_payload(event, exact=True)
+                data = payload.get("data")
+                if isinstance(data, dict):
+                    for key in ("url", "final_url"):
+                        ref = str(data.get(key) or "").strip().rstrip(").,;:!?]")
+                        if ref:
+                            artifact_urls.add(ref)
+                    raw_items = [item for item in list(data.get("link_items") or []) if isinstance(item, dict)]
+                    raw_items.extend(item for item in list(data.get("items") or []) if isinstance(item, dict))
+                elif isinstance(data, list):
+                    raw_items = [item for item in data if isinstance(item, dict)]
+                else:
+                    raw_items = []
+                for item in raw_items:
+                    ref = str(item.get("url") or "").strip().rstrip(").,;:!?]")
+                    if ref:
+                        artifact_urls.add(ref)
+
+        live_claim_texts: list[str] = []
+        if evidence_graph is not None:
+            live_sources = {"fetch_url", "browser_render_page", "agent_browser"}
+            live_claim_texts = [
+                str(claim.text or "")
+                for claim in evidence_graph.claims
+                if claim.status in {"active", "provisional"} and claim.provenance_source in live_sources
+            ]
+        live_claim_lower = [text.lower() for text in live_claim_texts]
+
+        bad_urls: list[int] = []
+        unsupported: list[int] = []
+        bad_params: list[int] = []
+        missing_params: list[int] = []
+        markup_leaks: list[int] = []
+        modality_mismatches: list[int] = []
+        under_limit = self._research_under_parameter_limit(prompt)
+        wants_text_models = bool(re.search(r"\btext[- ]?(?:generation\s+)?models?\b|\btext-generation\b", prompt, flags=re.I))
+
+        for index, line in enumerate(item_lines[:minimum_items], start=1):
+            if re.search(r"</?[a-z][^>]*>", line, flags=re.I):
+                markup_leaks.append(index)
+            urls = self._urls_in_text(line)
+            if urls and not any(url in artifact_urls for url in urls):
+                bad_urls.append(index)
+                continue
+
+            line_lower = line.lower()
+            tokens = {
+                token
+                for token in re.findall(r"[a-z0-9_.+-]+", line_lower)
+                if len(token) >= 3 and token not in {"http", "https", "huggingface", "link", "model", "models"}
+            }
+            supported_by_url = bool(urls and any(url in artifact_urls for url in urls))
+            supported_by_claim = any(len(tokens & set(re.findall(r"[a-z0-9_.+-]+", claim))) >= 2 for claim in live_claim_lower)
+            if not supported_by_url and not supported_by_claim:
+                unsupported.append(index)
+
+            if under_limit is not None:
+                sizes = self._parameter_b_sizes(line)
+                if not sizes and urls:
+                    related_claims = [text for text in live_claim_texts if any(url in text for url in urls)]
+                    for claim_text in related_claims:
+                        sizes.extend(self._parameter_b_sizes(claim_text))
+                if not sizes:
+                    missing_params.append(index)
+                elif any(size >= under_limit for size in sizes):
+                    bad_params.append(index)
+            if wants_text_models and any(marker in line_lower for marker in ("text-to-image", "image-text-to-text", "image-to-text", "image-to-image")):
+                modality_mismatches.append(index)
+
+        if markup_leaks:
+            return VerificationResult(
+                "research_list_grounding_v1",
+                "fail",
+                f"Final research list contains leaked markup in item(s): {markup_leaks}. Rewrite those items from clean observed labels.",
+                failure_class="research_list_item_markup_leak",
+                unsupported_claim_ids=[f"list_item_{index}" for index in markup_leaks],
+            )
+        if bad_urls:
+            return VerificationResult(
+                "research_list_grounding_v1",
+                "fail",
+                f"Final research list contains URL(s) that were not observed in opened-page evidence at item(s): {bad_urls}. Use exact observed URLs from tool artifacts.",
+                failure_class="research_list_item_url_unverified",
+                unsupported_claim_ids=[f"list_item_{index}" for index in bad_urls],
+            )
+        if bad_params or missing_params:
+            detail = []
+            if bad_params:
+                detail.append(f"items violating the numeric parameter filter: {bad_params}")
+            if missing_params:
+                detail.append(f"items missing parameter evidence: {missing_params}")
+            return VerificationResult(
+                "research_list_grounding_v1",
+                "fail",
+                "Final research list does not verify the requested numeric filter for every listed item: " + "; ".join(detail) + ".",
+                failure_class="research_list_parameter_filter_unverified",
+                unsupported_claim_ids=[f"list_item_{index}" for index in [*bad_params, *missing_params]],
+            )
+        if modality_mismatches:
+            return VerificationResult(
+                "research_list_grounding_v1",
+                "fail",
+                f"Final research list includes item(s) whose stated modality conflicts with the requested text-model filter: {modality_mismatches}.",
+                failure_class="research_list_task_type_unverified",
+                unsupported_claim_ids=[f"list_item_{index}" for index in modality_mismatches],
+            )
+        if unsupported:
+            return VerificationResult(
+                "research_list_grounding_v1",
+                "fail",
+                f"Final research list contains item(s) that do not map to opened-page evidence: {unsupported}.",
+                failure_class="research_list_item_not_grounded",
+                unsupported_claim_ids=[f"list_item_{index}" for index in unsupported],
+            )
+        return VerificationResult("research_list_grounding_v1", "pass", "")
 
     def _claim_support(
         self,
@@ -688,7 +870,7 @@ class VerifierRegistry:
                     contributing_claims += 1
                 combined_tokens |= tokens
             combined_overlap = len(claim_tokens & combined_tokens)
-            threshold = 2 if route.task_signature.startswith(("repo/", "local/", "data/", "extract/", "automation/")) else 1
+            threshold = 2 if route.task_signature.startswith(("repo/", "local/", "data/", "extract/", "automation/", "research/", "site/")) else 1
             if best_overlap < threshold and not (
                 combined_overlap >= threshold and contributing_claims >= 2
             ):
@@ -762,6 +944,14 @@ class VerifierRegistry:
         minimum_items = requested_minimum_list_items(prompt)
         if minimum_items <= 0 and not prompt_requests_list_output(prompt):
             return VerificationResult("list_requirements_v1", "pass", "")
+        observed_count = self._output_list_count(output)
+        if minimum_items > 0 and observed_count >= minimum_items and self._acknowledges_missing_evidence(output):
+            return VerificationResult(
+                "list_requirements_v1",
+                "fail",
+                "Final answer gives the requested counted list but also says enough verified items were not found. Remove the contradictory insufficiency statement or continue gathering before answering.",
+                failure_class="counted_list_contradictory_insufficiency",
+            )
         if self._acknowledges_missing_evidence(output):
             if route.task_signature.startswith(("research/", "site/")) and minimum_items > 0:
                 successful_live_steps = sum(
@@ -779,7 +969,6 @@ class VerifierRegistry:
                         failure_class="counted_list_search_stopped_too_early",
                     )
             return VerificationResult("list_requirements_v1", "pass", "")
-        observed_count = self._output_list_count(output)
         if minimum_items > 0 and observed_count < minimum_items:
             return VerificationResult(
                 "list_requirements_v1",
@@ -807,6 +996,14 @@ class VerifierRegistry:
                 failure_class="counted_list_missing_live_evidence",
                 missing_evidence_ids=list(answer_contract.missing_evidence),
             )
+        if route.task_signature.startswith(("research/", "site/")) and minimum_items > 0:
+            if self._successful_live_url_count(tool_events) < 2:
+                return VerificationResult(
+                    "list_requirements_v1",
+                    "fail",
+                    "Counted live-research lists must come from more than one opened live page before the answer can be treated as complete.",
+                    failure_class="counted_list_live_pages_too_shallow",
+                )
         return VerificationResult("list_requirements_v1", "pass", "")
 
     def verify(
@@ -853,6 +1050,11 @@ class VerifierRegistry:
             result.learning_promotion_allowed = False
             return result
         result = self._list_requirements(prompt, route, output, tool_events, answer_contract)
+        if result.status != "pass":
+            result.memory_promotion_allowed = False
+            result.learning_promotion_allowed = False
+            return result
+        result = self._research_counted_list_item_grounding(prompt, route, output, tool_events, evidence_graph)
         if result.status != "pass":
             result.memory_promotion_allowed = False
             result.learning_promotion_allowed = False
@@ -1192,6 +1394,21 @@ class VerifierRegistry:
                 if event.get("type") == "tool_result" and event.get("success", True)
             }
             failure_names = {str(event.get("name", "")) for event in failures if event.get("name")}
+            nonfatal_guard_codes = {
+                "use_explicit_url_first",
+                "use_fetch_url_before_browser",
+                "browser_runtime_unavailable",
+                "use_web_fallback_after_browser_failure",
+                "reuse_previous_live_page_evidence",
+            }
+            if successful_live_names & {"fetch_url", "browser_render_page", "agent_browser"}:
+                all_failures_are_recoverable = all(
+                    self._tool_error_code(event) in nonfatal_guard_codes
+                    or str(event.get("name", "")) in {"search_web", "browser_render_page", "browser_screenshot"}
+                    for event in failures
+                )
+                if all_failures_are_recoverable:
+                    return VerificationResult("tool_failure_v1", "pass", "")
             if successful_live_names & {"fetch_url", "browser_render_page", "agent_browser"} and failure_names <= {
                 "search_web",
                 "browser_render_page",
