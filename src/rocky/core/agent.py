@@ -1259,6 +1259,64 @@ class AgentCore:
                 targets.add((name, url))
         return targets
 
+    def _explicit_live_url_in_prompt(self, prompt: str) -> str:
+        match = re.search(r"https?://\S+", prompt)
+        if not match:
+            return ""
+        return match.group(0).rstrip(").,;:!?]")
+
+    def _has_attempted_fetch_url(
+        self,
+        prompt_url: str,
+        tool_events: list[dict[str, Any]] | None,
+    ) -> bool:
+        if not prompt_url or not tool_events:
+            return False
+        for event in tool_events:
+            if event.get("type") != "tool_result":
+                continue
+            if str(event.get("name") or "") != "fetch_url":
+                continue
+            arguments = event.get("arguments") or {}
+            attempted = str(arguments.get("url") or "").strip().rstrip(").,;:!?]")
+            if attempted == prompt_url:
+                return True
+        return False
+
+    def _attempted_fetch_url_targets(self, tool_events: list[dict[str, Any]] | None) -> set[str]:
+        targets: set[str] = set()
+        if not tool_events:
+            return targets
+        for event in tool_events:
+            if event.get("type") != "tool_result":
+                continue
+            if str(event.get("name") or "") != "fetch_url":
+                continue
+            arguments = event.get("arguments") or {}
+            attempted = str(arguments.get("url") or "").strip().rstrip(").,;:!?]")
+            if attempted:
+                targets.add(attempted)
+        return targets
+
+    def _payload_error_code(self, payload: dict[str, Any]) -> str:
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            return str(metadata.get("error") or "").strip()
+        return ""
+
+    def _browser_runtime_unavailable_seen(self, tool_events: list[dict[str, Any]] | None) -> bool:
+        if not tool_events:
+            return False
+        for event in tool_events:
+            if event.get("type") != "tool_result" or event.get("success", True):
+                continue
+            if str(event.get("name") or "") != "agent_browser":
+                continue
+            payload = tool_event_payload(event, exact=True)
+            if self._payload_error_code(payload) == "browser_runtime_unavailable":
+                return True
+        return False
+
     def _research_follow_up_suggestions(self, prompt: str, tool_events: list[dict[str, Any]]) -> str:
         if not prompt_requests_list_output(prompt):
             return ""
@@ -1279,22 +1337,31 @@ class AgentCore:
             elif isinstance(data, list):
                 items = [item for item in data if isinstance(item, dict)]
             for item in items[:20]:
+                fragments: list[str] = []
                 url = str(item.get("url") or "").strip()
-                if not url:
-                    text = str(item.get("name") or item.get("text") or "").strip()
-                    if "/" in text and " " not in text:
-                        url = f"https://huggingface.co/{text}"
-                parts = [part for part in urlparse(url).path.split("/") if part]
-                if len(parts) < 2:
-                    continue
-                model_segment = parts[-1]
-                for raw_token in re.findall(r"[A-Za-z][A-Za-z0-9.+-]{2,}", model_segment):
-                    normalized = raw_token.lower().strip(".-+")
-                    if normalized in self._RESEARCH_TOKEN_STOPWORDS:
-                        continue
-                    if len(normalized) < 4:
-                        continue
-                    tokens[normalized] = tokens.get(normalized, 0) + 1
+                if url:
+                    parsed = urlparse(url)
+                    fragments.extend(part for part in parsed.path.split("/") if part)
+                for field in ("name", "text", "title"):
+                    value = str(item.get(field) or "").strip()
+                    if value:
+                        if "/" in value:
+                            fragments.append(value.rsplit("/", 1)[-1])
+                        else:
+                            fragments.append(value)
+                for fragment in fragments:
+                    for raw_token in re.findall(r"[A-Za-z][A-Za-z0-9.+-]{2,}", fragment):
+                        normalized_full = raw_token.lower().strip(".-+")
+                        variants = {normalized_full}
+                        base_variant = re.split(r"[-+]", normalized_full, maxsplit=1)[0].strip(".-+")
+                        if base_variant:
+                            variants.add(base_variant)
+                        for normalized in variants:
+                            if normalized in self._RESEARCH_TOKEN_STOPWORDS:
+                                continue
+                            if len(normalized) < 4:
+                                continue
+                            tokens[normalized] = tokens.get(normalized, 0) + 1
         ranked = [token for token, _count in sorted(tokens.items(), key=lambda item: (-item[1], item[0]))[:5]]
         if not ranked:
             return ""
@@ -1400,6 +1467,77 @@ class AgentCore:
             ),
             "data": {},
             "metadata": {"error": "use_web_fallback_after_browser_failure"},
+        }
+        return safe_json(payload)
+
+    def _research_explicit_url_guard(
+        self,
+        route: RouteDecision,
+        prompt: str,
+        name: str,
+        arguments: dict[str, Any],
+        pending_explicit_fetch_url: bool,
+    ) -> str | None:
+        if route.task_signature != "research/live_compare/general" or not pending_explicit_fetch_url:
+            return None
+        prompt_url = self._explicit_live_url_in_prompt(prompt)
+        if not prompt_url:
+            return None
+        requested_url = str(arguments.get("url") or "").strip().rstrip(").,;:!?]")
+        if name == "fetch_url" and requested_url == prompt_url:
+            return None
+        payload = {
+            "success": False,
+            "summary": (
+                f"The prompt already gives {prompt_url}. Start with `fetch_url` on that exact URL before using "
+                f"`{name}` or switching to other pages."
+            ),
+            "data": {"url": prompt_url, "requested_tool": name},
+            "metadata": {"error": "use_explicit_url_first"},
+        }
+        return safe_json(payload)
+
+    def _browser_runtime_unavailable_guard(
+        self,
+        route: RouteDecision,
+        name: str,
+        browser_runtime_unavailable: bool,
+    ) -> str | None:
+        if route.task_signature not in {"research/live_compare/general", "site/understanding/general"}:
+            return None
+        if name != "agent_browser" or not browser_runtime_unavailable:
+            return None
+        payload = {
+            "success": False,
+            "summary": (
+                "`agent_browser` is already known to be unavailable in this turn. Do not retry it. "
+                "Continue with `fetch_url` or `search_web` instead."
+            ),
+            "data": {},
+            "metadata": {"error": "use_web_fallback_after_browser_failure"},
+        }
+        return safe_json(payload)
+
+    def _research_fetch_before_browser_guard(
+        self,
+        route: RouteDecision,
+        name: str,
+        arguments: dict[str, Any],
+        attempted_fetch_urls: set[str],
+    ) -> str | None:
+        if route.task_signature != "research/live_compare/general" or name != "agent_browser":
+            return None
+        url = self._live_tool_requested_url(name, arguments).rstrip(").,;:!?]")
+        if not url or url in attempted_fetch_urls:
+            return None
+        payload = {
+            "success": False,
+            "summary": (
+                f"For live research, use `fetch_url` on {url} before opening it with `agent_browser`. "
+                "Escalate to browser only if the fetched page still leaves missing evidence."
+            ),
+            "data": {"url": url, "requested_tool": name},
+            "metadata": {"error": "use_fetch_url_before_browser"},
         }
         return safe_json(payload)
 
@@ -1564,8 +1702,30 @@ class AgentCore:
     ):
         successful_tool_names: list[str] = []
         successful_live_targets = self._successful_live_tool_targets(prior_tool_events)
+        prompt_url = self._explicit_live_url_in_prompt(prompt)
+        pending_explicit_fetch_url = bool(prompt_url and not self._has_attempted_fetch_url(prompt_url, prior_tool_events))
+        browser_runtime_unavailable = self._browser_runtime_unavailable_seen(prior_tool_events)
+        attempted_fetch_urls = self._attempted_fetch_url_targets(prior_tool_events)
 
         def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+            nonlocal pending_explicit_fetch_url, browser_runtime_unavailable
+            guarded = self._research_explicit_url_guard(
+                route,
+                prompt,
+                name,
+                arguments,
+                pending_explicit_fetch_url,
+            )
+            if guarded is not None:
+                return guarded
+            guarded = self._research_fetch_before_browser_guard(
+                route,
+                name,
+                arguments,
+                attempted_fetch_urls,
+            )
+            if guarded is not None:
+                return guarded
             guarded = self._automation_shell_write_guard(
                 route,
                 prompt,
@@ -1580,6 +1740,13 @@ class AgentCore:
                 prompt,
                 name,
                 successful_tool_names,
+            )
+            if guarded is not None:
+                return guarded
+            guarded = self._browser_runtime_unavailable_guard(
+                route,
+                name,
+                browser_runtime_unavailable,
             )
             if guarded is not None:
                 return guarded
@@ -1601,12 +1768,24 @@ class AgentCore:
                 payload = json.loads(text)
             except Exception:
                 payload = {}
+            if name == "fetch_url":
+                requested_url = str(arguments.get("url") or "").strip().rstrip(").,;:!?]")
+                if requested_url:
+                    attempted_fetch_urls.add(requested_url)
             if payload.get("success", False):
                 successful_tool_names.append(name)
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                if name == "fetch_url" and pending_explicit_fetch_url:
+                    if prompt_url and requested_url == prompt_url:
+                        pending_explicit_fetch_url = False
                 url = self._live_tool_requested_url(name, arguments) or str(data.get("url") or data.get("final_url") or "").strip()
                 if name in {"fetch_url", "agent_browser"} and url:
                     successful_live_targets.add((name, url))
+            elif name == "fetch_url" and pending_explicit_fetch_url:
+                if prompt_url and requested_url == prompt_url:
+                    pending_explicit_fetch_url = False
+            if name == "agent_browser" and self._payload_error_code(payload) == "browser_runtime_unavailable":
+                browser_runtime_unavailable = True
             return text
 
         repair_prompt = self._verification_repair_prompt(
@@ -1812,13 +1991,35 @@ class AgentCore:
         for attempt in range(attempts):
             successful_tool_names: list[str] = []
             successful_live_targets: set[tuple[str, str]] = set()
+            prompt_url = self._explicit_live_url_in_prompt(prompt)
+            pending_explicit_fetch_url = bool(prompt_url)
+            browser_runtime_unavailable = False
+            attempted_fetch_urls: set[str] = set()
 
             def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+                nonlocal pending_explicit_fetch_url, browser_runtime_unavailable
                 guarded = self._browser_dependency_install_guard(
                     route,
                     prompt,
                     name,
                     arguments,
+                )
+                if guarded is not None:
+                    return guarded
+                guarded = self._research_explicit_url_guard(
+                    route,
+                    prompt,
+                    name,
+                    arguments,
+                    pending_explicit_fetch_url,
+                )
+                if guarded is not None:
+                    return guarded
+                guarded = self._research_fetch_before_browser_guard(
+                    route,
+                    name,
+                    arguments,
+                    attempted_fetch_urls,
                 )
                 if guarded is not None:
                     return guarded
@@ -1836,6 +2037,13 @@ class AgentCore:
                     prompt,
                     name,
                     successful_tool_names,
+                )
+                if guarded is not None:
+                    return guarded
+                guarded = self._browser_runtime_unavailable_guard(
+                    route,
+                    name,
+                    browser_runtime_unavailable,
                 )
                 if guarded is not None:
                     return guarded
@@ -1857,12 +2065,24 @@ class AgentCore:
                     payload = json.loads(text)
                 except Exception:
                     payload = {}
+                if name == "fetch_url":
+                    requested_url = str(arguments.get("url") or "").strip().rstrip(").,;:!?]")
+                    if requested_url:
+                        attempted_fetch_urls.add(requested_url)
                 if payload.get("success", False):
                     successful_tool_names.append(name)
                     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                    if name == "fetch_url" and pending_explicit_fetch_url:
+                        if prompt_url and requested_url == prompt_url:
+                            pending_explicit_fetch_url = False
                     url = self._live_tool_requested_url(name, arguments) or str(data.get("url") or data.get("final_url") or "").strip()
                     if name in {"fetch_url", "agent_browser"} and url:
                         successful_live_targets.add((name, url))
+                elif name == "fetch_url" and pending_explicit_fetch_url:
+                    if prompt_url and requested_url == prompt_url:
+                        pending_explicit_fetch_url = False
+                if name == "agent_browser" and self._payload_error_code(payload) == "browser_runtime_unavailable":
+                    browser_runtime_unavailable = True
                 return text
 
             try:

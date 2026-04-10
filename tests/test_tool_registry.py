@@ -103,6 +103,21 @@ def test_research_route_exposes_web_tools_and_hides_shell_tools(tmp_path: Path) 
     assert "read_file" not in names
 
 
+def test_research_route_prefers_fetch_url_first_when_prompt_includes_url(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+
+    names = [
+        tool.name
+        for tool in runtime.tool_registry.select_for_task(
+            ["web", "browser"],
+            "research/live_compare/general",
+            "find text models under 12B parameters that are trending right now. start from https://huggingface.co/models",
+        )
+    ]
+
+    assert names[:3] == ["fetch_url", "search_web", "agent_browser"]
+
+
 
 def test_openai_tool_schema_defaults_to_closed_object_properties() -> None:
     tool = Tool(

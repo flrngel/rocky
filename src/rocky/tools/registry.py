@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from rocky.tools import browser, filesystem, shell, web
 from rocky.tools.base import Tool, ToolContext, ToolResult
 
@@ -65,6 +67,12 @@ TASK_TOOL_PRIORITY: dict[str, list[str]] = {
     ],
 }
 
+_URL_RE = re.compile(r"https?://\S+", re.I)
+
+
+def _prompt_contains_explicit_url(user_prompt: str) -> bool:
+    return bool(_URL_RE.search(user_prompt or ""))
+
 
 class ToolRegistry:
     def __init__(self, context: ToolContext) -> None:
@@ -112,7 +120,9 @@ class ToolRegistry:
         selected = self.select(families) if families else list(self.tools.values())
         if task_signature in READ_ONLY_TASK_SIGNATURES:
             selected = [tool for tool in selected if tool.name in READ_ONLY_TOOL_NAMES]
-        priority = TASK_TOOL_PRIORITY.get(task_signature, [])
+        priority = list(TASK_TOOL_PRIORITY.get(task_signature, []))
+        if task_signature == "research/live_compare/general" and _prompt_contains_explicit_url(user_prompt):
+            priority = ["fetch_url", "search_web", "agent_browser"]
         order = {name: index for index, name in enumerate(priority)}
         fallback = len(order) + 100
         preferred_families = set(families or [])

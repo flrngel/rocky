@@ -209,6 +209,9 @@ def _summarize_agent_browser(
     title = str(data.get("title") or "").strip()
     if title:
         facts.append(_fact("title", f"Title: {title}", title=title))
+    error = str(data.get("error") or "").strip()
+    if error:
+        facts.append(_fact("error", f"Error: {error.splitlines()[0][:220]}", error=truncate(error, 800)))
     for line in _informative_lines(str(data.get("snapshot") or ""), limit=4):
         facts.append(_fact("snapshot", f"Snapshot: {line}", snapshot=line))
     for item in list(data.get("items") or [])[:8]:

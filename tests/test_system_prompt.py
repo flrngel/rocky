@@ -109,6 +109,19 @@ def test_system_prompt_guides_repo_lookup_follow_up_reads() -> None:
     assert "After discovery, read the most likely file" in prompt
 
 
+def test_system_prompt_prefers_exact_url_before_browser_for_live_research() -> None:
+    prompt = build_system_prompt(
+        ContextPackage(instructions=[], memories=[], skills=[], learned_policies=[], tool_families=["web", "browser"]),
+        mode="bypass",
+        user_prompt="find text models under 12B parameters that are trending right now. start from https://huggingface.co/models",
+        task_signature="research/live_compare/general",
+    )
+
+    assert "start with `fetch_url` on that exact URL before searching elsewhere" in prompt
+    assert "Use `agent_browser` only if the fetched page still leaves missing evidence" in prompt
+    assert "send exactly one browser subcommand per tool call" in prompt
+
+
 def test_system_prompt_makes_learned_policy_prohibitions_hard_constraints() -> None:
     prompt = build_system_prompt(
         ContextPackage(

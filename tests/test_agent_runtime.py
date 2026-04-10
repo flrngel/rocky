@@ -11,6 +11,7 @@ from rocky.app import RockyRuntime
 from rocky.core.messages import Message
 from rocky.core.router import Lane, RouteDecision, TaskClass
 from rocky.providers.base import ProviderResponse
+from rocky.tools.base import ToolResult
 
 
 class _OkProvider:
@@ -528,6 +529,47 @@ class _GitHubResearchRetryProvider:
                         }
                     ),
                     "success": True,
+                },
+            ],
+        )
+
+
+class _BrowserUnavailableRetryProvider:
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+
+    def run_with_tools(self, system_prompt, messages, tools, execute_tool, max_rounds=8, event_handler=None) -> ProviderResponse:
+        self.tool_calls.append({"messages": messages, "tools": tools, "max_rounds": max_rounds})
+        fetch_text = execute_tool("fetch_url", {"url": "https://example.com"})
+        first_browser_text = execute_tool("agent_browser", {"command": "open https://example.com"})
+        second_browser_text = execute_tool("agent_browser", {"command": "snapshot -i --json"})
+        fetch_payload = json.loads(fetch_text)
+        first_browser_payload = json.loads(first_browser_text)
+        second_browser_payload = json.loads(second_browser_text)
+        return ProviderResponse(
+            text="- Example result from the page\n\nSources:\nhttps://example.com",
+            raw={"rounds": []},
+            tool_events=[
+                {
+                    "type": "tool_result",
+                    "name": "fetch_url",
+                    "arguments": {"url": "https://example.com"},
+                    "text": fetch_text,
+                    "success": bool(fetch_payload.get("success", False)),
+                },
+                {
+                    "type": "tool_result",
+                    "name": "agent_browser",
+                    "arguments": {"command": "open https://example.com"},
+                    "text": first_browser_text,
+                    "success": bool(first_browser_payload.get("success", False)),
+                },
+                {
+                    "type": "tool_result",
+                    "name": "agent_browser",
+                    "arguments": {"command": "snapshot -i --json"},
+                    "text": second_browser_text,
+                    "success": bool(second_browser_payload.get("success", False)),
                 },
             ],
         )
@@ -1276,6 +1318,53 @@ def test_duplicate_live_page_guard_blocks_reopening_same_research_url(tmp_path: 
     assert "already succeeded" in guarded
 
 
+def test_research_explicit_url_guard_requires_fetch_url_first(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="test",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    guarded = runtime.agent._research_explicit_url_guard(
+        route,
+        "find text models under 12B parameters that are trending right now. start from https://huggingface.co/models",
+        "agent_browser",
+        {"command": "open https://huggingface.co/models"},
+        True,
+    )
+
+    assert guarded is not None
+    assert "use_explicit_url_first" in guarded
+    assert "Start with `fetch_url` on that exact URL" in guarded
+
+
+def test_research_fetch_before_browser_guard_requires_fetch_on_new_research_url(tmp_path: Path) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="medium",
+        reasoning="test",
+        tool_families=["web", "browser"],
+        task_signature="research/live_compare/general",
+    )
+
+    guarded = runtime.agent._research_fetch_before_browser_guard(
+        route,
+        "agent_browser",
+        {"command": "open https://huggingface.co/models?task_categories=Text+Generation&sort=trending"},
+        set(),
+    )
+
+    assert guarded is not None
+    assert "use_fetch_url_before_browser" in guarded
+    assert "use `fetch_url` on https://huggingface.co/models?task_categories=Text+Generation&sort=trending before opening it" in guarded
+
+
 def test_research_follow_up_suggestions_derive_tokens_from_observed_live_items(tmp_path: Path) -> None:
     runtime = RockyRuntime.load_from(tmp_path)
 
@@ -1304,6 +1393,60 @@ def test_research_follow_up_suggestions_derive_tokens_from_observed_live_items(t
     assert "llama" in suggestion
     assert "gemma" in suggestion
     assert "same-site filter/search urls" in suggestion.lower()
+
+
+def test_runtime_blocks_repeat_agent_browser_after_runtime_unavailable(tmp_path: Path, monkeypatch) -> None:
+    runtime = RockyRuntime.load_from(tmp_path)
+    runtime.permissions.config.mode = "bypass"
+
+    provider = _BrowserUnavailableRetryProvider()
+    _set_provider(runtime, provider)
+
+    calls: list[tuple[str, dict]] = []
+
+    def fake_run(name: str, arguments: dict) -> ToolResult:
+        calls.append((name, dict(arguments)))
+        if name == "fetch_url":
+            return ToolResult(
+                True,
+                {
+                    "url": "https://example.com",
+                    "status_code": 200,
+                    "title": "Example",
+                    "text_excerpt": "Example page with one result.",
+                    "link_items": [],
+                    "links": [],
+                    "content_type": "text/html",
+                },
+                "Fetched https://example.com",
+            )
+        if name == "agent_browser":
+            return ToolResult(
+                False,
+                {"command": str(arguments.get("command") or ""), "url": "https://example.com"},
+                "agent-browser browser runtime is unavailable in this environment; use `fetch_url` instead.",
+                {"error": "browser_runtime_unavailable"},
+            )
+        raise AssertionError(f"Unexpected tool: {name}")
+
+    monkeypatch.setattr(runtime.tool_registry, "run", fake_run)
+
+    response = runtime.run_prompt(
+        "find text models under 12B parameters that are trending right now. start from https://example.com and show me as a list.",
+        continue_session=False,
+    )
+
+    agent_browser_calls = [item for item in calls if item[0] == "agent_browser"]
+    fetch_calls = [item for item in calls if item[0] == "fetch_url"]
+    assert len(fetch_calls) == 1
+    assert len(agent_browser_calls) == 1
+    second_browser_event = [
+        event
+        for event in response.trace["tool_events"]
+        if event.get("type") == "tool_result" and event.get("name") == "agent_browser"
+    ][-1]
+    assert second_browser_event["success"] is False
+    assert "already known to be unavailable" in second_browser_event["text"]
 
 
 def test_short_workspace_prompt_uses_project_instructions_to_expose_shell_tools(tmp_path: Path, monkeypatch) -> None:

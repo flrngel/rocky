@@ -154,7 +154,10 @@ def build_system_prompt(
         ):
             parts.append("For current company-price lookups, interpret the request as a stock quote unless the user explicitly asked for a product price. Prefer machine-readable CLI sources. Quote URLs that contain `?` or `&` so the shell does not misparse them. If multiple live sources fail because of rate limits, auth, or network errors, say you could not retrieve the live quote instead of inventing one.")
     if task_signature == "research/live_compare/general":
-        parts.append("For live research tasks, start by discovering sources with `search_web` unless the user already gave a concrete URL. Then open at least one source with `fetch_url` or `agent_browser` before concluding.")
+        if "http://" in user_prompt or "https://" in user_prompt:
+            parts.append("For live research tasks where the user already gave a concrete URL, start with `fetch_url` on that exact URL before searching elsewhere. Use `agent_browser` only if the fetched page still leaves missing evidence because the content requires rendering or interaction.")
+        else:
+            parts.append("For live research tasks, start by discovering sources with `search_web` unless the user already gave a concrete URL. Then open at least one source with `fetch_url` or `agent_browser` before concluding.")
         parts.append("If the user asks for people, members, leaders, biographies, ownership, or role relationships, verify each requested claim from live source content instead of answering from memory or from search-result titles alone.")
         if prompt_requests_list_output(user_prompt):
             minimum_items = requested_minimum_list_items(user_prompt)
@@ -166,6 +169,7 @@ def build_system_prompt(
                 parts.append(
                     "For live-research lists, do not stop at search hits alone. Open a listing page with `fetch_url` or `agent_browser` and build the final list only from observed live items."
                 )
+        parts.append("When using `agent_browser`, send exactly one browser subcommand per tool call. Do not chain `open`, `wait`, `snapshot`, or other steps together in one command string.")
         parts.append("If `agent_browser` is unavailable or fails, do not try to install Playwright or browsers from the shell. Fall back to `fetch_url` and continue the research.")
         parts.append("Return a real answer, not an empty placeholder, and include source URLs or a clear Sources section.")
     if task_signature == "site/understanding/general":
