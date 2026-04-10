@@ -83,3 +83,5 @@ def test_litellm_run_with_tools_normalizes_dict_arguments_and_function_call() ->
     assert assistant_message["content"] is None
     assert assistant_message["tool_calls"][0]["id"] == "call_1"
     assert tool_message["tool_call_id"] == "call_1"
+    assert tool_message["content"] == response.tool_events[-1]["model_text"]
+    assert not tool_message["content"].lstrip().startswith("{")

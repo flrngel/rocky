@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from rocky.tool_events import tool_event_artifacts, tool_event_payload
 from rocky.util.text import tokenize_keywords
 from rocky.util.time import utc_iso
 
@@ -421,12 +422,7 @@ class EvidenceAccumulator:
                 graph.add_entity("keyword", token, source="user_prompt")
 
     def _tool_payload(self, event: dict[str, Any]) -> dict[str, Any]:
-        text = str(event.get("text") or "")
-        try:
-            payload = json.loads(text)
-            return payload if isinstance(payload, dict) else {}
-        except Exception:
-            return {}
+        return tool_event_payload(event, exact=True)
 
     def ingest_tool_events(self, graph: EvidenceGraph, tool_events: list[dict[str, Any]]) -> None:
         for event in tool_events:
@@ -443,6 +439,12 @@ class EvidenceAccumulator:
                 graph.add_claim(f"Tool {name} failed: {summary}", "tool_observed", name, confidence=0.6, status="provisional")
                 continue
             path = str(arguments.get("path") or data.get("path") or "").strip()
+            if not path:
+                for artifact in tool_event_artifacts(event):
+                    if artifact.get("kind") == "path":
+                        path = str(artifact.get("ref") or "").strip()
+                        if path:
+                            break
             if path:
                 graph.add_artifact("path", path, source=name)
                 graph.add_claim(f"Observed path {path} via {name}", "tool_observed", name, confidence=0.9)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import json
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.document import Document
@@ -18,6 +17,7 @@ from rich.text import Text
 
 from rocky.commands.registry import CommandResult
 from rocky.config.loader import ConfigLoader
+from rocky.tool_events import tool_event_debug_text, tool_event_summary_text
 from rocky.config.wizard import run_config_wizard
 from rocky.ui.completion import build_completer
 from rocky.util.text import safe_json
@@ -69,17 +69,12 @@ class EventPrinter:
             self._stream_open = False
 
     def _tool_summary(self, event: dict) -> str:
+        summary = tool_event_summary_text(event).strip()
+        if summary:
+            return summary
         text = str(event.get("text", "")).strip()
         if not text:
             return "done"
-        try:
-            payload = json.loads(text)
-        except Exception:
-            return text.splitlines()[0][:160]
-        if isinstance(payload, dict):
-            summary = str(payload.get("summary", "")).strip()
-            if summary:
-                return summary
         return text.splitlines()[0][:160]
 
     def _tool_call_message(self, name: str) -> str:
@@ -200,7 +195,7 @@ class EventPrinter:
                 return
             self.console.print(
                 Panel(
-                    Text(str(event.get("text", ""))),
+                    Text(tool_event_debug_text(event)),
                     title=f"tool result: {event.get('name', '')}",
                     border_style="green" if event.get("success") else "red",
                 )

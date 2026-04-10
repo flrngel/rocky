@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from rocky.core.messages import Message
+from rocky.tool_events import tool_event_artifacts, tool_event_summary_text
 from rocky.util.text import tokenize_keywords
 from rocky.util.time import utc_iso
 
@@ -203,12 +204,19 @@ class SessionStore:
         verification_status = str(verification.get("status") or "")
         answer_excerpt = _excerpt(answer, 260)
         prompt_excerpt = _excerpt(prompt, 180)
-        tool_text = "\n".join(
-            str(event.get("text") or "")
+        tool_summaries = "\n".join(
+            tool_event_summary_text(event)
             for event in tool_events[-8:]
-            if isinstance(event, dict)
+            if isinstance(event, dict) and event.get("type") == "tool_result"
         )
-        paths = _path_candidates("\n".join([prompt, answer, tool_text]))
+        artifact_paths = [
+            str(artifact.get("ref") or "").strip()
+            for event in tool_events
+            if isinstance(event, dict)
+            for artifact in tool_event_artifacts(event)
+            if artifact.get("kind") == "path"
+        ]
+        paths = _path_candidates("\n".join([prompt, answer, tool_summaries, "\n".join(artifact_paths)]))
         summary_lines = [
             f"[{verification_status or 'unknown'}] {task_signature} @ {execution_cwd or '.'}",
             f"task: {prompt_excerpt}",

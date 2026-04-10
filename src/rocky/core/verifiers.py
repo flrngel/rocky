@@ -8,6 +8,7 @@ import re
 
 from rocky.core.router import RouteDecision, TaskClass
 from rocky.core.runtime_state import ActiveTaskThread, AnswerContract, EvidenceGraph
+from rocky.tool_events import tool_event_payload
 from rocky.util.text import extract_json_candidate
 
 SCRIPT_REFERENCE_RE = re.compile(
@@ -135,11 +136,7 @@ class VerifierRegistry:
         ]
 
     def _tool_payload(self, event: dict) -> dict:
-        try:
-            payload = json.loads(str(event.get("text", "")))
-            return payload if isinstance(payload, dict) else {}
-        except Exception:
-            return {}
+        return tool_event_payload(event, exact=True)
 
     def _shell_output_text(self, event: dict) -> str:
         payload = self._tool_payload(event)

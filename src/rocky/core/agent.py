@@ -19,6 +19,13 @@ from rocky.learning.manager import LearningManager
 from rocky.providers.base import ProviderResponse
 from rocky.providers.registry import ProviderRegistry
 from rocky.session.store import Session, SessionStore
+from rocky.tool_events import (
+    compact_tool_result_event,
+    ensure_tool_result_event,
+    tool_event_artifacts,
+    tool_event_brief_for_prompt,
+    tool_event_payload,
+)
 from rocky.tools.registry import ToolRegistry
 from rocky.util.io import read_text
 from rocky.util.text import extract_json_candidate, safe_json, tokenize_keywords
@@ -328,6 +335,24 @@ class AgentCore:
         trace["trace_path"] = str(trace_path)
         return str(trace_path)
 
+    def _tool_event_storage_dir(self) -> Path:
+        return self.traces_dir / "tool-results"
+
+    def _prepare_tool_events(self, tool_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        prepared: list[dict[str, Any]] = []
+        for event in tool_events:
+            if event.get("type") != "tool_result":
+                prepared.append(dict(event))
+                continue
+            normalized = ensure_tool_result_event(event)
+            prepared.append(
+                compact_tool_result_event(
+                    normalized,
+                    storage_dir=self._tool_event_storage_dir(),
+                )
+            )
+        return prepared
+
     def _session_title(self, prompt: str) -> str:
         head = " ".join(prompt.strip().split())
         return head[:60] or "session"
@@ -476,12 +501,7 @@ class AgentCore:
                 continue
             if event.get("name") != "run_shell_command":
                 continue
-            try:
-                payload = json.loads(str(event.get("text", "")))
-            except Exception:
-                continue
-            if not isinstance(payload, dict):
-                continue
+            payload = tool_event_payload(event, exact=True)
             data = payload.get("data")
             if not isinstance(data, dict):
                 continue
@@ -526,17 +546,19 @@ class AgentCore:
             arguments = event.get("arguments") or {}
             path = str(arguments.get("path", "")).strip()
             if not path:
-                try:
-                    payload = json.loads(str(event.get("text", "")))
-                except Exception:
-                    payload = {}
-                if isinstance(payload, dict):
-                    data = payload.get("data")
-                    metadata = payload.get("metadata")
-                    if isinstance(data, dict):
-                        path = str(data.get("path", "")).strip()
-                    if not path and isinstance(metadata, dict):
-                        path = str(metadata.get("path", "")).strip()
+                payload = tool_event_payload(event, exact=True)
+                data = payload.get("data")
+                metadata = payload.get("metadata")
+                if isinstance(data, dict):
+                    path = str(data.get("path", "")).strip()
+                if not path and isinstance(metadata, dict):
+                    path = str(metadata.get("path", "")).strip()
+            if not path:
+                for artifact in tool_event_artifacts(event):
+                    if artifact.get("kind") == "path":
+                        path = str(artifact.get("ref") or "").strip()
+                        if path:
+                            break
             if not path:
                 continue
             if self.verifier_registry._is_internal_path(path):
@@ -716,7 +738,7 @@ class AgentCore:
             return text
         evidence_chunks: list[str] = []
         for event in successful_results[-4:]:
-            payload = str(event.get("text", "")).strip()
+            payload = tool_event_brief_for_prompt(event)
             if payload:
                 evidence_chunks.append(f"Tool `{event.get('name', 'unknown')}` output:\n{payload[:4000]}")
         if not evidence_chunks:
@@ -805,7 +827,7 @@ class AgentCore:
                 continue
             name = str(event.get("name") or "tool_result").strip() or "tool_result"
             arguments = safe_json(event.get("arguments") or {})
-            text = self._truncate_text(event.get("text", ""), 900)
+            text = self._truncate_text(tool_event_brief_for_prompt(event), 900)
             relevant.append(f"{name} args={arguments}\n{text}")
         return "\n\n".join(relevant[-4:]) or "No successful tool evidence was captured."
 
@@ -1276,7 +1298,7 @@ class AgentCore:
         if not relevant_results:
             return VerificationResult("automation_output_judge_v1", "pass", "")
         evidence = "\n\n".join(
-            f"{event.get('name', 'tool_result')} {index}:\n{event.get('text', '')}"
+            f"{event.get('name', 'tool_result')} {index}:\n{tool_event_brief_for_prompt(event, exact=True)}"
             for index, event in enumerate(relevant_results[-4:], start=1)
         )
         judge_prompt = (
@@ -1654,6 +1676,12 @@ class AgentCore:
                     event_handler=event_handler,
                 )
         assert provider_response is not None
+        provider_response = ProviderResponse(
+            text=provider_response.text,
+            usage=provider_response.usage,
+            raw=provider_response.raw,
+            tool_events=self._prepare_tool_events(provider_response.tool_events),
+        )
 
         normalized_text = self._normalize_output(
             route,
@@ -1806,6 +1834,12 @@ class AgentCore:
                     prompt,
                     stream=stream,
                     event_handler=event_handler,
+                )
+                retry_response = ProviderResponse(
+                    text=retry_response.text,
+                    usage=retry_response.usage,
+                    raw=retry_response.raw,
+                    tool_events=self._prepare_tool_events(retry_response.tool_events),
                 )
                 provider_response = ProviderResponse(
                     text=retry_response.text,

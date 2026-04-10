@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from rocky.core.messages import Message
+from rocky.tool_events import tool_event_brief_for_prompt, tool_event_payload, tool_event_summary_text
 from rocky.util.text import extract_json_candidate, safe_json, tokenize_keywords
 
 
@@ -274,15 +275,11 @@ class PolicySynthesizer:
     def _tool_result_summary(self, event: dict[str, Any]) -> str:
         name = str(event.get("name") or "tool_result")
         status = "success" if event.get("success", True) else "failure"
-        raw_text = str(event.get("text") or "").strip()
         summary_parts: list[str] = []
-        text_body = raw_text
-        try:
-            payload = json.loads(raw_text)
-        except Exception:
-            payload = None
+        payload = tool_event_payload(event, exact=True)
+        text_body = tool_event_brief_for_prompt(event)
         if isinstance(payload, dict):
-            summary = str(payload.get("summary") or "").strip()
+            summary = tool_event_summary_text(event) or str(payload.get("summary") or "").strip()
             if summary:
                 summary_parts.append(summary)
             data = payload.get("data") or {}
@@ -351,11 +348,7 @@ class PolicySynthesizer:
         for event in trace.get("tool_events") or []:
             if event.get("type") != "tool_result" or not event.get("success", True):
                 continue
-            raw_text = str(event.get("text") or "")
-            try:
-                payload = json.loads(raw_text)
-            except Exception:
-                continue
+            payload = tool_event_payload(event, exact=True)
             if not isinstance(payload, dict):
                 continue
             data = payload.get("data")

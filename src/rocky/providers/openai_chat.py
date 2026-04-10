@@ -10,6 +10,14 @@ import httpx
 from rocky.config.models import ProviderConfig
 from rocky.core.messages import Message
 from rocky.providers.base import ProviderResponse, sanitize_assistant_text
+from rocky.tool_events import (
+    MODEL_TEXT_TOTAL_LIMIT,
+    ensure_tool_result_event,
+    normalize_tool_result_event,
+    tool_event_model_text,
+    tool_event_summary_text,
+    truncate_model_text,
+)
 from rocky.util.text import extract_json_candidate, safe_json
 
 
@@ -219,19 +227,40 @@ class OpenAIChatProvider:
         return text
 
     def _prepare_tool_output(self, output: Any) -> str:
-        if output is None:
-            return ""
-        if isinstance(output, str):
-            return output
-        return safe_json(output)
+        if isinstance(output, dict) and output.get("type") == "tool_result":
+            return tool_event_model_text(output)
+        return tool_event_model_text(normalize_tool_result_event("tool_result", {}, output))
+
+    def _coerce_tool_result_event(
+        self,
+        *,
+        name: str,
+        arguments: dict[str, Any],
+        output: Any,
+        tool_call_id: str,
+    ) -> dict[str, Any]:
+        if isinstance(output, dict) and output.get("type") == "tool_result":
+            event = ensure_tool_result_event(output)
+            normalized = dict(event)
+            normalized["name"] = name
+            normalized["arguments"] = arguments
+            normalized["id"] = tool_call_id
+            normalized["tool_call_id"] = tool_call_id
+            normalized["text"] = str(
+                normalized.get("model_text") or normalized.get("summary_text") or ""
+            )
+            return normalized
+        return normalize_tool_result_event(
+            name,
+            arguments,
+            output,
+            tool_call_id=tool_call_id,
+        )
 
     def _tool_success(self, output: Any) -> bool:
-        text = self._prepare_tool_output(output)
-        try:
-            payload = json.loads(text)
-            return bool(payload.get("success", True)) if isinstance(payload, dict) else True
-        except Exception:
-            return '"success": false' not in text.lower()
+        if isinstance(output, dict) and output.get("type") == "tool_result":
+            return bool(output.get("success", True))
+        return bool(normalize_tool_result_event("tool_result", {}, output).get("success", True))
 
     def _post_chat(self, client: httpx.Client, payload: dict[str, Any]) -> dict[str, Any]:
         attempts = 6
@@ -290,7 +319,7 @@ class OpenAIChatProvider:
 
     def _tool_summary_fallback(self, tool_events: list[dict[str, Any]]) -> str:
         successful_results = [
-            event
+            ensure_tool_result_event(event)
             for event in tool_events
             if event.get("type") == "tool_result" and event.get("success", True)
         ]
@@ -301,39 +330,52 @@ class OpenAIChatProvider:
         for event in successful_results:
             if event.get("name") != "write_file":
                 continue
-            try:
-                payload = json.loads(str(event.get("text", "")))
-            except Exception:
-                continue
-            data = payload.get("data") or {}
-            path = str(data.get("path", "")).strip()
+            path = next(
+                (
+                    str(item.get("ref") or "").strip()
+                    for item in (event.get("artifacts") or [])
+                    if item.get("kind") == "path" and str(item.get("ref") or "").strip()
+                ),
+                "",
+            )
             if path and path not in created_paths:
                 created_paths.append(path)
 
         last = successful_results[-1]
-        try:
-            payload = json.loads(str(last.get("text", "")))
-        except Exception:
-            payload = {}
-        data = payload.get("data") if isinstance(payload, dict) else {}
         lines: list[str] = []
         if created_paths:
             joined = ", ".join(f"`{path}`" for path in created_paths[:5])
             lines.append(f"Completed the requested file changes: {joined}.")
-        if last.get("name") == "run_shell_command" and isinstance(data, dict):
-            command = str(data.get("command", "")).strip()
-            stdout = str(data.get("stdout", "")).strip()
-            stderr = str(data.get("stderr", "")).strip()
+        if last.get("name") == "run_shell_command":
+            command = ""
+            stdout = ""
+            stderr = ""
+            for fact in last.get("facts") or []:
+                if fact.get("kind") == "command" and not command:
+                    command = str(fact.get("command") or "").strip()
+                elif fact.get("kind") == "stdout" and not stdout:
+                    stdout = str(fact.get("stdout") or "").strip()
+                elif fact.get("kind") == "stderr" and not stderr:
+                    stderr = str(fact.get("stderr") or "").strip()
             if command:
                 lines.append(f"Verified with `{command}`.")
             if stdout:
                 lines.append(f"Output:\n```text\n{stdout[:2000]}\n```")
             elif stderr:
                 lines.append(f"Command stderr:\n```text\n{stderr[:2000]}\n```")
-        elif last.get("name") == "read_file" and isinstance(data, dict):
-            path = str(data.get("path", "")).strip()
+        elif last.get("name") == "read_file":
+            path = next(
+                (
+                    str(item.get("ref") or "").strip()
+                    for item in (last.get("artifacts") or [])
+                    if item.get("kind") == "path" and str(item.get("ref") or "").strip()
+                ),
+                "",
+            )
             if path:
                 lines.append(f"Verified the resulting file `{path}`.")
+        elif summary := tool_event_summary_text(last):
+            lines.append(summary)
         return "\n\n".join(lines).strip()
 
     def _forced_final_response(
@@ -468,6 +510,7 @@ class OpenAIChatProvider:
         tool_events: list[dict[str, Any]] = []
         usage: dict[str, Any] = {}
         raw_rounds: list[dict[str, Any]] = []
+        remaining_model_chars = MODEL_TEXT_TOTAL_LIMIT
         with self._client() as client:
             for _ in range(max_rounds):
                 payload = {
@@ -517,7 +560,17 @@ class OpenAIChatProvider:
                     if event_handler:
                         event_handler(call_event)
                     tool_events.append(call_event)
-                    tool_output = self._prepare_tool_output(execute_tool(name, arguments))
+                    result_event = self._coerce_tool_result_event(
+                        name=name,
+                        arguments=arguments,
+                        output=execute_tool(name, arguments),
+                        tool_call_id=tool_call_id,
+                    )
+                    tool_output = truncate_model_text(
+                        tool_event_model_text(result_event),
+                        remaining_model_chars,
+                    )
+                    remaining_model_chars = max(0, remaining_model_chars - len(tool_output))
                     conversation.append(
                         {
                             "role": "tool",
@@ -526,17 +579,9 @@ class OpenAIChatProvider:
                             "content": tool_output,
                         }
                     )
-                    tool_events.append(
-                        {
-                            "type": "tool_result",
-                            "id": tool_call_id,
-                            "tool_call_id": tool_call_id,
-                            "name": name,
-                            "arguments": arguments,
-                            "text": tool_output,
-                            "success": self._tool_success(tool_output),
-                        }
-                    )
+                    tool_events.append(result_event)
+                    if event_handler:
+                        event_handler(result_event)
             return self._forced_final_response(
                 client=client,
                 conversation=conversation,

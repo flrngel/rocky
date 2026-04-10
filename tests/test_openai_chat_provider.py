@@ -440,6 +440,8 @@ def test_run_with_tools_parses_dict_arguments_and_keeps_null_assistant_content()
     assert assistant_message["content"] is None
     assert assistant_message["tool_calls"][0]["id"] == "call_1"
     assert tool_message["tool_call_id"] == "call_1"
+    assert tool_message["content"] == response.tool_events[-1]["model_text"]
+    assert not tool_message["content"].lstrip().startswith("{")
 
 
 
@@ -500,3 +502,5 @@ def test_run_with_tools_supports_deprecated_function_call_shape() -> None:
     tool_message = next(message for message in replay_messages if message.get("role") == "tool")
     assert assistant_message["tool_calls"][0]["function"]["name"] == "run_python"
     assert tool_message["tool_call_id"] == "call_1"
+    assert tool_message["content"] == response.tool_events[-1]["model_text"]
+    assert not tool_message["content"].lstrip().startswith("{")

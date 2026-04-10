@@ -5,6 +5,7 @@ from typing import Any, Callable
 from rocky.core.messages import Message
 from rocky.providers.base import ProviderResponse, sanitize_assistant_text
 from rocky.providers.openai_chat import OpenAIChatProvider
+from rocky.tool_events import MODEL_TEXT_TOTAL_LIMIT, tool_event_model_text, truncate_model_text
 
 
 class LiteLLMChatProvider(OpenAIChatProvider):
@@ -209,6 +210,7 @@ class LiteLLMChatProvider(OpenAIChatProvider):
         tool_events: list[dict[str, Any]] = []
         usage: dict[str, Any] = {}
         raw_rounds: list[dict[str, Any]] = []
+        remaining_model_chars = MODEL_TEXT_TOTAL_LIMIT
         for _ in range(max_rounds):
             response = litellm.completion(
                 **self._litellm_kwargs(
@@ -254,17 +256,17 @@ class LiteLLMChatProvider(OpenAIChatProvider):
                 tool_events.append(call_event)
                 if event_handler:
                     event_handler(call_event)
-                output = self._prepare_tool_output(execute_tool(tool_name, arguments))
-                success = self._tool_success(output)
-                result_event = {
-                    "type": "tool_result",
-                    "id": tool_call_id,
-                    "tool_call_id": tool_call_id,
-                    "name": tool_name,
-                    "arguments": arguments,
-                    "text": output,
-                    "success": success,
-                }
+                result_event = self._coerce_tool_result_event(
+                    name=tool_name,
+                    arguments=arguments,
+                    output=execute_tool(tool_name, arguments),
+                    tool_call_id=tool_call_id,
+                )
+                output = truncate_model_text(
+                    tool_event_model_text(result_event),
+                    remaining_model_chars,
+                )
+                remaining_model_chars = max(0, remaining_model_chars - len(output))
                 tool_events.append(result_event)
                 if event_handler:
                     event_handler(result_event)
