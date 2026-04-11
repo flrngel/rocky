@@ -2192,7 +2192,7 @@ class AgentCore:
             run_flow.note_burst_output(burst_response.text)
 
             if current_task.kind != "finalize":
-                if burst_response.text.strip() and route.task_signature.startswith(("research/", "site/")):
+                if burst_response.text.strip():
                     candidate_text = self._normalize_output(
                         route,
                         burst_response.text,
@@ -2227,6 +2227,13 @@ class AgentCore:
                         prior_answer=self.last_answer,
                         continuation_expected=False,
                     )
+                    if candidate_verification.status == "pass" and self._should_judge_automation_output(
+                        route,
+                        prompt,
+                        aggregate_tool_events,
+                        stream=stream,
+                    ):
+                        candidate_verification = self._judge_automation_output(provider, prompt, aggregate_tool_events)
                     if candidate_verification.status == "pass":
                         learned_constraints_result = self._judge_learned_constraints(
                             provider,
@@ -2236,22 +2243,24 @@ class AgentCore:
                             context=context,
                             tool_events=aggregate_tool_events,
                         )
-                        if learned_constraints_result.status == "pass":
-                            run_flow.advance(
-                                evidence_graph=evidence_graph,
-                                tool_events=aggregate_tool_events,
-                                final_output_ready=True,
-                            )
-                            aggregate_response = ProviderResponse(
-                                text=candidate_text,
-                                usage=aggregate_usage,
-                                raw={"bursts": raw_bursts},
-                                tool_events=aggregate_tool_events,
-                            )
-                            return aggregate_response, candidate_text, candidate_contract, candidate_verification, {
-                                **run_flow.run_summary,
-                                "provider": provider_name,
-                            }
+                        if learned_constraints_result.status == "fail":
+                            candidate_verification = learned_constraints_result
+                    if candidate_verification.status == "pass":
+                        run_flow.advance(
+                            evidence_graph=evidence_graph,
+                            tool_events=aggregate_tool_events,
+                            final_output_ready=True,
+                        )
+                        aggregate_response = ProviderResponse(
+                            text=candidate_text,
+                            usage=aggregate_usage,
+                            raw={"bursts": raw_bursts},
+                            tool_events=aggregate_tool_events,
+                        )
+                        return aggregate_response, candidate_text, candidate_contract, candidate_verification, {
+                            **run_flow.run_summary,
+                            "provider": provider_name,
+                        }
                 evidence_backed = self._try_research_evidence_backed_answer(
                     prompt=prompt,
                     route=route,

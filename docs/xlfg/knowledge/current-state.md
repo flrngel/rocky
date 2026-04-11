@@ -1,18 +1,18 @@
 # Rocky — Current State
 
-Last updated: 2026-04-10 (run-20260410-165140)
+Last updated: 2026-04-10 (run-20260410-181301)
 
 ## Test suite
-- 272 deterministic tests, ~10s, zero LLM dependency
+- 272 deterministic tests, ~8s, zero LLM dependency
 - RunFlowManager multi-burst loop covered by 8 dedicated tests in test_run_flow.py (research + non-research paths)
-- Integration tests in test_agent_runtime.py use `>=` for call counts to be flow-loop-agnostic
+- Integration tests in test_agent_runtime.py use exact `==` call counts
 
 ## Agent loop
 - Two execution paths in AgentCore.run():
   - Flow-controlled loop (_run_flow_controlled_loop): ALL tasks with tools (except conversation/)
   - Simple provider call: conversation tasks and tasks without tools
 - _should_use_flow_loop() gate at agent.py:410 — returns True when route has tool_families AND task_signature is not conversation/
-- Non-finalize early return (returning from intermediate tasks) is gated to research/site only — non-research tasks always advance through all tasks before returning
+- Non-finalize early return works for ALL task types with full verification: standard verify → automation judgment → learned constraints → return if pass
 
 ## Flow loop task kinds by task type
 - research/site → discover/gather/finalize (max_bursts=8)

@@ -928,7 +928,7 @@ def test_runtime_streams_each_tool_result_once(tmp_path: Path) -> None:
     tool_result_events = [event for event in streamed_events if event.get("type") == "tool_result"]
 
     assert response.text == "runtime inspected"
-    assert len(tool_result_events) >= 1
+    assert len(tool_result_events) == 1
     assert tool_result_events[0]["name"] == "run_shell_command"
 
 
@@ -1226,8 +1226,9 @@ Exclude distinct modifiers from plain product queries.
     assert json.loads(response.text) == [
         {"id": "1", "product_name": "Oban Port Cask 15 Years", "confidence": "confirmed"}
     ]
-    assert len(provider.tool_calls) >= 1
-    assert len(provider.complete_calls) >= 1
+    assert len(provider.tool_calls) == 2
+    assert len(provider.complete_calls) == 2
+    assert "learned constraints" in provider.complete_calls[0][0].content.lower()
     assert "plain-product-query-variant-isolation" in response.trace["selected_policies"]
 
 
@@ -1528,7 +1529,7 @@ def test_runtime_inspection_prompt_uses_tool_capable_provider(tmp_path: Path, mo
     assert response.text == "runtime inspected"
     assert response.trace["provider"] == "_OkProvider"
     assert provider.calls == []
-    assert len(provider.tool_calls) >= 1
+    assert len(provider.tool_calls) == 1
     tool_names = {tool["function"]["name"] for tool in provider.tool_calls[0]["tools"]}
     assert "run_shell_command" in tool_names
 
@@ -1635,8 +1636,8 @@ def test_extraction_route_repairs_prose_into_json_with_provider(tmp_path: Path) 
 
     assert response.text == '{"rows": 2, "fields": ["name", "role"]}'
     assert response.verification["status"] == "pass"
-    assert len(provider.tool_calls) >= 1
-    assert len(provider.complete_calls) >= 1
+    assert len(provider.tool_calls) == 2
+    assert len(provider.complete_calls) == 2
 
 
 def test_automation_route_gets_more_tool_rounds(tmp_path: Path) -> None:
@@ -1800,7 +1801,7 @@ def test_runtime_retries_tool_loop_after_verification_failure(tmp_path: Path) ->
     )
 
     assert response.verification["status"] == "pass"
-    assert len(provider.tool_calls) >= 2
+    assert len(provider.tool_calls) == 2
 
 
 def test_runtime_retries_automation_when_judged_output_is_wrong(tmp_path: Path) -> None:
@@ -1821,8 +1822,8 @@ def test_runtime_retries_automation_when_judged_output_is_wrong(tmp_path: Path) 
 
     assert response.verification["status"] == "pass"
     assert response.text == "Ran `sh report.sh` and it printed `360`."
-    assert len(provider.tool_calls) >= 2
-    assert len(provider.complete_calls) >= 2
+    assert len(provider.tool_calls) == 2
+    assert len(provider.complete_calls) == 2
 
 
 def test_runtime_normalizes_exact_json_automation_answers(tmp_path: Path) -> None:
