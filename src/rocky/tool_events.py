@@ -474,8 +474,15 @@ def derive_tool_event_details(
         _summarize_grep(name=name, data=data, facts=facts, artifacts=artifacts)
     elif name == "fetch_url" and isinstance(data, dict):
         _summarize_web_fetch(name=name, data=data, facts=facts, artifacts=artifacts)
+        if metadata.get("browser_fallback_hint"):
+            blocked_url = str(data.get("url") or arguments.get("url") or "").strip()
+            facts.append(_fact("hint", f"Hint: retry with agent_browser for {blocked_url}" if blocked_url else "Hint: retry with agent_browser"))
     elif name in {"search_web", "extract_links"} and isinstance(data, list):
         _summarize_web_list(name=name, data=data, facts=facts, artifacts=artifacts)
+        steps = metadata.get("steps")
+        if name == "search_web" and isinstance(steps, list) and steps:
+            outcomes = [str(s.get("outcome", "")) for s in steps if isinstance(s, dict) and s.get("outcome")]
+            facts.append(_fact("steps", f"Pipeline: {len(steps)} step(s) — {', '.join(outcomes)}"))
     elif name in {"inspect_spreadsheet", "read_sheet_range"} and isinstance(data, dict):
         _summarize_spreadsheet(name=name, arguments=arguments, data=data, facts=facts, artifacts=artifacts)
     elif isinstance(data, dict):

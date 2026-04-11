@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 
@@ -190,8 +191,6 @@ def _looks_like_bot_challenge(response: httpx.Response) -> bool:
     title_matches = sum(1 for marker in BOT_CHALLENGE_TITLE_MARKERS if marker in title)
     if phrase_matches >= 2:
         return True
-    if phrase_matches >= 1 and title_matches >= 1:
-        return True
     if response.status_code in {202, 403, 429, 503} and phrase_matches >= 1:
         return True
     return False
@@ -315,6 +314,7 @@ def _challenge_result(response: httpx.Response, *, requested_url: str, attempts:
         metadata={
             "attempts": attempts,
             "blocked_by_challenge": True,
+            "browser_fallback_hint": True,
             "redirected": bool(response.history),
             "redirect_chain": _response_links(response),
             "tls_verified": _tls_verified(response),
@@ -479,7 +479,19 @@ def _response_text_excerpt(response: httpx.Response) -> str:
     content_type = response.headers.get("content-type", "").lower()
     if "html" in content_type:
         soup = BeautifulSoup(response.text, "html.parser")
-        text = " ".join(soup.get_text(" ", strip=True).split())
+        for tag in soup.find_all(["script", "style", "nav", "header", "footer", "aside"]):
+            tag.decompose()
+        candidate = None
+        for selector in [soup.find("article"), soup.find(attrs={"role": "main"}), soup.find("main")]:
+            if selector is not None:
+                candidate = selector
+                break
+        if candidate is not None:
+            text = " ".join(candidate.get_text(" ", strip=True).split())
+            if len(text) >= 200:
+                return truncate(text, 4000)
+        body = soup.find("body") or soup
+        text = " ".join(body.get_text(" ", strip=True).split())
         return truncate(text, 4000)
     return truncate(response.text.strip(), 4000)
 
@@ -537,61 +549,114 @@ def extract_links(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     )
 
 
-def search_web(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    query = str(args["query"])
-    max_results = int(args.get("max_results", 8))
-    ctx.require("web", "search web", query, risky=True)
+_SITE_RE = re.compile(r"\bsite:\S+\s*", re.I)
+_QUOTED_RE = re.compile(r'"([^"]+)"')
+MAX_BROADENING_ROUNDS = 2
+
+
+def _broaden_query(query: str) -> list[str]:
+    variants: list[str] = []
+    seen: set[str] = {query.strip().lower()}
+    without_site = _SITE_RE.sub("", query).strip()
+    if without_site and without_site.lower() not in seen:
+        variants.append(without_site)
+        seen.add(without_site.lower())
+    base = without_site or query
+    without_quotes = _QUOTED_RE.sub(r"\1", base).strip()
+    if without_quotes and without_quotes.lower() not in seen:
+        variants.append(without_quotes)
+        seen.add(without_quotes.lower())
+    base2 = without_quotes or base
+    tokens = base2.split()
+    if len(tokens) >= 4:
+        shorter = " ".join(tokens[:-1])
+        if shorter.lower() not in seen:
+            variants.append(shorter)
+            seen.add(shorter.lower())
+    return variants
+
+
+def _search_engines(
+    query: str,
+    *,
+    max_results: int,
+    timeout_s: int,
+    steps: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     encoded_query = urlencode({"q": query})
     attempted_urls: list[str] = []
     errors: list[str] = []
-    timeout_s = int(args.get("timeout_s", 20))
-
-    engines_tried: list[str] = []
     for engine, template in SEARCH_SOURCES:
         url = template.format(query=encoded_query)
         attempted_urls.append(url)
-        if engine not in engines_tried:
-            engines_tried.append(engine)
         response, error = _request(url, timeout_s=timeout_s, follow_redirects=True)
         if error is not None:
             errors.append(error.summary)
+            outcome = "challenge" if error.metadata.get("blocked_by_challenge") else "request_error"
+            steps.append({"engine": engine, "url": url, "outcome": outcome, "result_count": 0})
             continue
         assert response is not None
         results = _extract_search_results(response.text, str(response.url), max_results)
         if results:
-            return ToolResult(
-                True,
-                results,
-                f"Search returned {len(results)} result(s)",
-                {
-                    "engine": engine,
-                    "url": str(response.url),
-                    "attempted_urls": attempted_urls,
-                    "redirected": bool(response.history),
-                    "redirect_chain": _response_links(response),
-                    "tls_verified": _tls_verified(response),
-                },
-            )
+            steps.append({"engine": engine, "url": url, "outcome": "success", "result_count": len(results)})
+            return results, {
+                "engine": engine,
+                "url": str(response.url),
+                "attempted_urls": attempted_urls,
+                "redirected": bool(response.history),
+                "redirect_chain": _response_links(response),
+                "tls_verified": _tls_verified(response),
+            }
         if _looks_like_no_results(response.text):
-            return ToolResult(
-                True,
-                [],
-                "Search returned 0 result(s)",
-                {
-                    "engine": engine,
-                    "url": str(response.url),
-                    "attempted_urls": attempted_urls,
-                    "tls_verified": _tls_verified(response),
-                },
-            )
+            steps.append({"engine": engine, "url": url, "outcome": "no_results", "result_count": 0})
+            return [], {
+                "engine": engine,
+                "url": str(response.url),
+                "attempted_urls": attempted_urls,
+                "tls_verified": _tls_verified(response),
+            }
+        steps.append({"engine": engine, "url": url, "outcome": "parse_failed", "result_count": 0})
         errors.append(f"No parsable results from {response.url}")
+    return [], None
+
+
+def search_web(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    query = str(args["query"])
+    max_results = int(args.get("max_results", 8))
+    ctx.require("web", "search web", query, risky=True)
+    timeout_s = int(args.get("timeout_s", 20))
+    steps: list[dict[str, Any]] = []
+
+    results, meta = _search_engines(query, max_results=max_results, timeout_s=timeout_s, steps=steps)
+    if results:
+        assert meta is not None
+        meta["steps"] = steps
+        return ToolResult(True, results, f"Search returned {len(results)} result(s)", meta)
+    if meta is not None and not results:
+        meta["steps"] = steps
+        return ToolResult(True, [], "Search returned 0 result(s)", meta)
+
+    variants = _broaden_query(query)
+    for round_num, variant in enumerate(variants[:MAX_BROADENING_ROUNDS], 1):
+        steps.append({"stage": "broadening", "round": round_num, "variant": variant, "outcome": "attempting"})
+        variant_results, variant_meta = _search_engines(
+            variant, max_results=max_results, timeout_s=timeout_s, steps=steps,
+        )
+        if variant_results:
+            assert variant_meta is not None
+            variant_meta["steps"] = steps
+            variant_meta["broadened"] = True
+            variant_meta["original_query"] = query
+            variant_meta["query_used"] = variant
+            return ToolResult(
+                True, variant_results, f"Search returned {len(variant_results)} result(s) (broadened query)", variant_meta,
+            )
 
     return _error_result(
         "Search failed or returned no parsable results",
         query=query,
-        attempted_urls=attempted_urls,
-        error="; ".join(errors[:4]),
-        metadata={"engines_tried": engines_tried},
+        error=f"Tried {len(steps)} steps including broadened variants",
+        metadata={"steps": steps},
     )
 
 

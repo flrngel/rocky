@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -495,3 +496,334 @@ def test_extract_links_prioritizes_main_content_items_over_navigation(tmp_path: 
         {"text": "Gemma-3-4B-It", "url": "https://huggingface.co/google/gemma-3-4b-it"},
         {"text": "Qwen2.5-7B-Instruct", "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct"},
     ]
+
+
+def test_bot_detection_single_phrase_with_title_does_not_trigger() -> None:
+    response = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://example.com/article"),
+        headers={"content-type": "text/html; charset=UTF-8"},
+        text="""
+        <html>
+          <head><title>Just a moment — loading page</title></head>
+          <body>
+            <p>This page discusses unusual traffic patterns in web analytics.</p>
+          </body>
+        </html>
+        """,
+    )
+
+    assert web._looks_like_bot_challenge(response) is False
+
+
+def test_bot_detection_two_phrases_with_title_triggers() -> None:
+    response = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://example.com/challenge"),
+        headers={"content-type": "text/html; charset=UTF-8"},
+        text="""
+        <html>
+          <head><title>Just a moment</title></head>
+          <body>
+            <p>Please verify you are human.</p>
+            <p>We detected unusual traffic from your network.</p>
+          </body>
+        </html>
+        """,
+    )
+
+    assert web._looks_like_bot_challenge(response) is True
+
+
+def test_bot_detection_hard_marker_always_triggers() -> None:
+    response = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://example.com/cf"),
+        headers={"content-type": "text/html; charset=UTF-8"},
+        text="""
+        <html>
+          <head><title>Normal page</title></head>
+          <body>
+            <div class="cf-turnstile" data-sitekey="abc123"></div>
+            <p>Normal content here.</p>
+          </body>
+        </html>
+        """,
+    )
+
+    assert web._looks_like_bot_challenge(response) is True
+
+
+def test_bot_detection_single_phrase_with_challenge_status_triggers() -> None:
+    response = httpx.Response(
+        403,
+        request=httpx.Request("GET", "https://example.com/blocked"),
+        headers={"content-type": "text/html; charset=UTF-8"},
+        text="""
+        <html>
+          <head><title>Access Denied</title></head>
+          <body>
+            <p>We detected automated requests from your IP.</p>
+          </body>
+        </html>
+        """,
+    )
+
+    assert web._looks_like_bot_challenge(response) is True
+
+
+def test_fetch_url_bot_challenge_sets_browser_fallback_hint(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            202,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text="""
+            <html>
+              <head><title>Challenge</title></head>
+              <body>
+                <p>Please complete the following challenge.</p>
+                <p>Verify you are human.</p>
+              </body>
+            </html>
+            """,
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://example.com/challenge"})
+
+    assert result.success is False
+    assert result.metadata["blocked_by_challenge"] is True
+    assert result.metadata["browser_fallback_hint"] is True
+
+
+def test_fetch_url_success_does_not_set_browser_fallback_hint(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text="<html><head><title>OK</title></head><body>content</body></html>",
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://example.com/ok"})
+
+    assert result.success is True
+    assert "browser_fallback_hint" not in result.metadata
+
+
+def test_fetch_url_extracts_article_content_strips_nav_footer(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+    article_body = "This is the main article content about important topics. " * 8
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text=f"""
+            <html>
+              <head><title>Article Page</title></head>
+              <body>
+                <nav><a href="/home">Home</a> <a href="/about">About Nav Section</a></nav>
+                <header><p>Site Header Banner Text</p></header>
+                <article>{article_body}</article>
+                <footer><p>Copyright Footer Legal Notice</p></footer>
+              </body>
+            </html>
+            """,
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://example.com/article"})
+
+    assert result.success is True
+    assert "important topics" in result.data["text_excerpt"]
+    assert "About Nav Section" not in result.data["text_excerpt"]
+    assert "Site Header Banner" not in result.data["text_excerpt"]
+    assert "Footer Legal" not in result.data["text_excerpt"]
+
+
+def test_fetch_url_content_extraction_falls_back_to_body_for_short_article(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text="""
+            <html>
+              <head><title>Short</title></head>
+              <body>
+                <article><p>Tiny article.</p></article>
+                <div><p>Body content with more useful details that should be included in fallback mode.</p></div>
+              </body>
+            </html>
+            """,
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://example.com/short"})
+
+    assert result.success is True
+    assert "Body content" in result.data["text_excerpt"]
+    assert "Tiny article" in result.data["text_excerpt"]
+
+
+def test_search_web_accumulates_steps_metadata(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == "https://html.duckduckgo.com/html/?q=rocky+agent":
+            return httpx.Response(
+                200,
+                request=request,
+                headers={"content-type": "text/html; charset=UTF-8"},
+                text="""
+                <html><body>
+                  <div class="result">
+                    <a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fresult">
+                      Result Title
+                    </a>
+                    <a class="result__snippet">A snippet</a>
+                  </div>
+                </body></html>
+                """,
+            )
+        return httpx.Response(200, request=request, headers={"content-type": "text/html"}, text="<html></html>")
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.search_web(ctx, {"query": "rocky agent", "max_results": 3})
+
+    assert result.success is True
+    assert len(result.data) == 1
+    assert "steps" in result.metadata
+    steps = result.metadata["steps"]
+    assert isinstance(steps, list)
+    assert len(steps) >= 1
+    assert steps[0]["engine"] == "duckduckgo"
+    assert steps[0]["outcome"] == "success"
+    assert steps[0]["result_count"] == 1
+
+
+def test_search_web_steps_records_multiple_engine_attempts(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host in {"html.duckduckgo.com", "duckduckgo.com", "lite.duckduckgo.com"}:
+            return httpx.Response(
+                202,
+                request=request,
+                headers={"content-type": "text/html; charset=UTF-8"},
+                text="""
+                <html><body>
+                  <p>Unfortunately, bots use DuckDuckGo too.</p>
+                  <p>Please complete the following challenge.</p>
+                </body></html>
+                """,
+            )
+        if str(request.url) == "https://search.brave.com/search?q=rocky+agent":
+            return httpx.Response(
+                200,
+                request=request,
+                headers={"content-type": "text/html; charset=UTF-8"},
+                text="""
+                <html><body>
+                  <div class="snippet" data-type="web">
+                    <a class="l1" href="https://example.com/brave">
+                      <div class="title search-snippet-title">Brave result</div>
+                    </a>
+                    <div class="generic-snippet"><div class="content">Summary</div></div>
+                  </div>
+                </body></html>
+                """,
+            )
+        raise AssertionError(f"Unexpected: {request.url}")
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.search_web(ctx, {"query": "rocky agent", "max_results": 3})
+
+    assert result.success is True
+    steps = result.metadata["steps"]
+    assert len(steps) == 4
+    challenge_steps = [s for s in steps if s["outcome"] == "challenge"]
+    assert len(challenge_steps) == 3
+    success_steps = [s for s in steps if s["outcome"] == "success"]
+    assert len(success_steps) == 1
+
+
+def test_search_web_broadens_query_on_zero_results(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        query_params = parse_qs(urlparse(str(request.url)).query)
+        q = query_params.get("q", [""])[0]
+        if '"' not in q and "site:" not in q:
+            return httpx.Response(
+                200,
+                request=request,
+                headers={"content-type": "text/html; charset=UTF-8"},
+                text="""
+                <html><body>
+                  <div class="result">
+                    <a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fbroadened">
+                      Broadened Result
+                    </a>
+                    <a class="result__snippet">Found via broadening</a>
+                  </div>
+                </body></html>
+                """,
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text="<html><body><p>Generic page.</p></body></html>",
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.search_web(ctx, {"query": 'site:example.com "exact phrase" foo bar', "max_results": 3})
+
+    assert result.success is True
+    assert len(result.data) >= 1
+    assert result.data[0]["title"] == "Broadened Result"
+    assert result.metadata.get("broadened") is True
+    assert result.metadata["original_query"] == 'site:example.com "exact phrase" foo bar'
+    assert result.metadata["query_used"] != 'site:example.com "exact phrase" foo bar'
+    steps = result.metadata["steps"]
+    broadening_steps = [s for s in steps if s.get("stage") == "broadening"]
+    assert len(broadening_steps) >= 1
+
+
+def test_search_web_broadening_stops_after_max_rounds(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text="<html><body><p>Generic page.</p></body></html>",
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.search_web(ctx, {"query": 'site:example.com "exact phrase" foo bar baz', "max_results": 3})
+
+    assert result.success is False
+    steps = result.metadata["steps"]
+    broadening_steps = [s for s in steps if s.get("stage") == "broadening"]
+    assert len(broadening_steps) <= web.MAX_BROADENING_ROUNDS

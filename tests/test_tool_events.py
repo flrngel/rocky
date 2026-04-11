@@ -119,3 +119,61 @@ def test_normalize_tool_result_event_summarizes_agent_browser_snapshot_items() -
     assert any("org/Model-One 7B" in text for text in fact_texts)
     assert "org/Model-Two 8B" in event["model_text"]
     assert any(artifact["kind"] == "url" for artifact in event["artifacts"])
+
+
+def test_derive_tool_event_details_emits_browser_hint_for_fetch_url() -> None:
+    output = json.dumps(
+        {
+            "success": False,
+            "summary": "Encountered anti-bot challenge while fetching https://example.com/blocked",
+            "data": {
+                "url": "https://example.com/blocked",
+                "error": "anti-bot challenge",
+                "text_excerpt": "Please verify you are human.",
+            },
+            "metadata": {
+                "blocked_by_challenge": True,
+                "browser_fallback_hint": True,
+            },
+        }
+    )
+
+    event = normalize_tool_result_event(
+        "fetch_url",
+        {"url": "https://example.com/blocked"},
+        output,
+        tool_call_id="call_hint",
+    )
+
+    fact_texts = [fact["text"] for fact in event["facts"]]
+    assert any("agent_browser" in text for text in fact_texts)
+    assert any("Hint" in text for text in fact_texts)
+
+
+def test_derive_tool_event_details_emits_steps_fact_for_search_web() -> None:
+    output = json.dumps(
+        {
+            "success": True,
+            "summary": "Search returned 2 result(s)",
+            "data": [
+                {"title": "Result 1", "url": "https://example.com/1", "snippet": "First"},
+                {"title": "Result 2", "url": "https://example.com/2", "snippet": "Second"},
+            ],
+            "metadata": {
+                "engine": "duckduckgo",
+                "steps": [
+                    {"engine": "duckduckgo", "url": "https://html.duckduckgo.com/html/?q=test", "outcome": "success", "result_count": 2},
+                ],
+            },
+        }
+    )
+
+    event = normalize_tool_result_event(
+        "search_web",
+        {"query": "test"},
+        output,
+        tool_call_id="call_steps",
+    )
+
+    fact_texts = [fact["text"] for fact in event["facts"]]
+    assert any("Pipeline" in text or "step" in text.lower() for text in fact_texts)
