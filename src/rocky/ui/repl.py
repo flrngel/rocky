@@ -410,14 +410,21 @@ class RockyRepl:
 
     def _context_usage_label(self) -> str:
         usage = self._safe_context_usage()
-        return (
-            f"Ctx I{usage['instructions']}"
-            f" M{usage['memories']}"
-            f" S{usage['skills']}"
-            f" P{usage['learned_policies']}"
-            f" N{usage['student_notes']}"
-            f" H{usage['handoffs']}"
-        )
+        active: list[str] = []
+        for label, key in [
+            ("instr", "instructions"),
+            ("mem", "memories"),
+            ("skill", "skills"),
+            ("policy", "learned_policies"),
+            ("notes", "student_notes"),
+            ("hand", "handoffs"),
+        ]:
+            val = usage[key]
+            if val:
+                active.append(f"{label}:{val}")
+        if not active:
+            return "ctx: none"
+        return "ctx: " + " | ".join(active)
 
     def _safe_context_window(self) -> int | None:
         config = getattr(self.runtime, "config", None)
@@ -440,42 +447,38 @@ class RockyRepl:
         if cw and cw > 0:
             pct = min(100, round(total * 100 / cw))
             return (
-                f"Tok P{usage['prompt_tokens']}"
-                f" C{usage['completion_tokens']}"
-                f" T{total}/{cw}({pct}%)"
+                f"tokens: {total:,}/{cw:,} ({pct}%)"
+                f" [in:{usage['prompt_tokens']:,}"
+                f" out:{usage['completion_tokens']:,}]"
             )
         return (
-            f"Tok P{usage['prompt_tokens']}"
-            f" C{usage['completion_tokens']}"
-            f" T{total}"
+            f"tokens: {total:,}"
+            f" [in:{usage['prompt_tokens']:,}"
+            f" out:{usage['completion_tokens']:,}]"
         )
 
     def _toolbar(self) -> HTML:
-        freeze_label = "Freeze: ON" if self.runtime.freeze_enabled else "Freeze: OFF"
-        verbose_label = "Verbose: ON" if getattr(self.runtime, "verbose_enabled", False) else "Verbose: OFF"
-        parts = [
-            "Enter submit",
-            "Alt+Enter newline",
-            "Ctrl-R resume",
-            "Ctrl-N new",
-            "Ctrl-T status",
-            "Ctrl-F freeze",
-            "Ctrl-G student",
-            freeze_label,
-            verbose_label,
-            self._session_usage_label(),
-            self._context_usage_label(),
-        ]
+        freeze_label = "freeze:on" if self.runtime.freeze_enabled else "freeze:off"
+        verbose_label = "verbose:on" if getattr(self.runtime, "verbose_enabled", False) else "verbose:off"
+
+        keys = "Enter:submit  Alt+Enter:newline  ^R:resume  ^N:new  ^T:status  ^F:freeze  ^G:student"
+
+        status_parts = [freeze_label, verbose_label]
         session_id = self._safe_session_id()
         if session_id:
-            parts.append(f"Session: {session_id[-8:]}")
+            status_parts.append(f"session:..{session_id[-8:]}")
         provider_label = self._safe_provider_label()
         if provider_label:
-            parts.append(provider_label)
+            status_parts.append(provider_label)
         thread_id = self._safe_thread_id()
         if thread_id:
-            parts.append(f"Thread: {thread_id[-8:]}")
-        return HTML("<toolbar> " + "  ".join(parts) + " </toolbar>")
+            status_parts.append(f"thread:..{thread_id[-8:]}")
+
+        usage = self._session_usage_label()
+        ctx = self._context_usage_label()
+
+        line = f"{keys}  |  {' | '.join(status_parts)}  |  {usage}  |  {ctx}"
+        return HTML("<toolbar> " + line + " </toolbar>")
 
     def _continuation(self, width: int, line_number: int, wrap_count: int):
         return [("class:continuation", "... ".rjust(width))]
