@@ -28,6 +28,7 @@ class ProviderConfig:
     reasoning_effort: str | None = None
     tool_choice: str | None = None
     extra_body: dict[str, Any] = field(default_factory=dict)
+    context_window: int | None = None
 
     def resolve_api_key(self) -> str | None:
         return self.api_key or (os.getenv(self.api_key_env) if self.api_key_env else None)
@@ -84,6 +85,7 @@ class AppConfig:
                     thinking=True,
                     reasoning_effort='medium',
                     store=False,
+                    context_window=32768,
                 ),
                 'ollama': ProviderConfig(
                     name='ollama',
@@ -93,6 +95,7 @@ class AppConfig:
                     model='llama3.2',
                     thinking=True,
                     store=False,
+                    context_window=131072,
                 ),
                 'openai': ProviderConfig(
                     name='openai',
@@ -103,6 +106,7 @@ class AppConfig:
                     thinking=True,
                     reasoning_effort='medium',
                     store=False,
+                    context_window=128000,
                 ),
             },
         )

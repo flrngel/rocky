@@ -18,6 +18,7 @@ DEFAULT_CONFIG_DICT = {
             'thinking': True,
             'reasoning_effort': 'medium',
             'store': False,
+            'context_window': 32768,
         },
         'ollama': {
             'style': 'openai_chat',
@@ -26,6 +27,7 @@ DEFAULT_CONFIG_DICT = {
             'model': 'llama3.2',
             'thinking': True,
             'store': False,
+            'context_window': 131072,
         },
         'openai': {
             'style': 'openai_responses',
@@ -35,6 +37,7 @@ DEFAULT_CONFIG_DICT = {
             'thinking': True,
             'reasoning_effort': 'medium',
             'store': False,
+            'context_window': 128000,
         },
     },
     'permissions': {'mode': 'bypass'},
@@ -96,6 +99,7 @@ class ConfigLoader:
                 reasoning_effort=(str(data.get('reasoning_effort')).strip() if data.get('reasoning_effort') not in {None, ''} else None),
                 tool_choice=(str(data.get('tool_choice')).strip() if data.get('tool_choice') not in {None, ''} else None),
                 extra_body=data.get('extra_body', {}) or {},
+                context_window=int(data['context_window']) if data.get('context_window') else None,
             )
             for name, data in (merged.get('providers') or {}).items()
         }

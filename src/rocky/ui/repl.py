@@ -419,12 +419,35 @@ class RockyRepl:
             f" H{usage['handoffs']}"
         )
 
+    def _safe_context_window(self) -> int | None:
+        config = getattr(self.runtime, "config", None)
+        if config is None:
+            return None
+        provider_name = str(getattr(config, "active_provider", "") or "")
+        if not provider_name or "MagicMock" in provider_name:
+            return None
+        try:
+            provider = config.provider(provider_name)
+            cw = getattr(provider, "context_window", None)
+            return int(cw) if cw else None
+        except Exception:
+            return None
+
     def _session_usage_label(self) -> str:
         usage = self._safe_session_usage()
+        total = usage["total_tokens"]
+        cw = self._safe_context_window()
+        if cw and cw > 0:
+            pct = min(100, round(total * 100 / cw))
+            return (
+                f"Tok P{usage['prompt_tokens']}"
+                f" C{usage['completion_tokens']}"
+                f" T{total}/{cw}({pct}%)"
+            )
         return (
             f"Tok P{usage['prompt_tokens']}"
             f" C{usage['completion_tokens']}"
-            f" T{usage['total_tokens']}"
+            f" T{total}"
         )
 
     def _toolbar(self) -> HTML:

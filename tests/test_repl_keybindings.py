@@ -159,6 +159,78 @@ def test_repl_toolbar_shows_session_token_usage(tmp_path):
     assert "Tok P120 C45 T165" in repl._toolbar().value
 
 
+def test_session_usage_label_shows_percentage_when_context_window_set(tmp_path):
+    runtime = _make_runtime(tmp_path)
+    runtime.current_session_usage.return_value = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+        "requests": 3,
+    }
+    runtime.config.active_provider = "test_provider"
+    runtime.config.provider.return_value = MagicMock(context_window=8000)
+
+    repl = RockyRepl(runtime)
+    label = repl._session_usage_label()
+
+    assert "P1000" in label
+    assert "C500" in label
+    assert "T1500/8000(19%)" in label
+
+
+def test_session_usage_label_no_percentage_when_context_window_none(tmp_path):
+    runtime = _make_runtime(tmp_path)
+    runtime.current_session_usage.return_value = {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "requests": 1,
+    }
+    runtime.config.active_provider = "test_provider"
+    runtime.config.provider.return_value = MagicMock(context_window=None)
+
+    repl = RockyRepl(runtime)
+    label = repl._session_usage_label()
+
+    assert "T150" in label
+    assert "%" not in label
+
+
+def test_session_usage_label_no_percentage_when_context_window_zero(tmp_path):
+    runtime = _make_runtime(tmp_path)
+    runtime.current_session_usage.return_value = {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "requests": 1,
+    }
+    runtime.config.active_provider = "test_provider"
+    runtime.config.provider.return_value = MagicMock(context_window=0)
+
+    repl = RockyRepl(runtime)
+    label = repl._session_usage_label()
+
+    assert "T150" in label
+    assert "%" not in label
+
+
+def test_session_usage_label_zero_tokens_with_context_window(tmp_path):
+    runtime = _make_runtime(tmp_path)
+    runtime.current_session_usage.return_value = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "requests": 0,
+    }
+    runtime.config.active_provider = "test_provider"
+    runtime.config.provider.return_value = MagicMock(context_window=8000)
+
+    repl = RockyRepl(runtime)
+    label = repl._session_usage_label()
+
+    assert "T0/8000(0%)" in label
+
+
 def test_slash_command_completion_matches_prefix(tmp_path):
     repl = RockyRepl(_make_runtime(tmp_path))
 

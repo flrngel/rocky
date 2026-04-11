@@ -1,13 +1,20 @@
 # Rocky — Current State
 
-Last updated: 2026-04-10 (run-20260410-185923)
+Last updated: 2026-04-10 (run-20260410-193727)
 
 ## Test suite
-- 286 deterministic tests, ~9s, zero LLM dependency
+- 295 deterministic tests, ~9s, zero LLM dependency
 - RunFlowManager multi-burst loop covered by 8 dedicated tests in test_run_flow.py (research + non-research paths)
 - Integration tests in test_agent_runtime.py use exact `==` call counts
 - Web tool tests: 25 tests in test_web_tools.py (search, fetch, bot detection, content extraction, broadening, steps)
 - Tool events tests: 6 tests in test_tool_events.py (normalization, browser hints, steps facts)
+
+## REPL toolbar
+- Bottom toolbar at `ui/repl.py:452-467` shows keybindings, freeze/verbose state, token usage, context usage, session ID, provider label, thread ID
+- Token usage label: `Tok P{prompt} C{completion} T{total}/{context_window}({pct}%)` when `ProviderConfig.context_window` is set; raw `T{total}` when unknown
+- `_safe_context_window()` reads `config.provider().context_window` with MagicMock guards
+- `ProviderConfig.context_window: int | None = None` — user-settable per provider in YAML config
+- Built-in defaults: litellm_local=32768, ollama=131072, openai=128000
 
 ## Agent loop
 - Two execution paths in AgentCore.run():
