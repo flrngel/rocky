@@ -408,7 +408,9 @@ class AgentCore:
         return totals
 
     def _should_use_flow_loop(self, route: RouteDecision) -> bool:
-        return bool(route.tool_families) and route.task_signature.startswith(("research/", "site/"))
+        if not route.tool_families:
+            return False
+        return not route.task_signature.startswith("conversation/")
 
     def _verification_needs_more_evidence(self, route: RouteDecision, result: VerificationResult) -> bool:
         if not route.task_signature.startswith(("research/", "site/")):
@@ -2190,7 +2192,7 @@ class AgentCore:
             run_flow.note_burst_output(burst_response.text)
 
             if current_task.kind != "finalize":
-                if burst_response.text.strip():
+                if burst_response.text.strip() and route.task_signature.startswith(("research/", "site/")):
                     candidate_text = self._normalize_output(
                         route,
                         burst_response.text,

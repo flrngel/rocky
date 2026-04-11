@@ -355,6 +355,206 @@ def test_run_flow_task_files_written_to_disk_at_each_step(tmp_path: Path) -> Non
     assert "doing" in updated_flow or "done" in updated_flow
 
 
+def _make_tool_result_event(name: str, success: bool = True) -> dict:
+    """Build a minimal tool_result event for non-research task kinds."""
+    return {
+        "type": "tool_result",
+        "name": name,
+        "success": success,
+        "summary_text": f"Ran {name}",
+        "text": f"Ran {name}",
+        "artifacts": [],
+        "facts": [],
+    }
+
+
+def test_run_flow_build_verify_finalize_sequence(tmp_path: Path) -> None:
+    """Exercise the build→verify→finalize path for repo/automation tasks.
+
+    This proves divide-and-conquer works for non-research tasks that use
+    shell commands and file operations.
+    """
+    manager = RunFlowManager(
+        tmp_path / ".rocky" / "runs",
+        prompt="create a shell script that counts lines in all Python files",
+        task_signature="repo/shell_execution",
+        task_class="repo",
+        execution_cwd=".",
+    )
+    evidence_graph = EvidenceGraph(thread_id="thread_build")
+
+    # --- Verify initial state: T1 is build kind ---
+    assert manager.run.active_task_id == "T1"
+    t1 = manager.run.active_task()
+    assert t1.kind == "build"
+
+    # --- T1 (build): advances on any successful tool ---
+    shell_event = _make_tool_result_event("run_shell_command")
+    manager.ingest_tool_event(shell_event)
+    advanced = manager.advance(
+        evidence_graph=evidence_graph,
+        tool_events=[shell_event],
+        final_output_ready=False,
+    )
+    assert advanced is True, "T1 build should advance after a successful tool call"
+    assert manager.run.active_task_id == "T2"
+    t2 = manager.run.active_task()
+    assert t2.kind == "verify"
+    assert t2.status == "doing"
+    assert any("T1" in item for item in t2.imports), "T2 should carry context from T1"
+
+    # --- T2 (verify): advances on run_shell_command or read_file ---
+    verify_event = _make_tool_result_event("run_shell_command")
+    manager.ingest_tool_event(verify_event)
+    advanced = manager.advance(
+        evidence_graph=evidence_graph,
+        tool_events=[verify_event],
+        final_output_ready=False,
+    )
+    assert advanced is True, "T2 verify should advance after run_shell_command"
+    assert manager.run.active_task_id == "T3"
+    t3 = manager.run.active_task()
+    assert t3.kind == "finalize"
+    assert t3.status == "doing"
+
+    # --- T3 (finalize): advances only on final_output_ready ---
+    advanced = manager.advance(
+        evidence_graph=evidence_graph,
+        tool_events=[],
+        final_output_ready=True,
+    )
+    assert advanced is True, "T3 finalize should advance when final_output_ready"
+    assert manager.run.status == "done"
+    for task in manager.run.tasks:
+        assert task.status == "done", f"Task {task.task_id} should be done"
+
+
+def test_run_flow_inspect_produce_finalize_sequence(tmp_path: Path) -> None:
+    """Exercise the inspect→produce→finalize path for extract/data tasks."""
+    manager = RunFlowManager(
+        tmp_path / ".rocky" / "runs",
+        prompt="extract the exact json from data.csv",
+        task_signature="extract/general",
+        task_class="extract",
+        execution_cwd=".",
+    )
+    evidence_graph = EvidenceGraph(thread_id="thread_extract")
+
+    # --- T1 (inspect): advances on any successful tool ---
+    assert manager.run.active_task_id == "T1"
+    assert manager.run.active_task().kind == "inspect"
+
+    read_event = _make_tool_result_event("read_file")
+    manager.ingest_tool_event(read_event)
+    advanced = manager.advance(
+        evidence_graph=evidence_graph,
+        tool_events=[read_event],
+        final_output_ready=False,
+    )
+    assert advanced is True, "T1 inspect should advance after read_file"
+    assert manager.run.active_task_id == "T2"
+    assert manager.run.active_task().kind == "produce"
+
+    # --- T2 (produce): advances on any successful tool ---
+    write_event = _make_tool_result_event("write_file")
+    manager.ingest_tool_event(write_event)
+    advanced = manager.advance(
+        evidence_graph=evidence_graph,
+        tool_events=[write_event],
+        final_output_ready=False,
+    )
+    assert advanced is True, "T2 produce should advance after write_file"
+    assert manager.run.active_task_id == "T3"
+    assert manager.run.active_task().kind == "finalize"
+
+    # --- T3 (finalize) ---
+    advanced = manager.advance(
+        evidence_graph=evidence_graph,
+        tool_events=[],
+        final_output_ready=True,
+    )
+    assert advanced is True
+    assert manager.run.status == "done"
+
+
+def test_run_flow_fallback_inspect_finalize_sequence(tmp_path: Path) -> None:
+    """Exercise the fallback inspect→finalize path (2-task flow)."""
+    manager = RunFlowManager(
+        tmp_path / ".rocky" / "runs",
+        prompt="what is the current git branch",
+        task_signature="conversation/general",
+        task_class="general",
+        execution_cwd=".",
+    )
+    evidence_graph = EvidenceGraph(thread_id="thread_fallback")
+
+    # --- Fallback: only 2 tasks (T1 inspect, T2 finalize) ---
+    assert len(manager.run.tasks) == 2
+    assert manager.run.active_task_id == "T1"
+    assert manager.run.active_task().kind == "inspect"
+
+    tool_event = _make_tool_result_event("run_shell_command")
+    manager.ingest_tool_event(tool_event)
+    advanced = manager.advance(
+        evidence_graph=evidence_graph,
+        tool_events=[tool_event],
+        final_output_ready=False,
+    )
+    assert advanced is True, "T1 inspect should advance after a tool call"
+    assert manager.run.active_task_id == "T2"
+    assert manager.run.active_task().kind == "finalize"
+
+    advanced = manager.advance(
+        evidence_graph=evidence_graph,
+        tool_events=[],
+        final_output_ready=True,
+    )
+    assert advanced is True
+    assert manager.run.status == "done"
+
+
+def test_run_flow_verify_task_requires_shell_or_read(tmp_path: Path) -> None:
+    """Verify kind tasks should NOT advance on arbitrary tool success — only
+    run_shell_command or read_file."""
+    manager = RunFlowManager(
+        tmp_path / ".rocky" / "runs",
+        prompt="build a simple web page",
+        task_signature="automation/general",
+        task_class="automation",
+        execution_cwd=".",
+    )
+    evidence_graph = EvidenceGraph(thread_id="thread_verify_guard")
+
+    # Advance past T1 (build)
+    build_event = _make_tool_result_event("write_file")
+    manager.ingest_tool_event(build_event)
+    manager.advance(evidence_graph=evidence_graph, tool_events=[build_event], final_output_ready=False)
+    assert manager.run.active_task_id == "T2"
+    assert manager.run.active_task().kind == "verify"
+
+    # A write_file event should NOT advance a verify task
+    wrong_event = _make_tool_result_event("write_file")
+    manager.ingest_tool_event(wrong_event)
+    stuck = manager.advance(
+        evidence_graph=evidence_graph,
+        tool_events=[wrong_event],
+        final_output_ready=False,
+    )
+    assert stuck is False, "verify task should not advance on write_file"
+    assert manager.run.active_task_id == "T2"
+
+    # A read_file event SHOULD advance a verify task
+    read_event = _make_tool_result_event("read_file")
+    manager.ingest_tool_event(read_event)
+    advanced = manager.advance(
+        evidence_graph=evidence_graph,
+        tool_events=[read_event],
+        final_output_ready=False,
+    )
+    assert advanced is True, "verify task should advance on read_file"
+    assert manager.run.active_task_id == "T3"
+
+
 def test_run_flow_derives_numeric_search_slice_from_observed_listing_url(tmp_path: Path) -> None:
     manager = RunFlowManager(
         tmp_path / ".rocky" / "runs",
