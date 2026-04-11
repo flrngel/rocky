@@ -109,7 +109,7 @@ def test_freeze_repl_uses_in_memory_history_and_toolbar(tmp_path):
     assert isinstance(repl.session.history, InMemoryHistory)
     assert "freeze:on" in repl._toolbar().value
     assert "verbose:off" in repl._toolbar().value
-    assert "tokens: 0" in repl._toolbar().value
+    assert "total:0" in repl._toolbar().value
     assert "ctx: none" in repl._toolbar().value
     assert "freeze" in repl._prompt_message().value
 
@@ -163,9 +163,9 @@ def test_repl_toolbar_shows_session_token_usage(tmp_path):
     repl = RockyRepl(runtime)
 
     toolbar = repl._toolbar().value
-    assert "tokens: 165" in toolbar
     assert "in:120" in toolbar
     assert "out:45" in toolbar
+    assert "total:165" in toolbar
 
 
 def test_session_usage_label_shows_percentage_when_context_window_set(tmp_path):
@@ -184,7 +184,7 @@ def test_session_usage_label_shows_percentage_when_context_window_set(tmp_path):
 
     assert "in:1,000" in label
     assert "out:500" in label
-    assert "tokens: 1,500/8,000 (19%)" in label
+    assert "total:1,500/8,000 (19%)" in label
 
 
 def test_session_usage_label_no_percentage_when_context_window_none(tmp_path):
@@ -201,7 +201,7 @@ def test_session_usage_label_no_percentage_when_context_window_none(tmp_path):
     repl = RockyRepl(runtime)
     label = repl._session_usage_label()
 
-    assert "tokens: 150" in label
+    assert "total:150" in label
     assert "%" not in label
 
 
@@ -219,7 +219,7 @@ def test_session_usage_label_no_percentage_when_context_window_zero(tmp_path):
     repl = RockyRepl(runtime)
     label = repl._session_usage_label()
 
-    assert "tokens: 150" in label
+    assert "total:150" in label
     assert "%" not in label
 
 
@@ -237,7 +237,7 @@ def test_session_usage_label_zero_tokens_with_context_window(tmp_path):
     repl = RockyRepl(runtime)
     label = repl._session_usage_label()
 
-    assert "tokens: 0/8,000 (0%)" in label
+    assert "total:0/8,000 (0%)" in label
 
 
 def test_slash_command_completion_matches_prefix(tmp_path):

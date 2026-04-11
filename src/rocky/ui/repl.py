@@ -447,14 +447,14 @@ class RockyRepl:
         if cw and cw > 0:
             pct = min(100, round(total * 100 / cw))
             return (
-                f"tokens: {total:,}/{cw:,} ({pct}%)"
-                f" [in:{usage['prompt_tokens']:,}"
-                f" out:{usage['completion_tokens']:,}]"
+                f"in:{usage['prompt_tokens']:,}"
+                f" out:{usage['completion_tokens']:,}"
+                f" total:{total:,}/{cw:,} ({pct}%)"
             )
         return (
-            f"tokens: {total:,}"
-            f" [in:{usage['prompt_tokens']:,}"
-            f" out:{usage['completion_tokens']:,}]"
+            f"in:{usage['prompt_tokens']:,}"
+            f" out:{usage['completion_tokens']:,}"
+            f" total:{total:,}"
         )
 
     def _toolbar(self) -> HTML:
