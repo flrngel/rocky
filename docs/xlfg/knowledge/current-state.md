@@ -1,16 +1,18 @@
 # Rocky — Current State
 
-Last updated: 2026-04-12 (run-20260412-023455)
+Last updated: 2026-04-12 (run-20260412-032319)
 
 ## Test suite
 - 303 deterministic tests, ~9s, zero LLM dependency (bare `pytest -q`)
-- 8 in-process self-learn structural scenarios in `tests/test_self_learn_scenarios.py` (teach→reuse cross-process; candidate-never-hard; cross-process carryover; anti-tamper; /learned review; slow_learner-default-off; judge-path candidate-never-hard; help-hides-learn/policies)
-- **Production-level self-learn scenario catalog** in `tests/test_self_learn_live.py`, env-gated by `ROCKY_LLM_SMOKE=1`, subprocess-driven against real Ollama (`gemma4:26b` at `http://ainbr-research-fast:11434/v1`). ~157s runtime, 8 passed + 1 xfailed (strict). Three scenarios, each phased:
-  - **SC-GEN (generalization)** — teach `"use pnpm, not npm"` on prompt P1 ("install a new dependency"); reuse on lexically-different P2 ("add @types/node"); assert the real answer contains a pnpm command form AND no `npm install`. Anchor: Voyager (NeurIPS 2023), Hyperagents transfer eval. Proven live: answer was ```pnpm add -D @types/node```.
-  - **SC-UNDO (rollback)** — structural PASS: `rocky undo` → `rolled_back=True`, policy dir moved to `.rocky/artifacts/rollback/`, `/learned` empty, `selected_policies=[]`. Behavioral XFAIL(strict=True) exposing PRD §8 Issue 1 multi-store leak: post-undo answer still says ```pnpm add axios``` because `.rocky/student/{notebook.jsonl,patterns,retrospectives}/`, `.rocky/memories/auto/`, and `.rocky/memories/project_brief.md` retain the correction. AND `AgentCore`'s self-retrospection actively re-writes NEW artifacts during every post-undo turn (`self_learning.persisted=True` in trace). Phase-1 fix must BOTH collapse stores AND gate self_learning promotion on rollback state.
-  - **SC-FALSEPOS (retrieval precision)** — teach narrow Python-scoped policy; reuse zero-overlap prompt "What is the capital of France?"; assert policy absent from `selected_policies`. Anchor: RAGAs (EACL 2024), BenchPreS selectivity. Proven live: "The capital of France is Paris." with `selected_policies=[]`.
-  - Research grounding (7 sources): Hyperagents (arXiv:2603.19461), Voyager (arXiv:2305.16291), RAGAs (arXiv:2309.15217), RAG Eval Survey (arXiv:2405.07437), BenchPreS (arXiv:2603.16557), Catastrophic Forgetting (arXiv:2308.08747), OpenAI Memory docs.
-  - **Prior run's marker-injection test (`MULBERRY-Q7X`) was replaced** — user correctly called it trivial instruction-following, not learning.
+- 8 in-process self-learn structural scenarios in `tests/test_self_learn_scenarios.py`
+- **Autonomous self-learn live catalog** in `tests/test_self_learn_live.py`, env-gated by `ROCKY_LLM_SMOKE=1`, subprocess-driven via `.venv/bin/rocky` (editable source; prior runs' stale-pipx gap closed). ~109s runtime, 9 passed + 1 xfailed. Four AUTONOMOUS self-learn pathways — no `/teach` except as setup for SL-PROMOTE:
+  - **SL-MEMORY** — `MemoryStore.capture_project_memory` auto-classifies & auto-promotes a preference statement from a normal `run_prompt` turn; fresh subprocess's answer references the captured preference via the loaded memory. Live: T1 "Our team prefers using uv…" → `.rocky/memories/auto/constraint-…json` + T2 answer "You should use `uv`…".
+  - **SL-RETROSPECT** — `_auto_self_reflect` (app.py:232) persists `.rocky/artifacts/self_reflections/retro_*.json` + `.rocky/student/retrospectives/*.md` on substantive tasks. Structural phase B: retrospective LOADS into T2's `trace.context.student_notes` across process boundary. Behavioral phase B: XFAIL(strict=True) — for gemma4:26b the retrospective loads but does NOT measurably shape verification-style generation (expected `python3 -c` per the retrospective title "functional verification via shell one-liners", got "Observed output:" block instead). Phase-2 context-packer / stronger-model target.
+  - **SL-PROMOTE** — `/teach` seeds candidate; autonomous `record_query`→`_promote_policy_meta` flips POLICY.meta.json candidate→promoted on first `verification.status=pass` reuse. Live: meta before `top=candidate, vsc=0`; after `top=promoted, vsc=1`. No operator action.
+  - **SL-BRIEF** — `rebuild_project_brief` auto-synthesises `.rocky/memories/project_brief.md`; fresh subprocess's `trace.context.memories` includes the brief entry. No /teach.
+  - Research anchors (7 cited): Hyperagents (arXiv:2603.19461), Voyager (NeurIPS 2023, arXiv:2305.16291), RAGAs (EACL 2024, arXiv:2309.15217), RAG Eval Survey (arXiv:2405.07437), BenchPreS (arXiv:2603.16557), Catastrophic Forgetting (arXiv:2308.08747), OpenAI Memory docs.
+  - **Replaced cheats**: run-013706 marker-injection (trivial instruction-following), run-023455 /teach-centric scenarios + irrelevant UNDO. This catalog tests SELF-learning — what Rocky writes autonomously during normal `run_prompt` turns.
+  - **`ROCKY_BIN` default**: `.venv/bin/rocky` (editable install from src/) when present. Previously silently hit stale pipx binary.
 - RunFlowManager multi-burst loop covered by 8 dedicated tests in test_run_flow.py
 - Integration tests in test_agent_runtime.py use exact `==` call counts
 - Web tool tests: 25 tests in test_web_tools.py
