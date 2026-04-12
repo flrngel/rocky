@@ -54,7 +54,7 @@ class LearningConfig:
     enabled: bool = True
     auto_publish_project_skills: bool = True
     auto_self_reflection_enabled: bool = True
-    slow_learner_enabled: bool = True
+    slow_learner_enabled: bool = False
 
 
 @dataclass(slots=True)

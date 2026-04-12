@@ -929,6 +929,9 @@ class AgentCore:
         records: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in context.learned_policies:
+            promotion_state = str(item.get("promotion_state") or "promoted").lower()
+            if promotion_state != "promoted":
+                continue
             name = str(item.get("name") or "").strip()
             if not name or name in seen:
                 continue

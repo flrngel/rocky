@@ -69,10 +69,13 @@ def _append_context_blocks(parts: list[str], context: ContextPackage) -> None:
             parts.append(f"### {item['name']} ({item['scope']})\n{item['text']}")
     if context.learned_policies:
         parts.append(
-            "Retrieved learned policies are corrective memories from earlier feedback in this workspace. When a learned policy applies, follow it before generic heuristics. Treat explicit prohibitions in learned policies as hard constraints for this answer, even if the policy is still marked candidate."
+            "Retrieved learned policies are corrective memories from earlier feedback in this workspace. When a learned policy applies, follow it before generic heuristics. Treat explicit prohibitions in promoted learned policies as hard constraints for this answer; candidate policies are visible for transparency but do not act as hard constraints until they have been promoted."
         )
         learned_constraints: list[str] = []
         for item in context.learned_policies:
+            promotion_state = str(item.get("promotion_state") or "promoted").lower()
+            if promotion_state != "promoted":
+                continue
             feedback = str(item.get("feedback_excerpt") or "").strip()
             if feedback:
                 learned_constraints.append(f"- Teacher correction: {feedback}")

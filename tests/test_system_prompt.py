@@ -122,24 +122,23 @@ def test_system_prompt_prefers_exact_url_before_browser_for_live_research() -> N
     assert "send exactly one browser subcommand per tool call" in prompt
 
 
-def test_system_prompt_makes_learned_policy_prohibitions_hard_constraints() -> None:
-    prompt = build_system_prompt(
+def test_system_prompt_gates_learned_constraints_on_promotion() -> None:
+    base_policy = {
+        "name": "product-expression-variant-misclassified",
+        "scope": "project",
+        "origin": "learned",
+        "generation": 2,
+        "text": "- Do not include distinct expression variants as candidates for the base product.",
+        "required_behavior": ["Keep only the established item family once it is supported by the evidence."],
+        "prohibited_behavior": ["Include distinct variants once the established item family is known."],
+    }
+
+    candidate_prompt = build_system_prompt(
         ContextPackage(
             instructions=[],
             memories=[],
             skills=[],
-            learned_policies=[
-                {
-                    "name": "product-expression-variant-misclassified",
-                    "scope": "project",
-                    "origin": "learned",
-                    "generation": 2,
-                    "promotion_state": "candidate",
-                    "text": "- Do not include distinct expression variants as candidates for the base product.",
-                    "required_behavior": ["Keep only the established item family once it is supported by the evidence."],
-                    "prohibited_behavior": ["Include distinct variants once the established item family is known."],
-                }
-            ],
+            learned_policies=[{**base_policy, "promotion_state": "candidate"}],
             tool_families=["shell", "filesystem"],
         ),
         mode="bypass",
@@ -147,13 +146,33 @@ def test_system_prompt_makes_learned_policy_prohibitions_hard_constraints() -> N
         task_signature="repo/shell_execution",
     )
 
-    assert "prefer the newer corrective guidance" in prompt
-    assert "Treat explicit 'Do not...' rules from retrieved student notes and learned policies as hard constraints" in prompt
-    assert "even if the policy is still marked candidate" in prompt
-    assert "## Learned constraints" in prompt
-    assert "## Learned policies" in prompt
-    assert "Do not: Include distinct variants once the established item family is known." in prompt
-    assert "Do: Keep only the established item family once it is supported by the evidence." in prompt
+    # Candidate policies MUST NOT emit hard constraints (PRD §11 Crucial change, §16.8 FR-8).
+    assert "## Learned constraints" not in candidate_prompt
+    assert "Do not: Include distinct variants once the established item family is known." not in candidate_prompt
+    assert "Do: Keep only the established item family once it is supported by the evidence." not in candidate_prompt
+    # Candidate policies remain visible informationally under "Learned policies".
+    assert "## Learned policies" in candidate_prompt
+    # The policy prose still guides the model but explicitly qualifies hard behavior on promotion state.
+    assert "promoted learned policies" in candidate_prompt
+    assert "even if the policy is still marked candidate" not in candidate_prompt
+
+    promoted_prompt = build_system_prompt(
+        ContextPackage(
+            instructions=[],
+            memories=[],
+            skills=[],
+            learned_policies=[{**base_policy, "promotion_state": "promoted"}],
+            tool_families=["shell", "filesystem"],
+        ),
+        mode="bypass",
+        user_prompt="oban 15",
+        task_signature="repo/shell_execution",
+    )
+
+    assert "## Learned constraints" in promoted_prompt
+    assert "Do not: Include distinct variants once the established item family is known." in promoted_prompt
+    assert "Do: Keep only the established item family once it is supported by the evidence." in promoted_prompt
+    assert "## Learned policies" in promoted_prompt
 
 
 def test_system_prompt_marks_self_retrospectives_as_soft_conventions() -> None:

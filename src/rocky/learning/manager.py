@@ -134,6 +134,7 @@ class LearningManager:
         payload["metadata"]["promotion_state"] = "promoted"
         payload["metadata"]["verified_success_count"] = int(payload["metadata"].get("verified_success_count") or 0)
         payload["metadata"]["verification"] = {"status": "promoted", "tests": payload["metadata"].get("verification", {}).get("tests", [])}
+        payload["promotion_state"] = "promoted"
         payload["promoted_at"] = utc_iso()
         self._write_meta(meta_path, payload)
         policy_path = Path(str(payload.get("policy_path") or payload.get("skill_path") or ""))

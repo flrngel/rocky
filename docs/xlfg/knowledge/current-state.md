@@ -1,27 +1,44 @@
 # Rocky — Current State
 
-Last updated: 2026-04-10 (run-20260410-193727)
+Last updated: 2026-04-12 (run-20260412-000228)
 
 ## Test suite
-- 295 deterministic tests, ~9s, zero LLM dependency
-- RunFlowManager multi-burst loop covered by 8 dedicated tests in test_run_flow.py (research + non-research paths)
+- 303 deterministic tests, ~9s, zero LLM dependency
+- 8 self-learn verification scenarios in test_self_learn_scenarios.py (teach→reuse cross-process; candidate-never-hard; cross-process carryover; anti-tamper; /learned review; slow_learner-default-off; judge-path candidate-never-hard; help-hides-learn/policies)
+- RunFlowManager multi-burst loop covered by 8 dedicated tests in test_run_flow.py
 - Integration tests in test_agent_runtime.py use exact `==` call counts
-- Web tool tests: 25 tests in test_web_tools.py (search, fetch, bot detection, content extraction, broadening, steps)
-- Tool events tests: 6 tests in test_tool_events.py (normalization, browser hints, steps facts)
+- Web tool tests: 25 tests in test_web_tools.py
+- Tool events tests: 6 tests in test_tool_events.py
 
 ## REPL toolbar
 - Bottom toolbar at `ui/repl.py:452-467` shows keybindings, freeze/verbose state, token usage, context usage, session ID, provider label, thread ID
-- Token usage label: `Tok P{prompt} C{completion} T{total}/{context_window}({pct}%)` when `ProviderConfig.context_window` is set; raw `T{total}` when unknown
-- `_safe_context_window()` reads `config.provider().context_window` with MagicMock guards
-- `ProviderConfig.context_window: int | None = None` — user-settable per provider in YAML config
+- Token usage label: `Tok P{prompt} C{completion} T{total}/{context_window}({pct}%)`
 - Built-in defaults: litellm_local=32768, ollama=131072, openai=128000
+
+## Learning subsystem — Hyperlearning v2 Phase 0 shipped (2026-04-12)
+- **Candidate-never-hard invariant now enforced at two sites:**
+  - `core/system_prompt.py` `## Learned constraints` block filters policies to `promotion_state == "promoted"` (default-on-missing). Candidate policies are still listed under `## Learned policies` for visibility but do NOT emit `Do not:` / `Do:` hard-constraint lines.
+  - `core/agent.py::_learned_constraint_records` applies the identical filter so candidate rules never reach `_judge_learned_constraints` or `_repair_learned_constraint_output`. Judge prompt treats its input as hard rules — both sites must stay aligned.
+- **Commands surface:**
+  - `/policies` removed entirely (cmd_policies deleted; `"policies"` absent from names list).
+  - `/learn <feedback>` hidden from `_help_text()` but the `learn ` prefix alias in `CommandRegistry.handle()` still dispatches to `runtime.learn()` (one-cycle transition alias per PRD §9.1).
+  - `/learned review` filters to `promotion_state == "candidate"`, checking both top-level and `metadata.promotion_state` on the meta-JSON payload.
+- **Config defaults:** `LearningConfig.slow_learner_enabled` defaults to `False` (both `config/models.py` and `config/loader.py` DEFAULT_CONFIG). `run_slow_learner()` short-circuits on the flag.
+- **`_promote_policy_meta` consistency:** updates both `metadata.promotion_state` and top-level `promotion_state` to `"promoted"`; POLICY.md frontmatter is also rewritten.
+- **Deferred work:** `docs/xlfg/knowledge/hyperlearning-backlog.md` captures PRD Phases 1 (ledger), 2 (retrieval rewrite), 3 (meta archive), 4 (transfer eval) + cross-cutting §17 (commands), §21 (safety), §23 (metrics).
+
+## Scenario rule for self-learn tests
+- Scenarios must exercise real `RockyRuntime`, `LearnedPolicyLoader`, `LearnedPolicyRetriever` — no mocks of the learning subsystem.
+- Assertions must be on disk state / policy_id identity / system-prompt structure, never on substring matches of request text.
+- Anti-tamper gate: every self-learn scenario file should contain at least one test that blanks the on-disk policy store and asserts the reuse observation flips to negative — this is the "never hard-code to pass the scenario" contract.
+- Sensitivity checks (revert the fix → confirm test fails) are the honest proof that a code change is load-bearing.
 
 ## Agent loop
 - Two execution paths in AgentCore.run():
   - Flow-controlled loop (_run_flow_controlled_loop): ALL tasks with tools (except conversation/)
   - Simple provider call: conversation tasks and tasks without tools
 - _should_use_flow_loop() gate at agent.py:410 — returns True when route has tool_families AND task_signature is not conversation/
-- Non-finalize early return works for ALL task types with full verification: standard verify → automation judgment → learned constraints → return if pass
+- Non-finalize early return works for ALL task types with full verification
 
 ## Flow loop task kinds by task type
 - research/site → discover/gather/finalize (max_bursts=8)
@@ -29,19 +46,9 @@ Last updated: 2026-04-10 (run-20260410-193727)
 - extract/data → inspect/produce/finalize (max_bursts=4)
 - fallback → inspect/finalize (max_bursts=4)
 
-## advance() heuristics by task kind
-- discover: live_pages >= 1
-- gather: live_items >= target or live_pages >= 1
-- build: any successful tool
-- inspect: any successful tool
-- produce: any successful tool
-- verify: run_shell_command or read_file
-- finalize: final_output_ready=True
-
 ## Web tool system
-- `search_web` in tools/web.py: queries DuckDuckGo (3 endpoints) + Brave, with algorithmic query broadening on zero results (strip site:, drop quotes, drop rightmost token, max 2 rounds). Returns `steps` list in metadata recording each engine attempt and broadening round.
-- `fetch_url` in tools/web.py: fetches URL, extracts content using readability-style BS4 parsing (strips nav/header/footer/aside, prefers article/main, falls back to body if < 200 chars). Returns `link_items` with scored links.
-- `agent_browser` in tools/browser.py: wraps Vercel `agent-browser` CLI. Separate "browser" tool family with independent permissions.
-- Bot detection (`_looks_like_bot_challenge`): hard markers (captcha elements, CF challenge paths) always trigger. Soft markers require ≥2 matches OR 1 match + challenge HTTP status (202/403/429/503). Single soft marker alone does NOT trigger.
-- When `fetch_url` hits a bot challenge, result includes `browser_fallback_hint: True` in metadata. `tool_events.py` emits a "Hint: retry with agent_browser" fact for the LLM.
-- Tool event summarizers in tool_events.py: separate paths for fetch_url (web_fetch), search_web/extract_links (web_list), agent_browser (shell-like + browser observations). Steps and hint facts are emitted via derive_tool_event_details.
+- `search_web`: DuckDuckGo (3 endpoints) + Brave with algorithmic query broadening on zero results; emits `steps` list in metadata.
+- `fetch_url`: readability-style BS4 extraction; strips nav/header/footer/aside; returns `link_items` with scored links.
+- `agent_browser`: separate tool family with independent permissions.
+- Bot detection: hard markers always trigger; soft markers require ≥2 matches OR 1 match + challenge HTTP status.
+- `browser_fallback_hint: True` on bot challenge; `tool_events.py` emits "Hint: retry with agent_browser" fact.
