@@ -15,6 +15,12 @@ from rocky.core.router import Lane, Router
 from rocky.core.runtime_state import ThreadRegistry
 from rocky.core.verifiers import VerifierRegistry
 from rocky.harness import harness_inventory as harness_catalog
+from rocky.learning.ledger import (
+    LearningLedgerStore,
+    LearningRecord,
+    migrate_legacy_workspace,
+    new_lineage_id,
+)
 from rocky.learning.manager import LearningManager
 from rocky.learning.policies import LearnedPolicyLoader, LearnedPolicyRetriever
 from rocky.memory.retriever import MemoryRetriever
@@ -28,6 +34,7 @@ from rocky.tools.base import ToolContext
 from rocky.tools.registry import ToolRegistry
 from rocky.util.io import read_yaml, write_text
 from rocky.util.paths import WorkspacePaths, discover_workspace, ensure_global_layout
+from rocky.util.time import utc_iso
 from rocky.util.yamlx import dump_yaml
 
 
@@ -51,6 +58,7 @@ class RockyRuntime:
         learning_manager: LearningManager,
         agent: AgentCore,
         student_store: StudentStore,
+        ledger: LearningLedgerStore,
         *,
         freeze_enabled: bool = False,
         verbose_enabled: bool = False,
@@ -72,6 +80,9 @@ class RockyRuntime:
         self.learning_manager = learning_manager
         self.agent = agent
         self.student_store = student_store
+        self.ledger = ledger
+        # learning_manager needs ledger to do lineage-aware rollback.
+        self.learning_manager.ledger = ledger
         self.freeze_enabled = freeze_enabled
         self.verbose_enabled = verbose_enabled
         self.freeze_session_seed = sessions.peek_current() if freeze_enabled else None
@@ -147,6 +158,13 @@ class RockyRuntime:
             meta_handler=lambda prompt: "",
             create_layout=not freeze,
         )
+        ledger = LearningLedgerStore(workspace.root, create_layout=not freeze)
+        if not freeze:
+            try:
+                migrate_legacy_workspace(ledger, workspace.root)
+            except Exception:
+                # Migration must never block load; failures are visible via ledger state.
+                pass
         runtime = cls(
             workspace=workspace,
             global_root=global_root,
@@ -165,6 +183,7 @@ class RockyRuntime:
             learning_manager=learning_manager,
             agent=agent,
             student_store=student_store,
+            ledger=ledger,
             freeze_enabled=freeze,
             verbose_enabled=verbose,
         )
@@ -213,6 +232,8 @@ class RockyRuntime:
             freeze=effective_freeze,
             session_seed=self.freeze_session_seed if effective_freeze else None,
         )
+        turn_lineage_id = new_lineage_id("turn")
+        response.trace["turn_lineage_id"] = turn_lineage_id
         if not effective_freeze and self._should_capture_project_memory(response):
             try:
                 current_thread = ((response.trace.get("thread") or {}).get("current_thread") or {})
@@ -226,11 +247,26 @@ class RockyRuntime:
                 )
                 if result.get("written"):
                     self.refresh_knowledge()
+                self._register_capture_artifacts(turn_lineage_id, result)
             except Exception:
                 pass
         if not effective_freeze:
-            self._auto_self_reflect(prompt, response, event_handler=event_handler)
+            self._auto_self_reflect(prompt, response, event_handler=event_handler, lineage_id=turn_lineage_id)
         return response
+
+    def _register_capture_artifacts(self, lineage_id: str, capture_result: dict[str, Any]) -> None:
+        """Register memory/auto/candidate artifacts produced by capture_project_memory."""
+        try:
+            for bucket in ("candidates", "notes"):
+                for entry in capture_result.get(bucket) or []:
+                    path = entry.get("path") if isinstance(entry, dict) else None
+                    if path:
+                        self.ledger.register_artifact(lineage_id, Path(path))
+            brief_path = self.workspace.memories_dir / "project_brief.md"
+            if brief_path.exists():
+                self.ledger.register_artifact(lineage_id, brief_path)
+        except Exception:
+            pass
 
     def _should_capture_project_memory(self, response: AgentResponse) -> bool:
         if response.verification.get("status") != "pass":
@@ -268,8 +304,26 @@ class RockyRuntime:
         except Exception:
             return
 
-    def _auto_self_reflect(self, prompt: str, response: AgentResponse, *, event_handler=None) -> None:
+    def _auto_self_reflect(
+        self,
+        prompt: str,
+        response: AgentResponse,
+        *,
+        event_handler=None,
+        lineage_id: str | None = None,
+    ) -> None:
         if not self._should_self_reflect(response):
+            return
+        # Lineage-scoped gate: if this turn's active lineage is in a rolled-back
+        # state (from a prior /undo), skip writing a new retrospective. Prevents
+        # PRD §8 Issue 1's second-order re-persistence bug where post-undo turns
+        # actively re-seed the correction into student/retrospectives/.
+        if lineage_id and self.ledger.is_lineage_rolled_back(lineage_id):
+            response.trace["self_learning"] = {
+                "persisted": False,
+                "reason": "active lineage is in rolled-back state",
+                "lineage_id": lineage_id,
+            }
             return
         current_thread = ((response.trace.get("thread") or {}).get("current_thread") or {})
         provider = self._reflection_provider()
@@ -332,7 +386,21 @@ class RockyRuntime:
             "artifact_path": result.get("artifact_path"),
             "retrospective": retrospective,
             "student_note": note_result.get("entry"),
+            "lineage_id": lineage_id,
         }
+        # Register retrospective artifacts against this turn's lineage so
+        # /undo (lineage-based rollback) can move them too.
+        if lineage_id:
+            try:
+                artifact_path = result.get("artifact_path")
+                if artifact_path:
+                    self.ledger.register_artifact(lineage_id, Path(artifact_path))
+                note_entry = note_result.get("entry") or {}
+                note_path = note_entry.get("path") if isinstance(note_entry, dict) else None
+                if note_path:
+                    self.ledger.register_artifact(lineage_id, Path(note_path))
+            except Exception:
+                pass
         self.agent.last_trace = response.trace
         self.refresh_knowledge()
         self._persist_trace_update(response.trace)
@@ -817,6 +885,60 @@ class RockyRuntime:
             if structured_memory_result and analysis.memory_kind == "pattern"
             else None
         )
+
+        # --- Canonical ledger: emit ONE LearningRecord per teach event, register all produced artifacts ---
+        teach_lineage_id = new_lineage_id("teach")
+        result["lineage_id"] = teach_lineage_id
+        try:
+            now = utc_iso()
+            canonical = LearningRecord(
+                id=teach_lineage_id,
+                kind="procedure" if result.get("published") else "lesson",
+                scope="project",
+                authority="teacher",
+                promotion_state=str(result.get("promotion_state") or "candidate"),
+                activation_mode="soft",
+                task_signature=task_signature,
+                task_family=task_family,
+                failure_class=analysis.failure_class,
+                triggers=list(analysis.triggers or [])[:16],
+                required_behavior=list(getattr(analysis, "required_behavior", []) or [])[:8],
+                prohibited_behavior=list(getattr(analysis, "prohibited_behavior", []) or [])[:8],
+                evidence=[feedback[:400]],
+                lineage={
+                    "id": teach_lineage_id,
+                    "policy_id": result.get("policy_id"),
+                    "support_episode_id": result.get("support_episode_id"),
+                    "thread_id": thread_id,
+                },
+                created_at=now,
+                updated_at=now,
+                origin={"type": "teacher_feedback", "feedback": feedback[:400]},
+                reuse_stats={"reuse_count": 0, "verified_success_count": 0},
+            )
+            self.ledger.append(canonical)
+            # Register every artifact this teach produced so rollback can move them all.
+            note_entry = note_result.get("entry") if isinstance(note_result, dict) else None
+            notebook_path = self.workspace.student_dir / "notebook.jsonl"
+            if notebook_path.exists():
+                self.ledger.register_artifact(teach_lineage_id, notebook_path)
+            if note_entry and isinstance(note_entry, dict) and note_entry.get("path"):
+                self.ledger.register_artifact(teach_lineage_id, Path(note_entry["path"]))
+            if structured_memory_result and isinstance(structured_memory_result, dict):
+                sm_entry = structured_memory_result.get("entry") or {}
+                sm_path = sm_entry.get("path") if isinstance(sm_entry, dict) else None
+                if sm_path:
+                    self.ledger.register_artifact(teach_lineage_id, Path(sm_path))
+            policy_path = result.get("policy_path")
+            if policy_path:
+                self.ledger.register_artifact(teach_lineage_id, Path(policy_path).parent)
+            reflection_path = result.get("reflection_path")
+            if reflection_path:
+                self.ledger.register_artifact(teach_lineage_id, Path(reflection_path))
+        except Exception:
+            pass
+        # --- end canonical ledger emission ---
+
         self.refresh_knowledge()
         return result
 

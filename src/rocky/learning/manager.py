@@ -422,6 +422,39 @@ class LearningManager:
         return rows
 
     def rollback_latest(self) -> dict[str, Any] | None:
+        """Phase-1 ledger-aware rollback.
+
+        Looks up the most-recent teach lineage in the canonical ledger and
+        moves ALL registered artifacts for that lineage (policy dir, student
+        notebook ref, student patterns/examples, memory candidates/auto,
+        project_brief, learning reflection, self_reflection) into a
+        lineage-named rollback subdir. Closes PRD §8 Issue 1 multi-store leak.
+
+        Falls back to the legacy single-store behavior (policy dir only) when
+        no ledger is attached — preserves existing tests that instantiate
+        LearningManager directly without a runtime wiring the ledger.
+        """
+        ledger = getattr(self, "ledger", None)
+        rollback_root = self.artifacts_dir / "rollback"
+        rollback_root.mkdir(parents=True, exist_ok=True)
+
+        if ledger is not None:
+            record = ledger.latest_teach_lineage()
+            if record is not None:
+                lineage_id = str((record.lineage or {}).get("id") or record.id)
+                result = ledger.rollback_lineage(lineage_id, rollback_root)
+                policy_id = (record.lineage or {}).get("policy_id")
+                moved = result.get("moved") or []
+                return {
+                    "rolled_back": bool(result.get("rolled_back")),
+                    "lineage_id": lineage_id,
+                    "policy_id": policy_id,
+                    "from": moved[0]["src"] if moved else None,
+                    "to": moved[0]["dst"] if moved else str(rollback_root),
+                    "moved": moved,
+                }
+
+        # Legacy fallback: no ledger attached (direct LearningManager instantiation in tests).
         learned = self.list_learned()
         if not learned:
             return None
@@ -429,12 +462,7 @@ class LearningManager:
         policy_path = Path(str(latest.get("policy_path") or latest.get("skill_path") or ""))
         if not policy_path.exists():
             return {"rolled_back": False, "reason": "policy path missing", **latest}
-        rollback_dir = (
-            self.artifacts_dir
-            / "rollback"
-            / f"{policy_path.parent.name}__{utc_iso().replace(':', '').replace('-', '')}"
-        )
-        rollback_dir.parent.mkdir(parents=True, exist_ok=True)
+        rollback_dir = rollback_root / f"{policy_path.parent.name}__{utc_iso().replace(':', '').replace('-', '')}"
         shutil.move(str(policy_path.parent), str(rollback_dir))
         return {
             "rolled_back": True,

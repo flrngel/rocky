@@ -10,11 +10,13 @@ This document captures every PRD obligation that remains after Phase 0. Future `
 
 ## Phase 1 — Canonical Learning Ledger
 
+**STATUS: SHIPPED (run-20260412-142114)** — `src/rocky/learning/ledger.py` + migration + lineage-aware /undo + self-reflect rollback gate + 5 deterministic ledger tests + 1 live regular-PASS + 1 live behavioral XFAIL(strict) scoping the derived-autonomous leak to Phase 2. SL-UNDO structural test proves 4 teach-fanout artifacts move on /undo (vs the pre-Phase-1 single-store behavior).
+
 PRD references: §8.2 "Canonical data model", §16.1 FR-1, §20.2 "Phase 1", §25.2 migration mapping.
 
 Goal: every `/teach` event creates one canonical record lineage instead of parallel notebook/pattern/policy artifacts. Legacy stores remain readable but no longer receive new writes.
 
-Deferred work items:
+Shipped in run-20260412-142114:
 - **Multi-store `/undo` leak fix (concrete, live-verified in run-20260412-023455):** `runtime.undo()` → `learning_manager.rollback_latest()` (`src/rocky/learning/manager.py:424`) currently only `shutil.move`s the `.rocky/policies/learned/<policy_id>/` directory into `.rocky/artifacts/rollback/`. The following durable stores created by the same `/teach` event are NOT touched and continue to inject the correction into post-undo system prompts: `.rocky/student/notebook.jsonl`, `.rocky/student/patterns/*.md`, `.rocky/student/retrospectives/*.md`, `.rocky/memories/candidates/*.json`, `.rocky/memories/auto/*.json` (note auto-promoted memories), `.rocky/memories/project_brief.md`. Evidence: `tests/test_self_learn_live.py::test_sc_undo_phase_F_behavioral_correction_gone` is `xfail(strict=True)` with full evidence in `docs/xlfg/runs/run-20260412-023455/evidence/live/sc_undo/`. **Second-order issue**: `AgentCore`'s self-retrospection (`self_learning.persisted=True` in post-undo traces) actively WRITES NEW retrospective + pattern artifacts during each post-undo reuse turn, re-widening the leak on every interaction. Phase 1 fix must BOTH (a) route /teach writes through the canonical ledger instead of fanning out to parallel stores AND (b) gate `self_learning` promotion logic on rollback state so post-undo turns do not re-record. XPASS on the xfail test is the alert that Phase 1 is complete.
 - Define the `LearningRecord` dataclass per PRD §8.2 (fields: `id`, `kind`, `scope`, `authority`, `promotion_state`, `activation_mode`, `task_signature`, `task_family`, `failure_class`, `triggers`, `required_behavior`, `prohibited_behavior`, `evidence`, `lineage`, `created_at`, `updated_at`, `origin`, `reuse_stats`).
 - Implement `LearningLedgerStore` with JSONL append + meta sidecar layout under `.rocky/ledger/`.
@@ -23,6 +25,10 @@ Deferred work items:
 - Implement migration mapping per PRD §25.2 (`project auto memory goal/constraint/preference/decision/path/fact → kind=<same>`; `student pattern → kind=procedure`; `legacy learned skill → kind=procedure, origin=migration_legacy_skill`; etc.).
 - Cover with a focused test file exercising a round-trip: teach → ledger record → retrieve by lookup adapter → matches expected canonical id.
 - Acceptance: each new teach event has one canonical lineage id (PRD §20.2 success criterion). No new parallel notebook+pattern+policy durable artifacts are created.
+
+### Residual Phase-1 items (inherited by Phase 2)
+- **A4 retriever-reads-ledger-first**: `LearnedPolicyRetriever`, `MemoryRetriever`, and `StudentStore.retrieve()` still read from legacy filesystem walks. Phase 1 covers write-registration only. Phase 2 must swap retriever internals to query `ledger.filter_by_kind(...)` before the legacy walk, then eventually retire the legacy walk entirely.
+- **Derived-autonomous leak** (live-verified in run-20260412-142114): when `/teach`'s correction is reused before `/undo`, `capture_project_memory` autonomously writes `.rocky/memories/candidates/*.json` + `.rocky/memories/auto/*.json` + `.rocky/memories/project_brief.md` under a turn-lineage (`ln-<uuid>`), NOT the teach-lineage (`teach-<uuid>`). Teach-lineage rollback doesn't move them. Evidence: `tests/test_self_learn_live.py::test_sl_undo_behavioral_correction_fully_gone` is `xfail(strict=True)`. Fix options: (1) link turn-lineage derivatives to the teach-lineage active at capture time, (2) add a contamination scan to `/undo` that moves memory entries whose `evidence_excerpt` matches the rolled-back feedback, or (3) Phase-2's unified retriever filters out memories captured while a rolled-back policy was active. XPASS is the acceptance signal.
 
 ## Phase 2 — Runtime retrieval + context packing rewrite
 

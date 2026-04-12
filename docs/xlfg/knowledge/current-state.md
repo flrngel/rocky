@@ -1,15 +1,29 @@
 # Rocky — Current State
 
-Last updated: 2026-04-12 (run-20260412-032319)
+Last updated: 2026-04-12 (run-20260412-142114 — Phase 1 canonical ledger shipped)
 
 ## Test suite
-- 303 deterministic tests, ~9s, zero LLM dependency (bare `pytest -q`)
+- **308 deterministic tests**, ~10s, zero LLM dependency (bare `pytest -q`). +5 from new `tests/test_learning_ledger.py`.
 - 8 in-process self-learn structural scenarios in `tests/test_self_learn_scenarios.py`
-- **Autonomous self-learn live catalog** in `tests/test_self_learn_live.py`, env-gated by `ROCKY_LLM_SMOKE=1`, subprocess-driven via `.venv/bin/rocky` (editable source; prior runs' stale-pipx gap closed). ~109s runtime, 9 passed + 1 xfailed. Four AUTONOMOUS self-learn pathways — no `/teach` except as setup for SL-PROMOTE:
+- **5 canonical ledger tests** in `tests/test_learning_ledger.py` (run-20260412-142114): round-trip, migration idempotency, lineage rollback with anti-monkey guard (unrelated records untouched), lineage-scoped self-reflect gate with boundary test (same thread_id + fresh lineage = NOT suppressed), one-canonical-record-per-teach.
+- **Autonomous self-learn live catalog** in `tests/test_self_learn_live.py`, env-gated by `ROCKY_LLM_SMOKE=1`, subprocess-driven via `.venv/bin/rocky`. ~220s runtime, 10 passed + 2 xfailed. Five scenarios — no `/teach` except as setup for SL-PROMOTE and SL-UNDO:
   - **SL-MEMORY** — `MemoryStore.capture_project_memory` auto-classifies & auto-promotes a preference statement from a normal `run_prompt` turn; fresh subprocess's answer references the captured preference via the loaded memory. Live: T1 "Our team prefers using uv…" → `.rocky/memories/auto/constraint-…json` + T2 answer "You should use `uv`…".
   - **SL-RETROSPECT** — `_auto_self_reflect` (app.py:232) persists `.rocky/artifacts/self_reflections/retro_*.json` + `.rocky/student/retrospectives/*.md` on substantive tasks. Structural phase B: retrospective LOADS into T2's `trace.context.student_notes` across process boundary. Behavioral phase B: XFAIL(strict=True) — for gemma4:26b the retrospective loads but does NOT measurably shape verification-style generation (expected `python3 -c` per the retrospective title "functional verification via shell one-liners", got "Observed output:" block instead). Phase-2 context-packer / stronger-model target.
   - **SL-PROMOTE** — `/teach` seeds candidate; autonomous `record_query`→`_promote_policy_meta` flips POLICY.meta.json candidate→promoted on first `verification.status=pass` reuse. Live: meta before `top=candidate, vsc=0`; after `top=promoted, vsc=1`. No operator action.
   - **SL-BRIEF** — `rebuild_project_brief` auto-synthesises `.rocky/memories/project_brief.md`; fresh subprocess's `trace.context.memories` includes the brief entry. No /teach.
+  - **SL-UNDO (Phase 1)** — ledger-aware `/undo` via `LearningLedgerStore.rollback_lineage()`. Structural phase PASSES: `data.rolled_back=True`, `moved` list has 4 artifacts (student notebook + student patterns + policy dir + learning reflection). Behavioral phase XFAIL(strict=True): post-undo model still prefers pnpm because `.rocky/memories/auto/*.json` + `project_brief.md` were captured under turn-lineage (derived-autonomous leak — Phase-2 scope).
+
+## Phase 1 canonical ledger (SHIPPED run-20260412-142114)
+- **`src/rocky/learning/ledger.py`**: `LearningRecord` dataclass (17 PRD §8.2 fields + `ledger_version` + `rolled_back` bookkeeping); `LearningLedgerStore` with append-only `.rocky/ledger/records.jsonl` + `.rocky/ledger/lineage_index.json`; `migrate_legacy_workspace()` for idempotent legacy→ledger migration; `new_lineage_id()` helper.
+- **`runtime.learn()`** emits exactly one canonical `LearningRecord` per teach event with a `teach-<uuid>` lineage_id, and registers every produced artifact path (student notebook, student pattern, policy dir, reflection JSON) with the ledger's lineage index.
+- **`run_prompt()`** generates a `turn-<uuid>` lineage_id per turn and registers artifacts written by `capture_project_memory` + `_auto_self_reflect` under that lineage.
+- **`learning_manager.rollback_latest()`** now calls `ledger.rollback_lineage()` on the latest teach lineage, moving ALL registered artifacts into `.rocky/artifacts/rollback/<lineage_id>__<ts>/` atomically. Legacy single-store fallback preserved for tests that instantiate `LearningManager` without wiring a ledger.
+- **`_auto_self_reflect()`** is gated on the current turn's lineage being rolled back (`ledger.is_lineage_rolled_back(lineage_id)`) — prevents PRD §8 Issue 1's second-order re-persistence bug where post-undo turns actively re-seed the correction.
+
+## Phase-1 scope limits (honest Phase-2 targets)
+- Retriever-reads-ledger-first is write-registration-only this run. Phase 2 unifies `LearnedPolicyRetriever`/`MemoryRetriever`/`StudentStore.retrieve()` onto the ledger read path.
+- Derived-autonomous leak: `capture_project_memory` runs autonomously during `/teach`'s correction-reuse and writes memories under `turn-<uuid>` lineage, not the teach lineage. Teach rollback doesn't find them. XPASS on `test_sl_undo_behavioral_correction_fully_gone` is the acceptance signal.
+- Retrospective style influence (from run 032319) unchanged — still Phase-2 packer work.
   - Research anchors (7 cited): Hyperagents (arXiv:2603.19461), Voyager (NeurIPS 2023, arXiv:2305.16291), RAGAs (EACL 2024, arXiv:2309.15217), RAG Eval Survey (arXiv:2405.07437), BenchPreS (arXiv:2603.16557), Catastrophic Forgetting (arXiv:2308.08747), OpenAI Memory docs.
   - **Replaced cheats**: run-013706 marker-injection (trivial instruction-following), run-023455 /teach-centric scenarios + irrelevant UNDO. This catalog tests SELF-learning — what Rocky writes autonomously during normal `run_prompt` turns.
   - **`ROCKY_BIN` default**: `.venv/bin/rocky` (editable install from src/) when present. Previously silently hit stale pipx binary.
