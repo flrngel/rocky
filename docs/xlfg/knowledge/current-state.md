@@ -1,11 +1,16 @@
 # Rocky — Current State
 
-Last updated: 2026-04-12 (run-20260412-013706)
+Last updated: 2026-04-12 (run-20260412-023455)
 
 ## Test suite
 - 303 deterministic tests, ~9s, zero LLM dependency (bare `pytest -q`)
 - 8 in-process self-learn structural scenarios in `tests/test_self_learn_scenarios.py` (teach→reuse cross-process; candidate-never-hard; cross-process carryover; anti-tamper; /learned review; slow_learner-default-off; judge-path candidate-never-hard; help-hides-learn/policies)
-- 5 **phased live** self-learn tests in `tests/test_self_learn_live.py`, env-gated by `ROCKY_LLM_SMOKE=1`, subprocess-driven against the configured real provider (Ollama `gemma4:26b` at `http://ainbr-research-fast:11434/v1`). Runtime ~5 min. Two trees: Tree 1 (PH-B) tests `/teach` publishes a candidate policy structurally. Tree 2 (PH-A/C/D) asserts on the **real answer text** — baseline `"Hello!"` has no marker, reuse after harness installs a narrow operator-approved policy produces `"Hello! MULBERRY-Q7X"`, tamper via `unlink()` reverts to `"Hello!"`. PH-F sanity-checks the hand-authored policy shape. The load-bearing real-answer assertion is in PH-C: `assert MARKER in text.upper()` is the contract that proves self-learn reshapes generation. Prior runs shipped trace-only assertions; this run locks the real answer in.
+- **Production-level self-learn scenario catalog** in `tests/test_self_learn_live.py`, env-gated by `ROCKY_LLM_SMOKE=1`, subprocess-driven against real Ollama (`gemma4:26b` at `http://ainbr-research-fast:11434/v1`). ~157s runtime, 8 passed + 1 xfailed (strict). Three scenarios, each phased:
+  - **SC-GEN (generalization)** — teach `"use pnpm, not npm"` on prompt P1 ("install a new dependency"); reuse on lexically-different P2 ("add @types/node"); assert the real answer contains a pnpm command form AND no `npm install`. Anchor: Voyager (NeurIPS 2023), Hyperagents transfer eval. Proven live: answer was ```pnpm add -D @types/node```.
+  - **SC-UNDO (rollback)** — structural PASS: `rocky undo` → `rolled_back=True`, policy dir moved to `.rocky/artifacts/rollback/`, `/learned` empty, `selected_policies=[]`. Behavioral XFAIL(strict=True) exposing PRD §8 Issue 1 multi-store leak: post-undo answer still says ```pnpm add axios``` because `.rocky/student/{notebook.jsonl,patterns,retrospectives}/`, `.rocky/memories/auto/`, and `.rocky/memories/project_brief.md` retain the correction. AND `AgentCore`'s self-retrospection actively re-writes NEW artifacts during every post-undo turn (`self_learning.persisted=True` in trace). Phase-1 fix must BOTH collapse stores AND gate self_learning promotion on rollback state.
+  - **SC-FALSEPOS (retrieval precision)** — teach narrow Python-scoped policy; reuse zero-overlap prompt "What is the capital of France?"; assert policy absent from `selected_policies`. Anchor: RAGAs (EACL 2024), BenchPreS selectivity. Proven live: "The capital of France is Paris." with `selected_policies=[]`.
+  - Research grounding (7 sources): Hyperagents (arXiv:2603.19461), Voyager (arXiv:2305.16291), RAGAs (arXiv:2309.15217), RAG Eval Survey (arXiv:2405.07437), BenchPreS (arXiv:2603.16557), Catastrophic Forgetting (arXiv:2308.08747), OpenAI Memory docs.
+  - **Prior run's marker-injection test (`MULBERRY-Q7X`) was replaced** — user correctly called it trivial instruction-following, not learning.
 - RunFlowManager multi-burst loop covered by 8 dedicated tests in test_run_flow.py
 - Integration tests in test_agent_runtime.py use exact `==` call counts
 - Web tool tests: 25 tests in test_web_tools.py
