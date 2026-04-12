@@ -1,10 +1,11 @@
 # Rocky — Current State
 
-Last updated: 2026-04-12 (run-20260412-000228)
+Last updated: 2026-04-12 (run-20260412-004405)
 
 ## Test suite
-- 303 deterministic tests, ~9s, zero LLM dependency
-- 8 self-learn verification scenarios in test_self_learn_scenarios.py (teach→reuse cross-process; candidate-never-hard; cross-process carryover; anti-tamper; /learned review; slow_learner-default-off; judge-path candidate-never-hard; help-hides-learn/policies)
+- 303 deterministic tests, ~9s, zero LLM dependency (bare `pytest -q`)
+- 8 in-process self-learn structural scenarios in `tests/test_self_learn_scenarios.py` (teach→reuse cross-process; candidate-never-hard; cross-process carryover; anti-tamper; /learned review; slow_learner-default-off; judge-path candidate-never-hard; help-hides-learn/policies)
+- 3 **live** end-to-end self-learn scenarios in `tests/test_self_learn_live.py`, env-gated by `ROCKY_LLM_SMOKE=1`, subprocess-driven against the configured real provider (Ollama `gemma4:26b` at `http://ainbr-research-fast:11434/v1`). Runtime ~11 min. Bit-flip pair: SC-L1 positive retrieval + SC-L3 `unlink()` tamper negative. SC-L1 step 3 demonstrated a real answer-text change ("Hello BANANA!") driven by the loaded policy — end-to-end learn→reuse works in production with the current Phase-0 pipeline.
 - RunFlowManager multi-burst loop covered by 8 dedicated tests in test_run_flow.py
 - Integration tests in test_agent_runtime.py use exact `==` call counts
 - Web tool tests: 25 tests in test_web_tools.py
