@@ -1,11 +1,11 @@
 # Rocky — Current State
 
-Last updated: 2026-04-12 (run-20260412-004405)
+Last updated: 2026-04-12 (run-20260412-013706)
 
 ## Test suite
 - 303 deterministic tests, ~9s, zero LLM dependency (bare `pytest -q`)
 - 8 in-process self-learn structural scenarios in `tests/test_self_learn_scenarios.py` (teach→reuse cross-process; candidate-never-hard; cross-process carryover; anti-tamper; /learned review; slow_learner-default-off; judge-path candidate-never-hard; help-hides-learn/policies)
-- 3 **live** end-to-end self-learn scenarios in `tests/test_self_learn_live.py`, env-gated by `ROCKY_LLM_SMOKE=1`, subprocess-driven against the configured real provider (Ollama `gemma4:26b` at `http://ainbr-research-fast:11434/v1`). Runtime ~11 min. Bit-flip pair: SC-L1 positive retrieval + SC-L3 `unlink()` tamper negative. SC-L1 step 3 demonstrated a real answer-text change ("Hello BANANA!") driven by the loaded policy — end-to-end learn→reuse works in production with the current Phase-0 pipeline.
+- 5 **phased live** self-learn tests in `tests/test_self_learn_live.py`, env-gated by `ROCKY_LLM_SMOKE=1`, subprocess-driven against the configured real provider (Ollama `gemma4:26b` at `http://ainbr-research-fast:11434/v1`). Runtime ~5 min. Two trees: Tree 1 (PH-B) tests `/teach` publishes a candidate policy structurally. Tree 2 (PH-A/C/D) asserts on the **real answer text** — baseline `"Hello!"` has no marker, reuse after harness installs a narrow operator-approved policy produces `"Hello! MULBERRY-Q7X"`, tamper via `unlink()` reverts to `"Hello!"`. PH-F sanity-checks the hand-authored policy shape. The load-bearing real-answer assertion is in PH-C: `assert MARKER in text.upper()` is the contract that proves self-learn reshapes generation. Prior runs shipped trace-only assertions; this run locks the real answer in.
 - RunFlowManager multi-burst loop covered by 8 dedicated tests in test_run_flow.py
 - Integration tests in test_agent_runtime.py use exact `==` call counts
 - Web tool tests: 25 tests in test_web_tools.py

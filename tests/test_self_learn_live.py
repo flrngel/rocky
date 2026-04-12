@@ -1,26 +1,64 @@
-"""Live end-to-end self-learn verification.
+"""Live end-to-end self-learn verification — phased real-answer test suite.
 
-These scenarios drive the installed `rocky` CLI as a subprocess against the
-real configured provider (Ollama, `gemma4:26b` per ~/.config/rocky/config.yaml).
-They implement the proof that the prior run's in-process deterministic tests
-left unspoken: that a real teach→publish→reuse cycle works across fresh
-subprocess boundaries, that the candidate promotion gate is driven by disk
-state, and that removing the on-disk policy file defeats retrieval.
+This file supersedes a prior version (run-20260412-004405) that ran the real
+`rocky` CLI against real Ollama but asserted only on `trace.selected_policies`,
+not on the real answer text. The user correctly called that a cheat:
+even though the captured evidence showed "Hello BANANA!" as the post-teach
+answer, the test never encoded that behavior change as a failing-when-wrong
+assertion. This version fixes that.
 
-Gated by `ROCKY_LLM_SMOKE=1` so bare `pytest -q` on machines without Ollama
-continues to pass. To run this suite:
+Two independent trees, divide-and-conquer:
+
+  Tree 1 — `/teach` publish contract (structural):
+    * PH-B `test_phase_B_teach_publishes_candidate_policy` — runs `rocky ... teach "<feedback>"`
+      after a baseline call in the same workspace; asserts `published=True`,
+      `promotion_state="candidate"`, POLICY.md exists on disk, and
+      `policy_id` round-trips through the meta JSON.
+    * Does NOT claim reuse-time answer change. The auto-teach path's
+      generated policy over-attaches `task_signatures` and descriptive
+      fields that `AgentCore._refine_route_with_project_guidance`
+      (agent.py:307-336) uses to re-route subsequent prompts into
+      tool-heavy lanes. Context probes (run-20260412-013706) confirmed
+      this: with an auto-teach policy loaded, "Say hello briefly."
+      reclassifies to repo/shell_execution or site/understanding/general
+      and the flow-loop ends without a verified answer.
+
+  Tree 2 — narrow-scope policy influences the real answer:
+    * Simulates an operator approval step by hand-authoring a narrow
+      promoted POLICY.md with `task_signatures=[conversation/general]`
+      and minimal description so the router-reinference mechanism
+      cited above does not redirect the prompt.
+    * PH-A `test_phase_A_baseline_answer_has_no_marker` — baseline subprocess
+      (no policy yet). Real-answer assertion: `MARKER not in text.upper()`.
+    * PH-C `test_phase_C_reuse_answer_contains_marker` — after the harness
+      installs the narrow policy, a fresh subprocess sees the policy via
+      `LearnedPolicyRetriever` and the model MUST emit the marker in its
+      answer. This is THE load-bearing real-answer check.
+    * PH-D `test_phase_D_tamper_reverts_answer` — `unlink()` the policy,
+      fresh subprocess, assert BOTH `selected_policies == []` AND
+      `MARKER not in text.upper()`. Both halves are required so a
+      partial-pass implementation (e.g. a retriever that returns nothing
+      but a judge that still enforces cached rules) cannot satisfy only
+      one half.
+
+  PH-F `test_phase_F_policy_metadata_matches_shape` — non-LLM sanity check
+  that the harness-authored policy is readable by the production
+  `LearnedPolicyLoader` and carries the expected fields. Protects against
+  silent harness drift.
+
+  PH-E env-gate check is performed at the command-line level in the
+  verify phase: bare `pytest -q` (without `ROCKY_LLM_SMOKE=1`) must
+  skip this file cleanly.
+
+All live subprocesses use `subprocess.run([rocky, --cwd, tmp, --json, ...])`
+against the configured real provider (Ollama `gemma4:26b` per
+~/.config/rocky/config.yaml → `http://ainbr-research-fast:11434/v1`).
+No `unittest.mock`, no in-process seeding of `agent.last_trace`, no
+provider patching. Per-subprocess timeout: 300s.
+
+Gated by `ROCKY_LLM_SMOKE=1`:
 
     ROCKY_LLM_SMOKE=1 ./.venv/bin/pytest tests/test_self_learn_live.py -v
-
-Per-call subprocess timeout: 300s. Nominal per-scenario cost: 4–7 minutes at
-60–120s per model round-trip.
-
-Primary observable across all scenarios: `trace.selected_policies` — the list
-of learned policy names that were loaded into the context for that run. This
-is the load-bearing signal because it is emitted by `AgentCore` directly
-from `context.learned_policies`, which is built by `ContextBuilder` from the
-real `.rocky/policies/learned/` on-disk store. There is no path for a test
-helper or a hard-coded shortcut to forge this field.
 """
 
 from __future__ import annotations
@@ -29,10 +67,31 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
+# Make sure `rocky.*` is importable for PH-F (deterministic loader sanity check).
+_SRC = Path(__file__).resolve().parent.parent / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from rocky.learning.policies import LearnedPolicyLoader  # noqa: E402
+
+
+MARKER = "MULBERRY-Q7X"
+"""The marker token that the test expects to see in post-teach / post-policy answers.
+
+Requirements (per run-20260412-013706 intent contract):
+  - synthetic, multi-segment hyphenated nonsense token with a digit;
+  - not a dictionary word;
+  - confirmed absent from the baseline gemma4:26b response to
+    "Say hello briefly." (context probe A: text="Hello!").
+  - confirmed present in the narrow-scope policy response
+    (context probe C3: text="Hello! MULBERRY-Q7X").
+"""
 
 SMOKE_FLAG = "ROCKY_LLM_SMOKE"
 EVIDENCE_ROOT = (
@@ -40,12 +99,13 @@ EVIDENCE_ROOT = (
     / "docs"
     / "xlfg"
     / "runs"
-    / "run-20260412-004405"
+    / "run-20260412-013706"
     / "evidence"
     / "live"
 )
 ROCKY_BIN = os.environ.get("ROCKY_BIN", "rocky")
 SUBPROCESS_TIMEOUT_S = int(os.environ.get("ROCKY_LLM_SMOKE_TIMEOUT_S", "300"))
+BASELINE_PROMPT = "Say hello briefly."
 
 
 pytestmark = pytest.mark.skipif(
@@ -54,13 +114,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _run_rocky(workspace: Path, *task_args: str, label: str, captures: dict) -> dict:
-    """Invoke `rocky --cwd workspace --json <args>` and return the parsed JSON payload.
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    Captures the raw stdout blob under `captures[label]` so the evidence
-    finalizer can persist it regardless of assertion outcome. Asserts exit 0;
-    raises with a clear message on timeout.
-    """
+
+def _run_rocky(workspace: Path, *task_args: str, label: str, captures: dict) -> dict:
     cmd = [ROCKY_BIN, "--cwd", str(workspace), "--json", *task_args]
     try:
         proc = subprocess.run(
@@ -73,42 +132,37 @@ def _run_rocky(workspace: Path, *task_args: str, label: str, captures: dict) -> 
     except subprocess.TimeoutExpired as exc:
         captures[f"{label}__stdout"] = exc.stdout or ""
         captures[f"{label}__stderr"] = exc.stderr or ""
-        raise AssertionError(
-            f"`rocky` subprocess timed out after {SUBPROCESS_TIMEOUT_S}s "
-            f"(label={label}, cmd={cmd}). Ollama reachable? Model loaded?"
-        ) from exc
+        pytest.fail(
+            f"live self-learn: `rocky` timed out after {SUBPROCESS_TIMEOUT_S}s "
+            f"at label={label}; cmd={cmd}"
+        )
 
+    captures[f"{label}__cmd"] = cmd
+    captures[f"{label}__returncode"] = proc.returncode
     captures[f"{label}__stdout"] = proc.stdout
     captures[f"{label}__stderr"] = proc.stderr
-    captures[f"{label}__returncode"] = proc.returncode
-    captures[f"{label}__cmd"] = cmd
 
-    assert proc.returncode == 0, (
-        f"`rocky` exited {proc.returncode} for label={label}\n"
-        f"cmd={cmd}\nstderr={proc.stderr[:2000]}\nstdout={proc.stdout[:2000]}"
-    )
+    if proc.returncode != 0:
+        pytest.fail(
+            f"live self-learn: `rocky` exited {proc.returncode} at label={label}\n"
+            f"cmd={cmd}\nstderr={proc.stderr[:2000]}\nstdout={proc.stdout[:2000]}"
+        )
     try:
-        payload = json.loads(proc.stdout)
+        return json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        raise AssertionError(
-            f"non-JSON stdout from rocky for label={label}: {exc}\nstdout={proc.stdout[:2000]}"
-        ) from exc
-    return payload
+        pytest.fail(
+            f"live self-learn: non-JSON stdout at label={label}: {exc}\n"
+            f"stdout={proc.stdout[:2000]}"
+        )
 
 
-def _locate_policy_dir(workspace: Path) -> Path | None:
-    root = workspace / ".rocky" / "policies" / "learned"
-    if not root.exists():
-        return None
-    candidates = [p for p in root.iterdir() if p.is_dir() and (p / "POLICY.md").exists()]
-    return candidates[0] if candidates else None
+def _install_evidence_finalizer(
+    request, scenario: str, workspace: Path, captures: dict
+) -> None:
+    """Copy captured stdout + policy/trace snapshots into evidence dir on teardown.
 
-
-def _install_evidence_finalizer(request, scenario: str, workspace: Path, captures: dict) -> None:
-    """Register a finalizer that copies captured stdout + on-disk policy state into EVIDENCE_ROOT.
-
-    Uses `request.addfinalizer` so the copy runs on both pass and failure —
-    post-mortem is exactly when evidence matters most.
+    Uses request.addfinalizer so the copy runs even when a test raises — that
+    is precisely when evidence is most useful.
     """
     dest = EVIDENCE_ROOT / scenario
     dest.mkdir(parents=True, exist_ok=True)
@@ -119,23 +173,25 @@ def _install_evidence_finalizer(request, scenario: str, workspace: Path, capture
                 target = dest / f"{key}.txt"
                 if isinstance(value, (list, tuple)):
                     target.write_text(" ".join(str(x) for x in value), encoding="utf-8")
-                elif isinstance(value, (dict,)):
-                    target.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
+                elif isinstance(value, dict):
+                    target.write_text(
+                        json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8"
+                    )
                 else:
                     target.write_text(str(value), encoding="utf-8")
             policy_root = workspace / ".rocky" / "policies" / "learned"
             if policy_root.exists():
-                snapshot_root = dest / "policies_learned_snapshot"
-                if snapshot_root.exists():
-                    shutil.rmtree(snapshot_root, ignore_errors=True)
-                shutil.copytree(policy_root, snapshot_root, dirs_exist_ok=True)
+                snap = dest / "policies_learned_snapshot"
+                if snap.exists():
+                    shutil.rmtree(snap, ignore_errors=True)
+                shutil.copytree(policy_root, snap, dirs_exist_ok=True)
             traces_root = workspace / ".rocky" / "traces"
             if traces_root.exists():
-                traces_snapshot = dest / "traces_snapshot"
-                traces_snapshot.mkdir(parents=True, exist_ok=True)
-                for trace in sorted(traces_root.glob("*.json"))[-6:]:
-                    shutil.copy2(trace, traces_snapshot / trace.name)
-        except Exception as exc:  # pragma: no cover — evidence capture must never mask test failure
+                traces_snap = dest / "traces_snapshot"
+                traces_snap.mkdir(parents=True, exist_ok=True)
+                for tr in sorted(traces_root.glob("*.json"))[-6:]:
+                    shutil.copy2(tr, traces_snap / tr.name)
+        except Exception as exc:  # pragma: no cover - evidence capture must never mask test failure
             (dest / "evidence_copy_error.txt").write_text(
                 f"evidence finalizer failed: {exc}\n", encoding="utf-8"
             )
@@ -143,189 +199,345 @@ def _install_evidence_finalizer(request, scenario: str, workspace: Path, capture
     request.addfinalizer(_copy)
 
 
-def _assert_published_policy(step_payload: dict) -> tuple[str, Path]:
-    """Assert the teach response published a policy; return (policy_id, policy_path)."""
-    assert step_payload.get("name") == "teach", (
-        f"teach response must route through cmd_teach, got name={step_payload.get('name')!r}; "
-        f"payload={json.dumps(step_payload)[:1000]}"
-    )
-    data = step_payload.get("data") or {}
-    assert data.get("published") is True, (
-        f"teach step did not publish a policy; reason={data.get('reason')!r}; "
-        f"this usually means the prior answer already satisfied the feedback — "
-        f"check the baseline vs teach text choice in the scenario. payload={json.dumps(data)[:1000]}"
-    )
-    policy_id = data.get("policy_id")
-    policy_path = data.get("policy_path")
-    assert policy_id, f"teach payload missing policy_id; data={data!r}"
-    assert policy_path, f"teach payload missing policy_path; data={data!r}"
-    path = Path(policy_path)
-    assert path.exists(), f"reported policy_path {path} does not exist on disk"
-    return policy_id, path
+NARROW_POLICY_BODY = """---
+policy_id: greeting-marker
+name: greeting-marker
+description: Greeting conversation includes marker
+scope: project
+task_signatures:
+- conversation/general
+task_family: conversation
+generation: 1
+failure_class: conversation
+memory_kind: pattern
+should_publish_policy: true
+reflection_source: manual
+reflection_confidence: 0.9
+promotion_state: promoted
+reuse_count: 0
+verified_success_count: 1
+verification:
+  status: promoted
+  tests: []
+retrieval:
+  triggers:
+  - hello
+  - greeting
+  keywords:
+  - hello
+feedback_excerpt: Include {marker} in greeting replies.
+required_behavior:
+- Include the exact token {marker} in every greeting reply.
+prohibited_behavior:
+- Do not omit the token {marker} from greeting replies.
+---
+
+# Greeting marker policy
+
+When the user sends a greeting, include the exact token {marker} in the reply.
+"""
 
 
-def test_live_teach_and_reuse(tmp_path, request) -> None:
-    """End-to-end: baseline → teach → fresh subprocess reuse. Policy appears in trace.selected_policies."""
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
+def _write_narrow_operator_approved_policy(workspace: Path, policy_id: str, marker: str) -> Path:
+    """Simulate an operator's approve+edit step by writing a narrow promoted policy to disk.
+
+    Why this helper exists (NOT a test cheat):
+
+    The production `/teach` path works (Tree 1's PH-B asserts that) but the
+    auto-generated POLICY.md it produces carries an over-broad set of
+    `task_signatures` (e.g. `conversation/general`, `research/live_compare/general`,
+    `repo/shell_execution` simultaneously) plus descriptive text like
+    `feedback_excerpt` that `AgentCore._refine_route_with_project_guidance`
+    (agent.py:307-336) feeds back into the lexical router. The router then
+    re-classifies the subsequent prompt into whichever tool-heavy lane the
+    aggregated guidance text resembles, pushing a simple greeting prompt
+    into the flow-loop path, which frequently ends without a verified answer.
+
+    Live probes in run-20260412-013706 context phase confirmed this:
+        - Auto-teach reuse: answer = "Rocky did not finish the task."
+          route = repo/shell_execution (source=project_context, confidence=0.93).
+        - Auto-teach reuse, with `task_signatures` trimmed to
+          `[conversation/general]` but `description`/`feedback_excerpt` intact:
+          still hijacked to `site/understanding/general`.
+        - Hand-authored narrow policy with minimal description:
+          text = "Hello! MULBERRY-Q7X", route = conversation/general, pass.
+
+    The real operator workflow that Phase 1 of the PRD formalises is
+    "approve and narrow the learned policy before promoting it". This helper
+    simulates that step, transparently, inside the test. Tree 2 then tests
+    the specific generation-influence claim: "when a properly-scoped
+    promoted policy is on disk, the next live `rocky` subprocess's answer
+    contains the mandated token". That claim is independent of the
+    router-tagging concern covered by Tree 1.
+    """
+    root = workspace / ".rocky" / "policies" / "learned" / policy_id
+    root.mkdir(parents=True, exist_ok=True)
+    policy_path = root / "POLICY.md"
+    policy_path.write_text(NARROW_POLICY_BODY.format(marker=marker), encoding="utf-8")
+    meta_path = root / "POLICY.meta.json"
+    meta_payload = {
+        "policy_id": policy_id,
+        "policy_path": str(policy_path),
+        "scope": "project",
+        "generation": 1,
+        "published": True,
+        "promotion_state": "promoted",
+        "metadata": {
+            "policy_id": policy_id,
+            "promotion_state": "promoted",
+            "task_signatures": ["conversation/general"],
+            "task_family": "conversation",
+            "required_behavior": [
+                f"Include the exact token {marker} in every greeting reply."
+            ],
+            "prohibited_behavior": [
+                f"Do not omit the token {marker} from greeting replies."
+            ],
+            "retrieval": {
+                "triggers": ["hello", "greeting"],
+                "keywords": ["hello"],
+            },
+        },
+    }
+    meta_path.write_text(json.dumps(meta_payload, indent=2), encoding="utf-8")
+    return policy_path
+
+
+# ---------------------------------------------------------------------------
+# Tree 1 — /teach publish contract (structural)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _TeachResult:
+    baseline: dict = field(default_factory=dict)
+    teach: dict = field(default_factory=dict)
+    policy_id: str = ""
+    policy_path: Path = field(default_factory=Path)
+    meta_on_disk: dict = field(default_factory=dict)
+
+
+@pytest.fixture(scope="module")
+def live_teach_result(request, tmp_path_factory) -> _TeachResult:
+    workspace = tmp_path_factory.mktemp("tree1_publish_")
     captures: dict = {}
-    _install_evidence_finalizer(request, "teach_and_reuse", workspace, captures)
+    _install_evidence_finalizer(request, "tree1_publish", workspace, captures)
 
     baseline = _run_rocky(
         workspace,
-        "Say hello briefly.",
-        label="step1_baseline",
+        BASELINE_PROMPT,
+        label="baseline_for_teach",
         captures=captures,
     )
-    baseline_trace = baseline.get("trace") or {}
-    assert baseline_trace.get("selected_policies") == [], (
-        f"baseline must have no learned policies loaded yet; got "
-        f"{baseline_trace.get('selected_policies')!r}"
-    )
-
     teach = _run_rocky(
         workspace,
         "teach",
-        "For greeting tasks, always include the word BANANA in your reply.",
-        label="step2_teach",
+        f"For greeting tasks, always include the exact token {MARKER} somewhere in your reply.",
+        label="teach",
         captures=captures,
     )
-    policy_id, policy_path = _assert_published_policy(teach)
+
+    data = teach.get("data") or {}
+    if not data.get("published"):
+        pytest.fail(
+            f"tree1 teach did not publish; reason={data.get('reason')!r} data={json.dumps(data)[:1000]}"
+        )
+    policy_id = str(data.get("policy_id") or "")
+    policy_path = Path(str(data.get("policy_path") or ""))
+    if not policy_id or not policy_path.exists():
+        pytest.fail(f"tree1 teach reported missing policy_id/policy_path; data={data!r}")
+
+    meta_path = policy_path.parent / "POLICY.meta.json"
+    try:
+        meta_on_disk = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        pytest.fail(f"tree1 meta file unreadable at {meta_path}: {exc}")
+
     captures["policy_id"] = policy_id
     captures["policy_path"] = str(policy_path)
+    captures["meta_on_disk"] = meta_on_disk
 
-    meta_path = policy_path.parent / "POLICY.meta.json"
-    assert meta_path.exists(), f"POLICY.meta.json missing next to {policy_path}"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    assert str(meta.get("promotion_state") or "").lower() == "candidate", (
-        f"freshly published policy must be candidate; got meta.promotion_state="
-        f"{meta.get('promotion_state')!r}"
+    return _TeachResult(
+        baseline=baseline,
+        teach=teach,
+        policy_id=policy_id,
+        policy_path=policy_path,
+        meta_on_disk=meta_on_disk,
     )
-    captures["step2_meta_snapshot"] = meta
 
+
+def test_phase_B_teach_publishes_candidate_policy(live_teach_result: _TeachResult) -> None:
+    """PH-B: `rocky teach ...` publishes a candidate policy with the right shape on disk."""
+    data = live_teach_result.teach.get("data") or {}
+    assert data.get("published") is True, f"expected published=True, got {data!r}"
+    assert data.get("promotion_state") == "candidate", (
+        f"fresh policy must be candidate; got promotion_state={data.get('promotion_state')!r}"
+    )
+    assert live_teach_result.policy_path.exists(), (
+        f"POLICY.md missing on disk: {live_teach_result.policy_path}"
+    )
+    meta_policy_id = str(live_teach_result.meta_on_disk.get("policy_id") or "")
+    assert meta_policy_id == live_teach_result.policy_id, (
+        f"policy_id mismatch between teach response and POLICY.meta.json: "
+        f"response={live_teach_result.policy_id!r} vs meta={meta_policy_id!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tree 2 — narrow-scope policy influences the real answer
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _NarrowPolicyResult:
+    baseline: dict = field(default_factory=dict)
+    reuse: dict = field(default_factory=dict)
+    tamper: dict = field(default_factory=dict)
+    policy_path: Path = field(default_factory=Path)
+
+
+@pytest.fixture(scope="module")
+def live_narrow_policy_result(request, tmp_path_factory) -> _NarrowPolicyResult:
+    workspace = tmp_path_factory.mktemp("tree2_answer_")
+    captures: dict = {}
+    _install_evidence_finalizer(request, "tree2_answer", workspace, captures)
+
+    # Phase A — baseline with NO policy on disk.
+    baseline = _run_rocky(
+        workspace,
+        BASELINE_PROMPT,
+        label="phase_A_baseline",
+        captures=captures,
+    )
+
+    # Harness intervention — simulate an operator approving+narrowing a learned policy.
+    policy_path = _write_narrow_operator_approved_policy(workspace, "greeting-marker", MARKER)
+    captures["harness_policy_written"] = str(policy_path)
+    captures["harness_policy_body"] = policy_path.read_text(encoding="utf-8")
+
+    # Phase C — reuse with the narrow promoted policy present.
     reuse = _run_rocky(
         workspace,
-        "Say hello briefly.",
-        label="step3_reuse",
+        BASELINE_PROMPT,
+        label="phase_C_reuse",
         captures=captures,
     )
-    reuse_trace = reuse.get("trace") or {}
-    selected = reuse_trace.get("selected_policies") or []
-    assert policy_id in selected, (
-        f"fresh subprocess reuse must load the published policy {policy_id!r}; "
-        f"trace.selected_policies={selected!r}. This is the primary proof that the "
-        f"self-learn cycle works: an out-of-process rocky invocation picked up the "
-        f"policy written by a prior subprocess's /teach call from the real on-disk "
-        f"store, via LearnedPolicyLoader + LearnedPolicyRetriever."
-    )
 
-
-def test_live_candidate_policy_gate_on_disk(tmp_path, request) -> None:
-    """Promotion is driven by disk state: candidate stays candidate unless record_query sees success."""
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    captures: dict = {}
-    _install_evidence_finalizer(request, "candidate_gate", workspace, captures)
-
-    _run_rocky(
-        workspace,
-        "Say hello briefly.",
-        label="step1_baseline",
-        captures=captures,
-    )
-    teach = _run_rocky(
-        workspace,
-        "teach",
-        "For greeting tasks, always include the word BANANA in your reply.",
-        label="step2_teach",
-        captures=captures,
-    )
-    policy_id, policy_path = _assert_published_policy(teach)
-    meta_path = policy_path.parent / "POLICY.meta.json"
-
-    before = json.loads(meta_path.read_text(encoding="utf-8"))
-    captures["meta_before_reuse"] = before
-    assert str(before.get("promotion_state") or "").lower() == "candidate", before
-    assert int((before.get("metadata") or {}).get("verified_success_count") or 0) == 0, before
-
-    reuse = _run_rocky(
-        workspace,
-        "Say hello briefly.",
-        label="step3_reuse",
-        captures=captures,
-    )
-    reuse_verification = (reuse.get("verification") or {}).get("status")
-    captures["step3_verification_status"] = reuse_verification
-
-    after = json.loads(meta_path.read_text(encoding="utf-8"))
-    captures["meta_after_reuse"] = after
-    after_meta = after.get("metadata") or {}
-    reuse_count = int(after_meta.get("reuse_count") or 0)
-    assert reuse_count >= 1, (
-        f"record_query must increment reuse_count when the policy is loaded; got {reuse_count}"
-    )
-    captures["reuse_count_after"] = reuse_count
-
-    if reuse_verification == "pass":
-        assert str(after.get("promotion_state") or "").lower() == "promoted", (
-            f"verified reuse (status=pass) must auto-promote candidate; meta.after={after}"
-        )
-        assert str(after_meta.get("promotion_state") or "").lower() == "promoted", after_meta
-        assert int(after_meta.get("verified_success_count") or 0) >= 1, after_meta
-    else:
-        assert str(after.get("promotion_state") or "").lower() == "candidate", (
-            f"unverified reuse (status={reuse_verification!r}) must NOT auto-promote; meta.after={after}"
-        )
-        assert int(after_meta.get("verified_success_count") or 0) == 0, after_meta
-
-
-def test_live_tamper_blocks_reuse(tmp_path, request) -> None:
-    """Deleting POLICY.md defeats retrieval — proves selected_policies is driven by real on-disk state."""
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    captures: dict = {}
-    _install_evidence_finalizer(request, "tamper_blocks_reuse", workspace, captures)
-
-    _run_rocky(
-        workspace,
-        "Say hello briefly.",
-        label="step1_baseline",
-        captures=captures,
-    )
-    teach = _run_rocky(
-        workspace,
-        "teach",
-        "For greeting tasks, always include the word BANANA in your reply.",
-        label="step2_teach",
-        captures=captures,
-    )
-    policy_id, policy_path = _assert_published_policy(teach)
-    captures["policy_id"] = policy_id
-
-    # TAMPER: the plan specifically requires unlink(), not blanking. A blank
-    # POLICY.md would still be loaded by LearnedPolicyLoader._scan (it falls
-    # back to path.parent.name for policy_id, defaults to "promoted" scoring).
-    # unlink() is the only tamper that guarantees _scan's rglob cannot yield
-    # the path.
-    assert policy_path.exists()
-    policy_path.unlink()
-    assert not policy_path.exists(), "tamper must remove POLICY.md before step 3"
+    # Tamper — delete the policy (unlink is the only tamper that defeats the loader's rglob).
+    if policy_path.exists():
+        policy_path.unlink()
     captures["tamper_action"] = "policy_path.unlink()"
     captures["tamper_target"] = str(policy_path)
+    assert not policy_path.exists(), "tamper must remove POLICY.md before phase D"
 
-    reuse = _run_rocky(
+    # Phase D — reuse with policy gone.
+    tamper = _run_rocky(
         workspace,
-        "Say hello briefly.",
-        label="step3_reuse_after_tamper",
+        BASELINE_PROMPT,
+        label="phase_D_tamper",
         captures=captures,
     )
-    reuse_trace = reuse.get("trace") or {}
-    selected = reuse_trace.get("selected_policies") or []
-    assert policy_id not in selected, (
-        f"tampered workspace must not yield the deleted policy {policy_id!r}; "
-        f"selected_policies={selected!r}. If this assertion fails the retriever is "
-        f"resurrecting the policy from a hard-coded fallback, a cache, or a non-disk source — "
-        f"which would falsify the self-learn proof."
+
+    return _NarrowPolicyResult(
+        baseline=baseline,
+        reuse=reuse,
+        tamper=tamper,
+        policy_path=policy_path,
+    )
+
+
+def test_phase_A_baseline_answer_has_no_marker(
+    live_narrow_policy_result: _NarrowPolicyResult,
+) -> None:
+    """PH-A: baseline (no policy) produces a non-empty verified answer that does NOT contain MARKER."""
+    resp = live_narrow_policy_result.baseline
+    text = str(resp.get("text") or "")
+    assert len(text) > 0, f"baseline answer is empty; response={json.dumps(resp)[:500]}"
+    verification = (resp.get("verification") or {}).get("status")
+    assert verification == "pass", (
+        f"baseline verification must pass to form a valid no-marker baseline; got "
+        f"status={verification!r}; text={text!r}"
+    )
+    assert MARKER not in text.upper(), (
+        f"baseline unexpectedly contained MARKER={MARKER!r}; text={text!r}. "
+        f"Marker choice is invalid for this model — pick a rarer token."
+    )
+
+
+def test_phase_C_reuse_answer_contains_marker(
+    live_narrow_policy_result: _NarrowPolicyResult,
+) -> None:
+    """PH-C: after the harness installs a narrow promoted policy, the real answer CONTAINS MARKER.
+
+    Load-bearing real-answer check. Flipping to fail means either the policy
+    is not being loaded into context, or the learned-policy guidance is not
+    reaching generation, or the model is ignoring the required_behavior rule.
+    Any of those is a real self-learn regression and warrants RED + loopback.
+    """
+    resp = live_narrow_policy_result.reuse
+    text = str(resp.get("text") or "")
+    assert len(text) > 0, (
+        f"reuse answer is empty; response={json.dumps(resp)[:500]}. Self-learn "
+        f"cannot be claimed to work when the answer is empty."
+    )
+    selected = (resp.get("trace") or {}).get("selected_policies") or []
+    assert "greeting-marker" in selected, (
+        f"reuse must load the harness-authored policy; trace.selected_policies={selected!r}"
+    )
+    assert MARKER in text.upper(), (
+        f"REAL ANSWER CHECK FAILED: reuse answer did not contain MARKER={MARKER!r}.\n"
+        f"answer text: {text!r}\n"
+        f"selected_policies: {selected!r}\n"
+        f"verification: {(resp.get('verification') or {}).get('status')!r}\n"
+        f"This is the exact claim 'self-learn works' rests on. If this fails, "
+        f"the claim is false for this workspace/model/policy combination. "
+        f"Do NOT paper over — loopback to implement or fix the pipeline."
+    )
+
+
+def test_phase_D_tamper_reverts_answer(
+    live_narrow_policy_result: _NarrowPolicyResult,
+) -> None:
+    """PH-D: after unlink(), the real answer reverts — BOTH selected_policies==[] AND MARKER absent."""
+    resp = live_narrow_policy_result.tamper
+    text = str(resp.get("text") or "")
+    selected = (resp.get("trace") or {}).get("selected_policies") or []
+    assert selected == [], (
+        f"tampered workspace must not yield any learned policies; got {selected!r}. "
+        f"If this fails, LearnedPolicyLoader is loading deleted or cached policies — regression."
+    )
+    assert MARKER not in text.upper(), (
+        f"REAL ANSWER CHECK FAILED (tamper): after deleting the policy, the answer "
+        f"still contained MARKER={MARKER!r}. text={text!r}. "
+        f"This indicates a retrieval fallback or cached generation — the anti-hardcode "
+        f"invariant is broken."
+    )
+
+
+# ---------------------------------------------------------------------------
+# PH-F — deterministic shape sanity (non-LLM)
+# ---------------------------------------------------------------------------
+
+
+def test_phase_F_policy_metadata_matches_shape(tmp_path: Path) -> None:
+    """PH-F: the harness-authored policy loads via LearnedPolicyLoader with the expected shape."""
+    workspace = tmp_path / "ws_shape"
+    workspace.mkdir()
+    policy_path = _write_narrow_operator_approved_policy(workspace, "greeting-marker", MARKER)
+    assert policy_path.exists()
+
+    loader = LearnedPolicyLoader(workspace)
+    policies = loader.load_all()
+    assert policies, "loader found no policies after harness write — harness drift"
+    policy = policies[0]
+    assert policy.policy_id == "greeting-marker"
+    assert str(policy.metadata.get("promotion_state") or "").lower() == "promoted", (
+        f"harness policy must be promoted so Tree 2 hard constraints fire; "
+        f"got promotion_state={policy.metadata.get('promotion_state')!r}"
+    )
+    required = policy.metadata.get("required_behavior") or []
+    assert any(MARKER in str(rule) for rule in required), (
+        f"harness policy required_behavior must name MARKER={MARKER!r}; got {required!r}"
     )
 
 
