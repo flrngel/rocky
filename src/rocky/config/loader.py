@@ -51,9 +51,23 @@ DEFAULT_CONFIG_DICT = {
         'enabled': True,
         'auto_publish_project_skills': True,
         'auto_self_reflection_enabled': True,
-        'slow_learner_enabled': False,
     },
 }
+
+
+def _filter_known_fields(dataclass_cls, payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop unknown keys so stale or forward-looking config YAML doesn't crash boot.
+
+    Dataclass-slotted configs (`LearningConfig`, `PermissionConfig`, `ToolConfig`)
+    raise `TypeError` on unknown kwargs. When an operator's on-disk `.rocky/config.yaml`
+    still carries a retired knob (e.g. `slow_learner_enabled` after PRD §18 removal),
+    or carries a forward-looking knob authored in a newer Rocky, we want Rocky to
+    ignore the unknown key rather than hard-crash at boot. This filter preserves
+    only the keys the dataclass knows about; logging is intentionally skipped
+    since the normal case is benign (operator YAML that predates a schema change).
+    """
+    known = set(getattr(dataclass_cls, '__dataclass_fields__', {}).keys())
+    return {k: v for k, v in payload.items() if k in known}
 
 
 class ConfigLoader:
@@ -108,7 +122,7 @@ class ConfigLoader:
         return AppConfig(
             active_provider=merged.get('active_provider', 'litellm_local'),
             providers=providers,
-            permissions=PermissionConfig(**(merged.get('permissions') or {})),
-            tools=ToolConfig(**(merged.get('tools') or {})),
-            learning=LearningConfig(**(merged.get('learning') or {})),
+            permissions=PermissionConfig(**_filter_known_fields(PermissionConfig, merged.get('permissions') or {})),
+            tools=ToolConfig(**_filter_known_fields(ToolConfig, merged.get('tools') or {})),
+            learning=LearningConfig(**_filter_known_fields(LearningConfig, merged.get('learning') or {})),
         )

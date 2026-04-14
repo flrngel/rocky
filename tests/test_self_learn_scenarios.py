@@ -360,28 +360,6 @@ def test_learned_review_lists_only_candidate_policies(tmp_path, monkeypatch) -> 
     )
 
 
-def test_slow_learner_disabled_by_default(tmp_path) -> None:
-    """`LearningConfig()` defaults `slow_learner_enabled=False` and the manager short-circuits."""
-    assert LearningConfig().slow_learner_enabled is False, (
-        "PRD §18.2 / §20.1 require slow_learner disabled by default"
-    )
-
-    policies_dir = tmp_path / "policies"
-    manager = LearningManager(
-        support_dir=tmp_path / "support",
-        query_dir=tmp_path / "query",
-        learned_policy_root=tmp_path / "policies" / "learned",
-        artifacts_dir=tmp_path / "artifacts",
-        policies_dir=policies_dir,
-        config=LearningConfig(),
-    )
-    result = manager.run_slow_learner()
-    assert result == {"ran": False, "reason": "slow learner disabled"}, result
-    assert not (policies_dir / "slow_learner_report.json").exists(), (
-        "short-circuited run must not write the slow learner report"
-    )
-
-
 def test_candidate_policy_does_not_drive_judge_constraint_records(tmp_path, monkeypatch) -> None:
     """Candidate policies must NOT produce records that the judge/repair path treats as hard.
 

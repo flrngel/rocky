@@ -67,6 +67,9 @@ BLOCKED_KEY_PREFIXES: tuple[str, ...] = (
     "tools.shell_timeout_s",
     "tools.python_timeout_s",
     "learning.enabled",
+    # `learning.slow_learner_enabled` was retired in run-20260414-205412 when the
+    # slow_learner module was deleted. The block is retained here intentionally
+    # so a future reintroduction via meta-variant cannot bypass safety review.
     "learning.slow_learner_enabled",
     "learning.auto_publish_project_skills",
     "learning.auto_self_reflection_enabled",

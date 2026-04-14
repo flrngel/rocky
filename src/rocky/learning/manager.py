@@ -7,7 +7,6 @@ from typing import Any
 
 from rocky.config.models import LearningConfig
 from rocky.learning.episodes import EpisodeStore
-from rocky.learning.slow import SlowLearner
 from rocky.learning.synthesis import EpisodeRetrospective, FeedbackAnalysis, PolicySynthesizer
 from rocky.util.text import safe_json
 from rocky.util.time import utc_iso
@@ -49,11 +48,6 @@ class LearningManager:
             create_layout=create_layout,
         )
         self.synthesizer = PolicySynthesizer(use_model=True)
-        self.slow_learner = SlowLearner(
-            query_dir=query_dir,
-            policies_dir=policies_dir,
-            create_layout=create_layout,
-        )
 
     def _bootstrap_generation_file(self) -> None:
         legacy_generation = None
@@ -471,7 +465,3 @@ class LearningManager:
             "to": str(rollback_dir),
         }
 
-    def run_slow_learner(self) -> dict[str, Any]:
-        if not self.config.slow_learner_enabled:
-            return {"ran": False, "reason": "slow learner disabled"}
-        return {"ran": True, **self.slow_learner.run_once()}

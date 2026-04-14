@@ -12,7 +12,21 @@ This document captures every PRD obligation that remains after Phase 0. Future `
 
 ## What's next — recommended run order (as of 2026-04-14)
 
-Current state: **Phase 1 shipped, Phase 2 behaviorally closed, Phase 3 SHIPPED (run-20260414-194516); T3 limit-overlay reach + LIVE LLM evidence shipped (run-20260414-203004), Phase 4 + North Star queued.**
+Current state: **Phase 1 shipped, Phase 2 behaviorally closed, Phase 3 SHIPPED (run-20260414-194516); T3 limit-overlay reach + LIVE LLM evidence shipped (run-20260414-203004); slow_learner dead-code deleted + triple-live-run stability characterization (run-20260414-205412); Phase 4 + North Star queued.**
+
+### STATUS 2026-04-14 (run-20260414-205412): **Triple-live stability + slow_learner dead-code purge**
+
+User re-invoked with identical prompt after run-20260414-203004 — signal that "DEFERRED with successor" is not "resolved." This run:
+
+1. **Triple-live-run stability characterization** — 3 independent live runs on gemma4:26b, same code, captured to `evidence/live/run{1,2,3}.txt`. Per-test pass rate tabulated in `evidence/live/stability_summary.md`. Outcome: **10 of 12 tests STABLE (3/3)**, **2 tests FLAKY (2/3)** — `test_sl_promote_phase_B_reuse_succeeds` and `test_sl_promote_phase_C_autonomous_promotion`. Both flaky tests share a module-scoped fixture whose `/teach` setup depends on gemma's reflection classifying the teach as "generalizable rule" vs "project-specific instruction" — pure model variance, not code. **Zero tests BROKEN (0/3)**. Results: run1=10/12 in 154s, run2=12/12 in 289s, run3=12/12 in 151s.
+2. **PRD §18 `slow_learner` dead-code purge** — `src/rocky/learning/slow.py` deleted; `SlowLearner` import + instantiation + `LearningManager.run_slow_learner` method + `LearningConfig.slow_learner_enabled` field all removed. `meta/safety.py` keeps `learning.slow_learner_enabled` in `BLOCKED_KEY_PREFIXES` with a forward-looking comment (prevents future re-introduction via meta-variant).
+3. **Graceful-unknown-key config loader** — `ConfigLoader.load` now filters unknown keys from `learning:` / `permissions:` / `tools:` blocks before constructing dataclasses (via new `_filter_known_fields` helper). Operators with stale YAML (e.g. `slow_learner_enabled: false`) boot cleanly; forward-looking YAML from newer Rocky versions is tolerated. 5 new deterministic tests in `tests/test_config_loader_unknown_keys.py`.
+4. **1 test deleted** (`test_slow_learner_disabled_by_default`), **5 tests added** (graceful-unknown-key). Full deterministic suite **432 passed + 12 skipped** (was 428+12, net +4).
+
+Risk resolution updates:
+- `PRD §18 slow_learner removal`: DEFERRED → **RESOLVED** (this run).
+- `Live LLM stability is stochastic on gemma4:26b`: OPEN → **CHARACTERIZED** with empirical per-test pass rate; 10 STABLE + 2 FLAKY; no BROKEN. The FLAKY pair is a test-harness issue (shared fixture on gemma-dependent reflection), not a learning-system bug; hardening tracked as new item.
+- New item added: "SL-PROMOTE fixture depends on gemma's reflection classifying teach as generalizable rule" — QUEUED for test-harness hardening (rephrase teach feedback OR add retry-on-fixture-failure OR use a different SL-PROMOTE trigger that classifies reliably).
 
 ### STATUS 2026-04-14 (run-20260414-203004): **T3 limit-overlay reach + LIVE LLM evidence**
 
@@ -101,7 +115,7 @@ The learning substrate is instrumental, not the goal. Once Phase 3+4 stabilize, 
 
 ### Parking lot / deprioritized — REASSESSED 2026-04-14 (run-20260414-203004)
 - **PRD §17.1 `/memory` redesign** — KEPT DEFERRED. Reason updated: now blocks on T3-Deep ranking-collapse (rather than just "Phase 2 live verification + NS-1"), because the planned `/memory list|add|set|show|remove` redesign is supposed to route through the ledger as canonical read source. T3-Deep is the prerequisite. Successor owner: T3-Deep run.
-- **PRD §18 `slow_learner` removal** — KEPT DEFERRED with updated rationale. `LearningConfig.slow_learner_enabled` defaults to False since Phase 0; `run_slow_learner()` short-circuits on the flag (`learning/manager.py:474`); `learning/slow.py` is unreachable from production. Deletion is mechanically safe but produces zero behavioral change. Reason to defer: deleting now adds churn and bumps the `LearningConfig` schema (potential test rebaseline noise) for no operator-visible win. Bundle with NS-4 legacy cleanup.
+- **PRD §18 `slow_learner` removal** — RESOLVED in run-20260414-205412. `src/rocky/learning/slow.py` deleted; `SlowLearner` import + instantiation + `LearningManager.run_slow_learner` method + `LearningConfig.slow_learner_enabled` field all removed. `meta/safety.py::BLOCKED_KEY_PREFIXES` retains `learning.slow_learner_enabled` (commented as forward-looking block). `ConfigLoader.load` gained `_filter_known_fields` helper so operators with stale YAML still boot cleanly (5 new tests in `tests/test_config_loader_unknown_keys.py`).
 - **PRD §18 `cmd_student` removal** — REJECTED (not legacy). `/student` is operator-facing per `commands/registry.py:184` (full subcommand tree: status/list/show/add). It's actively documented in `_help_text()` at registry.py:101. Removing it would be a UX regression. Decision: keep `cmd_student` as a permanent operator surface; remove from §18 deletion list.
 
 ---
@@ -280,12 +294,13 @@ Every open risk in this backlog as of 2026-04-14, with explicit disposition.
 | Phase 3 — promotion threshold permissive (`differs_from_baseline`)  | DEFERRED    | Intentional; tighten via `improve@N` in Phase 4.                                                            | Phase 4                    |
 | Phase 3 — single-process meta-registry assumption                   | DEFERRED    | Operator tool, not server. Revisit if multi-process operator workflow emerges.                              | NS-6                       |
 | Phase 3 — never tested through LLM (user complaint)                 | RESOLVED    | Run-20260414-203004 captured pre/post-T3 evidence under `evidence/live/`.                                   | —                          |
-| Live LLM stability is stochastic on gemma4:26b                      | OPEN (named) | Empirically demonstrated this run. Affects every future "shipped" claim.                                   | NS-7                       |
+| Live LLM stability is stochastic on gemma4:26b                      | CHARACTERIZED | run-20260414-205412 triple-run: 10/12 STABLE (3/3), 2/12 FLAKY (2/3 — `sl_promote_B/C` via shared fixture), 0/12 BROKEN. Empirical pass-rate table now in backlog. | test-harness hardening (new row) |
+| SL-PROMOTE fixture teach-reflection dependence                      | QUEUED       | run-20260414-205412 identified: the shared `promote_result` fixture's `/teach` setup is classified as project-specific by gemma ~1-in-3 runs; both dependent tests cascade-fail. Fix: rephrase teach feedback as unambiguously generalizable OR add retry OR reframe SL-PROMOTE trigger. | test-harness hardening run |
 | Phase 4 — `improve@N` / transfer evaluation                         | QUEUED      | Phase 3 `MetaVariant.canary_results` schema is rich enough; ready for Phase 4.                             | Phase 4 run                |
 | PRD §17.1 — `/memory` redesign                                       | DEFERRED    | Blocks on T3-Deep ranking-collapse (`/memory` should route through canonical ledger reads).                | T3-Deep + NS-1             |
 | PRD §17.2 — typed `/teach` response                                  | QUEUED      | NS-5; would retire Phase 2.1 over-tagging guard by narrowing task_signatures at write time.                | NS-5                       |
 | PRD §17.3 — `/learning` command family                               | QUEUED      | NS-1; current `cmd_meta` is the minimal substrate, NS-1 is the productized UX.                             | NS-1                       |
-| PRD §18 — `slow_learner` removal                                     | DEFERRED    | Inert (config default False, short-circuited). Bundle with NS-4 to avoid solo-cleanup churn.               | NS-4                       |
+| PRD §18 — `slow_learner` removal                                     | RESOLVED    | run-20260414-205412: module deleted; import/instantiation/method/field removed; graceful-unknown-key shim in loader for back-compat. | —                          |
 | PRD §18 — `cmd_student` removal                                      | REJECTED    | `/student` is operator-facing (registry.py:184 + help text:101); not legacy.                                | none — keep                |
 | PRD §18 — `skills/learned` legacy write path                         | DEFERRED    | Migration window still open; `LearnedPolicyLoader._scan` still reads it. Bundle with NS-4.                 | NS-4                       |
 | PRD §21 — safety governance                                          | PARTIAL     | Phase 0 candidate-never-hard + Phase 3 meta-variant safety allow-list shipped. Freeze-mode + adversarial-teach rejection still NS-3. | NS-3 |
