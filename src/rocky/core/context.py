@@ -103,6 +103,7 @@ class ContextBuilder:
         memory_retriever: MemoryRetriever,
         session_store: SessionStore | None = None,
         student_store: StudentStore | None = None,
+        ledger=None,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.execution_root = execution_root.resolve()
@@ -112,6 +113,15 @@ class ContextBuilder:
         self.memory_retriever = memory_retriever
         self.session_store = session_store
         self.student_store = student_store
+        self.ledger = ledger
+
+    def _is_artifact_rolled_back(self, path) -> bool:
+        if self.ledger is None or not path:
+            return False
+        try:
+            return self.ledger.is_path_in_rolled_back_lineage(path)
+        except Exception:
+            return False
 
     def _workspace_focus(self) -> dict[str, str]:
         execution_cwd = "."
@@ -198,6 +208,8 @@ class ContextBuilder:
             return {}, []
         profile = self.student_store.profile()
         notes = self.student_store.retrieve(prompt, task_signature=task_signature, thread=thread, limit=5)
+        if self.ledger is not None:
+            notes = [n for n in notes if not self._is_artifact_rolled_back(n.get("path"))]
         return profile, notes
 
     def build(
@@ -217,7 +229,7 @@ class ContextBuilder:
                 instructions.append({"path": str(path), "text": read_text(path)[:6000]})
         memories: list[dict] = []
         brief = self.memory_retriever.project_brief()
-        if brief is not None:
+        if brief is not None and not self._is_artifact_rolled_back(brief.path):
             memories.append(
                 {
                     "id": brief.id,
@@ -238,6 +250,8 @@ class ContextBuilder:
             thread=active_thread,
         ):
             if note.id in seen_ids:
+                continue
+            if self._is_artifact_rolled_back(note.path):
                 continue
             memories.append(
                 {
@@ -274,6 +288,7 @@ class ContextBuilder:
                 "reflection_confidence": skill.metadata.get("reflection_confidence"),
             }
             for skill in self.skill_retriever.retrieve(prompt, task_signature, thread=active_thread)
+            if not self._is_artifact_rolled_back(skill.path)
         ]
         learned_policies = [
             {
@@ -296,6 +311,7 @@ class ContextBuilder:
                 "storage_format": policy.storage_format,
             }
             for policy in self.policy_retriever.retrieve(prompt, task_signature, thread=active_thread)
+            if not self._is_artifact_rolled_back(policy.path)
         ]
         workspace_focus = self._workspace_focus()
         handoffs: list[dict] = []

@@ -149,6 +149,27 @@ class LearningLedgerStore:
                 found = r  # keep last occurrence (most recent)
         return found
 
+    def find_teach_lineage_for_policy(self, policy_id: str) -> str | None:
+        """Return the teach lineage_id that produced the given policy, if any.
+
+        Scans teacher_feedback-origin records for a matching `lineage.policy_id`.
+        Returns the lineage id (not the record id — they're equal for teach records,
+        but this is the lineage-key external callers should use). Skips rolled-back
+        records so a stale lineage doesn't leak back through a fresh capture.
+        """
+        if not policy_id:
+            return None
+        for record in self.load_all():
+            if record.rolled_back:
+                continue
+            origin_type = str((record.origin or {}).get("type") or "").lower()
+            if origin_type not in {"teacher_feedback", "user_feedback"}:
+                continue
+            lineage = record.lineage or {}
+            if str(lineage.get("policy_id") or "") == policy_id:
+                return str(lineage.get("id") or record.id)
+        return None
+
     def latest_teach_lineage(self) -> LearningRecord | None:
         """Return the most recently appended record whose origin represents a teach event.
 
@@ -219,6 +240,35 @@ class LearningLedgerStore:
             "\n".join(json.dumps(r.to_dict(), ensure_ascii=False) for r in records) + "\n",
             encoding="utf-8",
         )
+
+    def is_path_in_rolled_back_lineage(self, path: Path | str) -> bool:
+        """Return True iff `path` is registered under any rolled-back lineage.
+
+        Belt-and-suspenders guard for T4 — catches the case where an artifact's
+        file still exists on disk but the lineage that produced it has been
+        rolled back. The primary path (lineage-based rollback moving the file)
+        should already make this moot, but retrievers consulting this helper
+        remain safe against partial/stale states.
+        """
+        target = str(path)
+        if not target:
+            return False
+        index = self._read_index()
+        for lineage_id, paths in index.items():
+            if target not in paths:
+                continue
+            if self.is_lineage_rolled_back(lineage_id):
+                return True
+        # Also check lineages not in index but whose record is rolled back and
+        # would have referenced this path (records hold `lineage.path` too).
+        for record in self.load_all():
+            if not record.rolled_back:
+                continue
+            lineage = record.lineage or {}
+            recorded_path = str(lineage.get("path") or "")
+            if recorded_path and recorded_path == target:
+                return True
+        return False
 
     def is_lineage_rolled_back(self, lineage_id: str) -> bool:
         """Return True iff any record with `lineage.id == lineage_id` is marked rolled_back."""

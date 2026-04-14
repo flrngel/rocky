@@ -116,6 +116,13 @@ class RockyRuntime:
         memory_retriever = MemoryRetriever(memory_store.load_all())
         student_store = StudentStore(workspace.student_dir, create_layout=not freeze)
         instruction_candidates = workspace.instruction_candidates + [global_root / "AGENTS.md"]
+        ledger = LearningLedgerStore(workspace.root, create_layout=not freeze)
+        if not freeze:
+            try:
+                migrate_legacy_workspace(ledger, workspace.root)
+            except Exception:
+                # Migration must never block load; failures are visible via ledger state.
+                pass
         context_builder = ContextBuilder(
             workspace.root,
             workspace.execution_root,
@@ -125,6 +132,7 @@ class RockyRuntime:
             memory_retriever,
             sessions,
             student_store,
+            ledger=ledger,
         )
         tool_context = ToolContext(
             workspace.root,
@@ -158,13 +166,6 @@ class RockyRuntime:
             meta_handler=lambda prompt: "",
             create_layout=not freeze,
         )
-        ledger = LearningLedgerStore(workspace.root, create_layout=not freeze)
-        if not freeze:
-            try:
-                migrate_legacy_workspace(ledger, workspace.root)
-            except Exception:
-                # Migration must never block load; failures are visible via ledger state.
-                pass
         runtime = cls(
             workspace=workspace,
             global_root=global_root,
@@ -204,6 +205,7 @@ class RockyRuntime:
             self.memory_retriever,
             self.sessions,
             self.student_store,
+            ledger=self.ledger,
         )
         self.agent.context_builder = self.context_builder
 
@@ -248,11 +250,47 @@ class RockyRuntime:
                 if result.get("written"):
                     self.refresh_knowledge()
                 self._register_capture_artifacts(turn_lineage_id, result)
+                # Also register under teach-lineages of any reused policies so
+                # /undo on a teach-lineage sweeps the derived memories captured
+                # during its reuse turns. Non-teach-reuse turns are untouched
+                # (autonomous pathway preserved — CF-4).
+                for teach_lineage in self._active_teach_lineages(response.trace):
+                    if teach_lineage and teach_lineage != turn_lineage_id:
+                        self._register_capture_artifacts(teach_lineage, result)
             except Exception:
                 pass
         if not effective_freeze:
             self._auto_self_reflect(prompt, response, event_handler=event_handler, lineage_id=turn_lineage_id)
         return response
+
+    def _active_teach_lineages(self, trace: dict[str, Any]) -> list[str]:
+        """Resolve teach-lineage IDs for any reused policies in this turn.
+
+        Returns the lineage ids of teach records whose policy_id appears in
+        `trace["selected_policies"]`. Used to link derived-autonomous memory
+        artifacts (candidates, auto-promoted notes, project_brief) to the teach
+        lineages that drove their capture, so /undo on a teach lineage also
+        sweeps its downstream derivatives. Preserves CF-4 (autonomous pathway)
+        by returning an empty list when no teach-origin policy is active.
+        """
+        try:
+            policies = trace.get("selected_policies") or []
+        except AttributeError:
+            return []
+        lineages: list[str] = []
+        seen: set[str] = set()
+        for name in policies:
+            policy_id = str(name or "").strip()
+            if not policy_id:
+                continue
+            try:
+                teach_lineage = self.ledger.find_teach_lineage_for_policy(policy_id)
+            except Exception:
+                teach_lineage = None
+            if teach_lineage and teach_lineage not in seen:
+                seen.add(teach_lineage)
+                lineages.append(teach_lineage)
+        return lineages
 
     def _register_capture_artifacts(self, lineage_id: str, capture_result: dict[str, Any]) -> None:
         """Register memory/auto/candidate artifacts produced by capture_project_memory."""
