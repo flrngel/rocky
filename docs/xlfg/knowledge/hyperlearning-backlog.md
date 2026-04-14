@@ -14,6 +14,23 @@ This document captures every PRD obligation that remains after Phase 0. Future `
 
 Current state: **Phase 1 shipped, Phase 2 mostly shipped (T1/T2/T4/T5/T6/T7/T8/T9/T10), Phase 3/4 + North Star queued.**
 
+### STATUS 2026-04-13 (run-20260413-015018): 1 of 2 live behavioral targets flipped
+
+Run result on gemma4:26b:
+- ✅ `test_sl_undo_behavioral_correction_fully_gone` — FLIPPED to PASS via Phase 2.4 migration-dedup + candidate-correction-visibility fixes.
+- ❌ `test_sl_retrospect_phase_B_behavioral_style_carries_over` — STILL FAILS. T1 receives the shell-style retrospective cue ("verified via Python one-liner"), but T2 on a lexically-different prompt chooses `if __name__ == "__main__"` + `print()` self-verification — gemma's native preference for self-contained `__main__` blocks over shell command invocation, not overridden by the imperative style directive.
+
+Phase 2 is **behaviorally 1/2 closed**. Phase 2.5 is the open work to flip the remaining retrospective test.
+
+### Phase 2.5 — Retrospective style influence on gemma-class models
+Fix candidate hypotheses (escalated from run-20260413-015018):
+1. Post-generation harness hook: if a retrospective tagged `shell` is in context AND the answer text lacks a shell-command literal regex, re-invoke the model with an appended instruction "your verification must use a shell command literal like `python3 -c` or `python <file>.py` — replace the `__main__` self-test". Gated to the automation/general flow loop's verify burst (decision C divide-conquer).
+2. Add `required_textual_pattern` field on retrospective records; flow loop's verify step enforces pattern match before advancing to finalize.
+3. Model-capability guard: keep the test as regular but mark with `@pytest.mark.skipif(os.environ.get("ROCKY_LIVE_MODEL", "") not in RESPONSIVE_MODELS)`. Demotes the claim from "all models flip" to "models in an allowlist flip." Least satisfying but most honest.
+4. Model upgrade — try qwen3.5:27b or nemotron-cascade-2 (available on the same host) for comparison.
+
+Phase 2.5 acceptance: `test_sl_retrospect_phase_B_behavioral_style_carries_over` PASSES on the chosen target model with honest sensitivity check (revert fix → test fails → restore → passes).
+
 ### NEXT-1 (blocking for "Phase 2 fully verified") — Operator live-harness verification
 Before starting any new phase, **the operator must run the live suite** to confirm the two decorator-removed tests actually flip on gemma4:26b:
 ```bash

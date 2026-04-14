@@ -1,6 +1,9 @@
 # Rocky — Current State
 
-Last updated: 2026-04-13 (run-20260413-162250 — Phase 2.3 T2/T5/T6/T8/T9/T10 SHIPPED)
+Last updated: 2026-04-13 (run-20260413-015018 — Phase 2.4 live-behavior fixes; 1/2 xfails flipped)
+
+## 2026-04-13 run (run-20260413-015018) — Phase 2.4 live-behavior fixes; 1/2 xfails flipped
+Committed 4 per-phase squashed commits on main (2.1/2.2/2.3/docs). Then ran ROCKY_LLM_SMOKE=1 on gemma4:26b via remote Ollama. Two iterations (loopback 1 + 2). Final state: 11 of 12 live tests pass (was 10 pre-fix). Behavioral results: test_sl_undo_behavioral_correction_fully_gone FLIPPED to PASS (was xfail) via migration-dedup fix + candidate-correction-visibility restoration. test_sl_retrospect_phase_B_behavioral_style_carries_over STILL FAILS — gemma chose if __name__ self-test over python command invocation despite imperative style directive. Loopback cap reached; remaining work queued as Phase 2.5. Deterministic suite 340 passed, 12 skipped (unchanged). Commits: 6301555 (2.1), 9acccf9 (2.2), f622661 (2.3), 1c8418b (docs), c98fe41 (2.4).
 
 ## 2026-04-13 run (run-20260413-162250) — Phase 2.3 T2/T5/T6/T8/T9/T10 SHIPPED
 6 of 7 remaining Phase 2 tasks shipped: T2 `LedgerRetriever` with 10-factor PRD §12.3 ranking (new `src/rocky/learning/ledger_retriever.py`, 7 tests), T5+T6 canonical 6-block packer + retrospective style extraction (`src/rocky/core/system_prompt.py` reorganized with `_append_framing_blocks` + `_append_learning_pack_blocks`, 6 tests), T8 deterministic context-budget benchmark (`tests/test_context_budget_benchmark.py`, 6 tests), T9 xfail decorator removals on both live behavioral tests (`test_sl_retrospect_phase_B_behavioral_style_carries_over` + `test_sl_undo_behavioral_correction_fully_gone`), T10 sensitivity-check documentation. Only T3 adapter collapse deferred — legacy retrievers kept alongside `LedgerRetriever` (additive). Full suite 340 passed, 12 skipped (from 321 baseline + 19 net). Realistic policy-heavy workload measured at **55.2% char reduction** (PRD §20.3 target 30%, exceeded). Operator next action: `ROCKY_LLM_SMOKE=1 pytest tests/test_self_learn_live.py` to verify behavioral xfails flip on gemma4:26b.
