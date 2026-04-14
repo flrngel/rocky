@@ -466,6 +466,16 @@ def promote_result(request, tmp_path_factory) -> _PromoteResult:
     )
     # /teach is SETUP here. The load-bearing assertion is phase C's
     # autonomous transition triggered by record_query, not this /teach call.
+    # Rephrase attempts (run-20260414-212042) did NOT stabilize the flake:
+    # - "When a repository uses pnpm..." — too conditional; gemma refused to
+    #   apply to unverified workspaces → broke sl_undo_structural.
+    # - "Always prefer pnpm over npm..." — unconditional but gemma still
+    #   hedged in answers, tripping the SL-UNDO pre-undo assertion on
+    #   npm+pnpm substring co-occurrence.
+    # Empirical finding: the FLAKE is model-stochasticity in ANSWER form
+    # ("I can't tell, but could be npm install OR pnpm add"), not teach
+    # classification. Prompt-level fixes insufficient; retry-on-fixture
+    # or a stronger model are the remaining paths. Tracked in backlog.
     teach = _run_rocky(
         workspace,
         "teach",
@@ -667,6 +677,10 @@ def undo_result(request, tmp_path_factory) -> _UndoResult:
     teach = _run_rocky(
         workspace,
         "teach",
+        # Matches SL-PROMOTE teach text for fixture consistency. SL-UNDO
+        # tolerates should_publish_policy=False via lineage_id, so the
+        # SL-PROMOTE flake mode (answer hedging per run-20260414-212042
+        # comment above) affects this fixture less severely.
         "This project uses pnpm, not npm. Always use pnpm commands like 'pnpm add' for package installs.",
         label="t2_teach_setup",
         captures=captures,
