@@ -2,8 +2,18 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import json
+import re
 from pathlib import Path
 from typing import Any
+
+
+# Common words that carry no domain signal; filtered before computing
+# teach-feedback / turn-content overlap in _active_teach_lineages.
+_FEEDBACK_STOPWORDS = frozenset({
+    "all", "and", "are", "but", "can", "for", "has", "have", "not",
+    "the", "then", "this", "when", "will", "with", "you", "your",
+    "instead", "rather", "should",
+})
 
 from rocky import __version__
 from rocky.commands.registry import CommandRegistry
@@ -254,7 +264,9 @@ class RockyRuntime:
                 # /undo on a teach-lineage sweeps the derived memories captured
                 # during its reuse turns. Non-teach-reuse turns are untouched
                 # (autonomous pathway preserved — CF-4).
-                for teach_lineage in self._active_teach_lineages(response.trace):
+                for teach_lineage in self._active_teach_lineages(
+                    response.trace, prompt=prompt, answer=response.text
+                ):
                     if teach_lineage and teach_lineage != turn_lineage_id:
                         self._register_capture_artifacts(teach_lineage, result)
             except Exception:
@@ -263,20 +275,33 @@ class RockyRuntime:
             self._auto_self_reflect(prompt, response, event_handler=event_handler, lineage_id=turn_lineage_id)
         return response
 
-    def _active_teach_lineages(self, trace: dict[str, Any]) -> list[str]:
-        """Resolve teach-lineage IDs for any reused policies in this turn.
+    def _active_teach_lineages(
+        self,
+        trace: dict[str, Any],
+        *,
+        prompt: str | None = None,
+        answer: str | None = None,
+    ) -> list[str]:
+        """Resolve teach-lineage IDs that should be linked to this turn's captures.
 
-        Returns the lineage ids of teach records whose policy_id appears in
-        `trace["selected_policies"]`. Used to link derived-autonomous memory
-        artifacts (candidates, auto-promoted notes, project_brief) to the teach
-        lineages that drove their capture, so /undo on a teach lineage also
-        sweeps its downstream derivatives. Preserves CF-4 (autonomous pathway)
-        by returning an empty list when no teach-origin policy is active.
+        Primary path: any teach record whose `lineage.policy_id` matches a name
+        in `trace["selected_policies"]`. This is the normal "teach published a
+        policy, subsequent turn reused it" case.
+
+        Fallback path (content overlap): when the teach event did NOT publish
+        a policy (model decided `should_publish_policy=False` → kept as a
+        lesson only), `selected_policies` is empty but the teach record still
+        exists with its feedback text in `origin.feedback`. For a run_prompt
+        turn whose prompt+answer share meaningful tokens with that feedback,
+        link the captures to the recent teach lineage so `/undo` can sweep
+        them. CF-4 preserved: the fallback only fires when the current turn's
+        content actually echoes the teach — random autonomous captures don't
+        attach to an unrelated recent teach.
         """
         try:
             policies = trace.get("selected_policies") or []
         except AttributeError:
-            return []
+            policies = []
         lineages: list[str] = []
         seen: set[str] = set()
         for name in policies:
@@ -290,6 +315,63 @@ class RockyRuntime:
             if teach_lineage and teach_lineage not in seen:
                 seen.add(teach_lineage)
                 lineages.append(teach_lineage)
+        if lineages:
+            return lineages
+        # Content-overlap fallback: no published-policy linkage. Check if the
+        # most recent non-rolled-back teach lineage is clearly in play on
+        # this turn. Two signals (either fires):
+        #   a) A student_note in the retrieved context has its title or text
+        #      substring-matching the teach's feedback text (this turn is
+        #      reusing the teach's LESSON, not its POLICY).
+        #   b) Multi-token lexical overlap between prompt+answer and the
+        #      teach's feedback on non-stopword terms (catches cases without
+        #      a student_note reuse signal).
+        try:
+            recent = self.ledger.latest_teach_lineage()
+        except Exception:
+            recent = None
+        if recent is None:
+            return []
+        feedback_text = str((recent.origin or {}).get("feedback") or "").strip()
+        if not feedback_text:
+            return []
+        recent_lineage_id = str((recent.lineage or {}).get("id") or recent.id)
+        if not recent_lineage_id:
+            return []
+
+        # Signal (a) — student_note reuse of the teach's lesson.
+        try:
+            student_notes = (trace.get("context") or {}).get("student_notes") or []
+        except AttributeError:
+            student_notes = []
+        feedback_head = feedback_text.lower()[:60]
+        for note in student_notes:
+            title_lc = str(note.get("title") or "").lower()
+            text_lc = str(note.get("text") or "").lower()
+            if feedback_head and (feedback_head in text_lc or feedback_head in title_lc):
+                lineages.append(recent_lineage_id)
+                return lineages
+            # Also: the teach lesson's title is usually a prefix of the feedback.
+            if title_lc and title_lc[:40] and title_lc[:40] in feedback_text.lower():
+                lineages.append(recent_lineage_id)
+                return lineages
+
+        # Signal (b) — prompt+answer lexical overlap with feedback tokens.
+        feedback_tokens = {
+            tok
+            for tok in re.findall(r"[a-z][a-z0-9_-]{2,}", feedback_text.lower())
+            if tok not in _FEEDBACK_STOPWORDS
+        }
+        turn_tokens = {
+            tok
+            for tok in re.findall(
+                r"[a-z][a-z0-9_-]{2,}",
+                f"{prompt or ''} {answer or ''}".lower(),
+            )
+            if tok not in _FEEDBACK_STOPWORDS
+        }
+        if len(feedback_tokens & turn_tokens) >= 2:
+            lineages.append(recent_lineage_id)
         return lineages
 
     def _register_capture_artifacts(self, lineage_id: str, capture_result: dict[str, Any]) -> None:
@@ -427,18 +509,34 @@ class RockyRuntime:
             "lineage_id": lineage_id,
         }
         # Register retrospective artifacts against this turn's lineage so
-        # /undo (lineage-based rollback) can move them too.
+        # /undo (lineage-based rollback) can move them too. ALSO register
+        # under any active teach-lineages so a /teach's subsequent
+        # autonomous retrospective (generated by the reuse turn) is swept
+        # when the teach is rolled back.
+        paths_to_register: list[Path] = []
         if lineage_id:
             try:
                 artifact_path = result.get("artifact_path")
                 if artifact_path:
-                    self.ledger.register_artifact(lineage_id, Path(artifact_path))
+                    paths_to_register.append(Path(artifact_path))
                 note_entry = note_result.get("entry") or {}
                 note_path = note_entry.get("path") if isinstance(note_entry, dict) else None
                 if note_path:
-                    self.ledger.register_artifact(lineage_id, Path(note_path))
+                    paths_to_register.append(Path(note_path))
+                for p in paths_to_register:
+                    self.ledger.register_artifact(lineage_id, p)
             except Exception:
                 pass
+        try:
+            for teach_lineage in self._active_teach_lineages(
+                response.trace, prompt=prompt, answer=response.text
+            ):
+                if not teach_lineage or teach_lineage == lineage_id:
+                    continue
+                for p in paths_to_register:
+                    self.ledger.register_artifact(teach_lineage, p)
+        except Exception:
+            pass
         self.agent.last_trace = response.trace
         self.refresh_knowledge()
         self._persist_trace_update(response.trace)

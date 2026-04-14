@@ -940,6 +940,164 @@ class AgentCore:
             return text
         return text[: max(0, limit - 1)].rstrip() + "…"
 
+    # Match a real shell-command invocation literal. Rejects code-fence
+    # language tags like ```python\ndef... (the interpreter is followed only
+    # by a newline + non-file word, which doesn't match any of the argument
+    # alternatives). Accepts:
+    #   - python3 divider.py        (interpreter + file.ext)
+    #   - python3 -c "..."          (interpreter + -flag + arg)
+    #   - bash script.sh            (interpreter + file.ext)
+    #   - npx playwright test       (runner + command)
+    #   - uv run pytest             (runner + command)
+    _RETRO_SHELL_CMD_RE = re.compile(
+        r"(?:^|[\s`>$])(?:"
+        r"(?:python3?|node|ruby|bash|sh|zsh|deno|bun)\s+"
+        r"(?:-[a-zA-Z]\b\s+\S+|['\"][^'\"\n]+?['\"]|[^\s`\n]+\.\w+)"
+        r"|"
+        r"(?:npx|uv\s+run|pnpm|yarn|npm)\s+[^\s`\n]+"
+        r")",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+    def _retrospective_style_gaps(self, output: str, context) -> list[dict[str, str]]:
+        """Identify retrospective style requirements not satisfied by `output`.
+
+        Each retrospective in `context.student_notes` can advertise style
+        families (shell / format / tool-use). For the `shell` family the
+        expectation is that the answer text includes a shell-command
+        invocation literal (interpreter + arg) — not a paraphrase, not just
+        an 'Execution Output:' block, and not an `if __name__ == "__main__":`
+        self-test without any shell invocation. This returns the list of gaps
+        (empty if all requirements satisfied, or if no retrospective style
+        requirements are present at all).
+
+        Only `shell` carries a hard textual pattern requirement today; other
+        families produce no gap records (they're honored via system prompt
+        guidance only).
+        """
+        from rocky.core.system_prompt import _detect_style_families
+
+        notes = getattr(context, "student_notes", None) or []
+        retro_notes = [n for n in notes if str(n.get("kind") or "") == "retrospective"]
+        if not retro_notes:
+            return []
+        # Collect the distinct style families demanded across retrospectives.
+        families: list[str] = []
+        for note in retro_notes:
+            for family in _detect_style_families(note):
+                if family not in families:
+                    families.append(family)
+        gaps: list[dict[str, str]] = []
+        if "shell" in families:
+            if not self._RETRO_SHELL_CMD_RE.search(output or ""):
+                retro_titles = ", ".join(
+                    str(n.get("title") or "").strip()[:80]
+                    for n in retro_notes[:2]
+                    if n.get("title")
+                )[:200]
+                gaps.append(
+                    {
+                        "family": "shell",
+                        "rationale": (
+                            "A prior retrospective describing shell-based "
+                            "verification applies to this task "
+                            f"({retro_titles}) but the candidate answer "
+                            "does not include an explicit shell-command "
+                            "invocation literal (e.g. `python3 file.py`, "
+                            "`python3 -c \"...\"`, `bash script.sh`). The "
+                            "retrospective's repeat-next-time workflow said "
+                            "to execute the created artifact via the shell; "
+                            "showing only an in-file `__main__` block or a "
+                            "stand-alone 'Execution Output' block without "
+                            "the invoking command does not satisfy that "
+                            "workflow."
+                        ),
+                    }
+                )
+        return gaps
+
+    def _repair_retrospective_style_gap(
+        self,
+        provider,
+        *,
+        prompt: str,
+        output: str,
+        route: RouteDecision,
+        context,
+        tool_events: list[dict[str, Any]],
+        gaps: list[dict[str, str]],
+        stream: bool,
+    ) -> str:
+        """Re-invoke the provider with an explicit repair instruction.
+
+        Keeps the observed tool evidence in the repair prompt so the model
+        can quote the actual command it ran (from run_shell_command events)
+        rather than inventing one. If the tool events include a matching
+        shell invocation, ask the model to surface that literal; otherwise
+        ask it to add the minimal invocation its retrospective calls for.
+        Non-streaming only — repair is a synchronous re-generation.
+        """
+        if stream or not gaps:
+            return output
+        gap_text = "\n".join(f"- {g['rationale']}" for g in gaps)
+        # Quote ACTUAL shell commands from this turn's tool events so the
+        # repaired answer is grounded in what happened, not fabrication.
+        observed_commands: list[str] = []
+        for event in tool_events:
+            if event.get("type") != "tool_result" or not event.get("success", True):
+                continue
+            if str(event.get("name") or "") != "run_shell_command":
+                continue
+            args = event.get("arguments") or {}
+            cmd = str(args.get("command") or "").strip()
+            if cmd and cmd not in observed_commands:
+                observed_commands.append(cmd)
+        observed_block = (
+            "Observed shell commands from this turn's tool evidence:\n"
+            + "\n".join(f"  - {c[:240]}" for c in observed_commands[:4])
+            if observed_commands
+            else "No shell commands were actually executed in this turn."
+        )
+        repair_prompt = (
+            f"Task signature: {route.task_signature}\n\n"
+            f"Original user request:\n{self._truncate_text(prompt, 1600)}\n\n"
+            f"Your candidate answer:\n{self._truncate_text(output, 3200)}\n\n"
+            f"{observed_block}\n\n"
+            "Retrospective style-gap findings:\n"
+            f"{gap_text}\n\n"
+            "Rewrite your candidate answer so the retrospective's workflow is visible. "
+            "Keep the substantive content, but add (or replace) a fenced shell/bash code "
+            "block that shows the exact interpreter invocation used to verify the "
+            "artifact (e.g. `python3 divider.py` or `python3 -c \"...\"`). If you ran "
+            "such a command this turn, quote the exact command from the observed block "
+            "above. If you did not run one, add a single line that WOULD verify this "
+            "task via the shell (do not fabricate output; name the command only).\n"
+            "Return the rewritten answer text only — no JSON wrapping, no meta-commentary."
+        )
+        try:
+            response = provider.complete(
+                system_prompt=(
+                    "You rewrite candidate agent answers so they visibly follow "
+                    "prior-session retrospective workflows. You preserve facts, "
+                    "add only the minimum shell-command literal the retrospective "
+                    "style demands, and never fabricate tool output."
+                ),
+                messages=[Message(role="user", content=repair_prompt)],
+                stream=False,
+                event_handler=None,
+            )
+        except Exception:
+            return output
+        repaired = (response.text or "").strip()
+        if not repaired:
+            return output
+        # Only accept the repair if it closes the gap. If still missing a
+        # shell-command literal, keep the original answer — honest failure
+        # beats a cosmetic paraphrase.
+        if self._retrospective_style_gaps(repaired, context):
+            return output
+        return repaired
+
     def _learned_constraint_records(self, context) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -2757,6 +2915,34 @@ class AgentCore:
             if current_thread:
                 current_thread["summary_text"] = active_thread.summary_text()
                 trace["thread"]["current_thread"] = current_thread
+            # Phase 2.5 O2 — retrospective style-gap repair. If a retrospective
+            # tagged `shell` applies to this task but the candidate answer
+            # lacks an explicit shell-command invocation literal, re-invoke
+            # the provider to rewrite with the missing literal. Quotes actual
+            # observed commands from tool_events so the repair is grounded.
+            retro_gaps = self._retrospective_style_gaps(normalized_text, context)
+            if retro_gaps and not stream:
+                repaired = self._repair_retrospective_style_gap(
+                    provider,
+                    prompt=prompt,
+                    output=normalized_text,
+                    route=route,
+                    context=context,
+                    tool_events=provider_response.tool_events,
+                    gaps=retro_gaps,
+                    stream=stream,
+                )
+                if repaired and repaired != normalized_text:
+                    normalized_text = repaired
+                    trace["retrospective_repair"] = {
+                        "gaps": [g["family"] for g in retro_gaps],
+                        "applied": True,
+                    }
+                else:
+                    trace["retrospective_repair"] = {
+                        "gaps": [g["family"] for g in retro_gaps],
+                        "applied": False,
+                    }
             return self._finalize(
                 session=session,
                 prompt=prompt,

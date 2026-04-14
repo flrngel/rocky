@@ -13,14 +13,12 @@ _TOOL_STYLE_MARKERS = ("read_file", "run_shell_command", "fetch_url", "search_we
 
 _FAMILY_DIRECTIVES = {
     "shell": (
-        "when a retrospective tagged `shell` applies, verify code via shell "
-        "invocation. Your answer MUST include the literal command (e.g. "
-        "`python3 -c \"...\"` or `python <file>.py`) as a bash/shell code "
-        "block. Do not replace the command with a paraphrase or an "
-        "'Execution Output' block alone."
+        "shell: answer must include the exact interpreter command "
+        "(e.g. `python3 <file>.py` or `python3 -c \"...\"`) as a bash "
+        "code block — not a paraphrase or 'Execution Output' alone."
     ),
-    "format": "when a retrospective tagged `format` applies, follow its output-format pattern",
-    "tool-use": "when a retrospective tagged `tool-use` applies, prefer its tool sequence",
+    "format": "format: follow the retrospective's output-format pattern",
+    "tool-use": "tool-use: prefer the retrospective's tool sequence",
 }
 
 
@@ -38,6 +36,46 @@ def _detect_style_families(item: dict) -> list[str]:
     if any(marker in haystack for marker in _TOOL_STYLE_MARKERS):
         families.append("tool-use")
     return families
+
+
+_WORKFLOW_SECTION_RE = re.compile(
+    r"##\s*(?P<header>Repeat next time|Avoid next time|Recall when)\s*\n(?P<body>.*?)(?=\n##\s|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+_WORKFLOW_BULLET_RE = re.compile(r"^[\s>]*[-*]\s+(?P<item>.+?)$", re.MULTILINE)
+
+
+def _extract_retrospective_workflow(item: dict) -> dict[str, list[str]]:
+    """Parse structured workflow sections out of a retrospective markdown body.
+
+    Retrospective records persisted by `LearningManager.retrospect_episode`
+    include `## Repeat next time`, `## Avoid next time`, and `## Recall when`
+    sections when the synthesizer produces them. These are ground-truth
+    workflow instructions that models should FOLLOW (repeat) or NOT DO
+    (avoid) on the next similar turn.
+
+    Returns a dict with keys `repeat`, `avoid`, `recall` each mapping to a
+    list of bullet strings. Empty list if the section is absent or empty.
+    """
+    text = str(item.get("text") or "")
+    if not text:
+        return {"repeat": [], "avoid": [], "recall": []}
+    out: dict[str, list[str]] = {"repeat": [], "avoid": [], "recall": []}
+    for match in _WORKFLOW_SECTION_RE.finditer(text):
+        header = (match.group("header") or "").lower()
+        body = match.group("body") or ""
+        bullets = [
+            re.sub(r"\s+", " ", m.group("item")).strip()
+            for m in _WORKFLOW_BULLET_RE.finditer(body)
+        ]
+        bullets = [b for b in bullets if b]
+        if "repeat" in header:
+            out["repeat"] = bullets
+        elif "avoid" in header:
+            out["avoid"] = bullets
+        elif "recall" in header:
+            out["recall"] = bullets
+    return out
 
 
 def _style_cue_from_retrospective(item: dict) -> str | None:
@@ -136,9 +174,34 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
             "unless an explicit teacher rule or hard constraint overrides."
         )
         parts.extend(style_cues[:3])
+        # Structured workflow extraction (O1): when a retrospective includes
+        # `## Repeat next time` / `## Avoid next time` sections in its body,
+        # emit each bullet as an imperative workflow step. This surfaces the
+        # actual tool-sequence the prior session used, not just a style tag.
+        repeat_steps: list[str] = []
+        avoid_steps: list[str] = []
+        seen_repeat: set[str] = set()
+        seen_avoid: set[str] = set()
+        for item in retro_notes[:3]:
+            workflow = _extract_retrospective_workflow(item)
+            for step in workflow["repeat"][:4]:
+                if step and step not in seen_repeat:
+                    seen_repeat.add(step)
+                    repeat_steps.append(step)
+            for step in workflow["avoid"][:4]:
+                if step and step not in seen_avoid:
+                    seen_avoid.add(step)
+                    avoid_steps.append(step)
+        if repeat_steps:
+            parts.append("Repeat the following tool-workflow steps when a similar task arises:")
+            for step in repeat_steps[:6]:
+                parts.append(f"  - do: {step[:240]}")
+        if avoid_steps:
+            parts.append("Do NOT repeat the following failure patterns:")
+            for step in avoid_steps[:6]:
+                parts.append(f"  - avoid: {step[:240]}")
         # Emit imperative directives ONCE per detected family across all
-        # retrospectives, not per-cue. Keeps retrospective-heavy workloads
-        # from ballooning while still giving the model a concrete do-this.
+        # retrospectives, not per-cue.
         all_families: list[str] = []
         for item in retro_notes:
             for family in _detect_style_families(item):
