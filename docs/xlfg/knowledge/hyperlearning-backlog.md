@@ -14,7 +14,17 @@ This document captures every PRD obligation that remains after Phase 0. Future `
 
 Current state: **Phase 1 shipped, Phase 2 mostly shipped (T1/T2/T4/T5/T6/T7/T8/T9/T10), Phase 3/4 + North Star queued.**
 
-### STATUS 2026-04-13 (run-20260413-015018): 1 of 2 live behavioral targets flipped
+### STATUS 2026-04-13 (run-20260413-032250): **PHASE 2 BEHAVIORALLY CLOSED — 12/12 live tests PASS on gemma4:26b**
+
+Phase 2.5 shipped retrospective workflow extraction + post-gen style-gap repair + content-overlap fallback in `_active_teach_lineages`. Both formerly-strict xfails now run as regular PASS:
+- `test_sl_retrospect_phase_B_behavioral_style_carries_over` ✅
+- `test_sl_undo_behavioral_correction_fully_gone` ✅
+
+Plus all 10 structural SL-* tests pass. Deterministic 350 passed, 12 skipped (340 baseline + 10 new). Sensitivity check confirmed (revert → tests fail → restore → green). Commit: `7d586e9 Phase 2.5: retrospective workflow + style-gap repair → both live xfails PASS`.
+
+Phase 3 / NS-1..NS-8 may now begin without behavioral debt.
+
+### Historical (run-20260413-015018): 1 of 2 live behavioral targets flipped
 
 Run result on gemma4:26b:
 - ✅ `test_sl_undo_behavioral_correction_fully_gone` — FLIPPED to PASS via Phase 2.4 migration-dedup + candidate-correction-visibility fixes.
@@ -22,7 +32,17 @@ Run result on gemma4:26b:
 
 Phase 2 is **behaviorally 1/2 closed**. Phase 2.5 is the open work to flip the remaining retrospective test.
 
-### Phase 2.5 — Retrospective style influence on gemma-class models
+### Phase 2.5 — Retrospective style influence on gemma-class models — SHIPPED run-20260413-032250
+
+Closed by:
+- `_extract_retrospective_workflow` in `src/rocky/core/system_prompt.py` parses structured `## Repeat next time` / `## Avoid next time` sections from retrospective md bodies; the Verification block emits each as imperative `do:` / `avoid:` bullets.
+- `AgentCore._retrospective_style_gaps` + `_repair_retrospective_style_gap` provide the decision-C state-machine post-gen check. When a `shell`-family retrospective applies and the candidate answer lacks a real shell-command literal (regex `_RETRO_SHELL_CMD_RE` accepts `python3 X.py`, `python3 -c "..."`, `bash script.sh`, `npx ...`, `uv run ...` — rejects code-fence language tags), the provider is re-invoked with an instruction quoting actual observed shell commands from this turn's `tool_events`. The repair is dropped if the rewritten answer still has the gap (no cosmetic paraphrase).
+- T7-extension content-overlap fallback in `_active_teach_lineages` (CF-4-safe two-signal: student_note substring-match OR ≥2 token overlap on non-stopwords) closes the regression that surfaced when gemma kept a teach as a lesson rather than publishing a policy.
+- `_auto_self_reflect` now also registers retrospective artifacts under active teach-lineages (was: turn-lineage only).
+
+Acceptance evidence: `ROCKY_LLM_SMOKE=1 .venv/bin/pytest tests/test_self_learn_live.py` → 12/12 passed in 196s on gemma4:26b. Sensitivity check confirmed.
+
+### (Original Phase 2.5 fix-direction notes — preserved for record)
 Fix candidate hypotheses (escalated from run-20260413-015018):
 1. Post-generation harness hook: if a retrospective tagged `shell` is in context AND the answer text lacks a shell-command literal regex, re-invoke the model with an appended instruction "your verification must use a shell command literal like `python3 -c` or `python <file>.py` — replace the `__main__` self-test". Gated to the automation/general flow loop's verify burst (decision C divide-conquer).
 2. Add `required_textual_pattern` field on retrospective records; flow loop's verify step enforces pattern match before advancing to finalize.

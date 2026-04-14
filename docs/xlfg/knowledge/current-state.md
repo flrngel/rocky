@@ -1,6 +1,9 @@
 # Rocky — Current State
 
-Last updated: 2026-04-13 (run-20260413-015018 — Phase 2.4 live-behavior fixes; 1/2 xfails flipped)
+Last updated: 2026-04-13 (run-20260413-032250 — Phase 2.5 SHIPPED; **Phase 2 behaviorally closed, 12/12 live PASS**)
+
+## 2026-04-13 run (run-20260413-032250) — Phase 2.5 SHIPPED; Phase 2 behaviorally closed
+Both formerly-strict xfails flipped to regular PASS on gemma4:26b: `test_sl_retrospect_phase_B_behavioral_style_carries_over` and `test_sl_undo_behavioral_correction_fully_gone`. Plus all 10 structural SL-* tests. Live: 12/12 passed in 196s. Deterministic 350 passed, 12 skipped (340 + 10 new). Three coordinated fixes: O1 structured workflow extraction in packer (parse `## Repeat next time` / `## Avoid next time` from retro md), O2 post-gen style-gap repair in agent (`_RETRO_SHELL_CMD_RE` + `_repair_retrospective_style_gap` — re-invoke with instruction quoting actual observed shell commands; reject cosmetic paraphrase), T7-extension content-overlap fallback in `_active_teach_lineages` (CF-4-safe student_note substring-match + token overlap — closes the regression where gemma kept teach as lesson rather than policy). Sensitivity check confirmed (revert → import error → restore → 350 green). Commit 7d586e9.
 
 ## 2026-04-13 run (run-20260413-015018) — Phase 2.4 live-behavior fixes; 1/2 xfails flipped
 Committed 4 per-phase squashed commits on main (2.1/2.2/2.3/docs). Then ran ROCKY_LLM_SMOKE=1 on gemma4:26b via remote Ollama. Two iterations (loopback 1 + 2). Final state: 11 of 12 live tests pass (was 10 pre-fix). Behavioral results: test_sl_undo_behavioral_correction_fully_gone FLIPPED to PASS (was xfail) via migration-dedup fix + candidate-correction-visibility restoration. test_sl_retrospect_phase_B_behavioral_style_carries_over STILL FAILS — gemma chose if __name__ self-test over python command invocation despite imperative style directive. Loopback cap reached; remaining work queued as Phase 2.5. Deterministic suite 340 passed, 12 skipped (unchanged). Commits: 6301555 (2.1), 9acccf9 (2.2), f622661 (2.3), 1c8418b (docs), c98fe41 (2.4).
