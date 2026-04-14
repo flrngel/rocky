@@ -150,9 +150,14 @@ def test_context_budget_policy_dominated_workloads_hit_reduction_target() -> Non
     little to compress (retrospectives are already short) and the test
     separates the two classes honestly.
 
-    This test: policy-heavy + mixed fixtures must achieve ≥ 20% aggregate
-    reduction (realistic bound for the fixture sizes; the 30% PRD target
-    applies to longer real-world policy bodies).
+    This test: policy-heavy + mixed fixtures must achieve ≥ 15% aggregate
+    reduction. The floor is intentionally honest — compaction must NOT be
+    achieved by dropping the teacher correction text for candidate policies
+    (CF-14 candidate-never-hard applies to Do/Do-not LINES, not to the
+    correction itself). Preserving `feedback_excerpt` + a 2-line Do/Don't
+    preview for candidates costs ~3% reduction vs. stripping them entirely,
+    but the stripped variant broke live `test_sl_undo_structural_lineage_aware_rollback`
+    on gemma4:26b because the pnpm correction was no longer visible.
     """
     policy_fixtures = [("policy_heavy", _fixture_policy_heavy), ("mixed", _fixture_mixed)]
     ratios: list[float] = []
@@ -162,10 +167,10 @@ def test_context_budget_policy_dominated_workloads_hit_reduction_target() -> Non
         ratios.append(after / before)
 
     mean_ratio = sum(ratios) / len(ratios)
-    assert mean_ratio <= 0.80, (
+    assert mean_ratio <= 0.85, (
         f"Policy-dominated aggregate char reduction is "
-        f"{(1 - mean_ratio) * 100:.1f}% (floor for this corpus is 20%). "
-        f"Per-fixture ratios: "
+        f"{(1 - mean_ratio) * 100:.1f}% (floor for this corpus is 15%, "
+        f"preserving candidate corrections). Per-fixture ratios: "
         f"{dict(zip((n for n, _ in policy_fixtures), ratios))!r}."
     )
 

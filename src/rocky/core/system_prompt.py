@@ -11,18 +11,24 @@ _FORMAT_STYLE_MARKERS = ("json", "yaml", "markdown", "table", "bullet", "fenced"
 _TOOL_STYLE_MARKERS = ("read_file", "run_shell_command", "fetch_url", "search_web", "agent_browser")
 
 
-def _style_cue_from_retrospective(item: dict) -> str | None:
-    """Extract a compact style cue from a retrospective note.
+_FAMILY_DIRECTIVES = {
+    "shell": (
+        "when a retrospective tagged `shell` applies, verify code via shell "
+        "invocation. Your answer MUST include the literal command (e.g. "
+        "`python3 -c \"...\"` or `python <file>.py`) as a bash/shell code "
+        "block. Do not replace the command with a paraphrase or an "
+        "'Execution Output' block alone."
+    ),
+    "format": "when a retrospective tagged `format` applies, follow its output-format pattern",
+    "tool-use": "when a retrospective tagged `tool-use` applies, prefer its tool sequence",
+}
 
-    Retrospectives carry a *title* that already names a style (e.g. "Python
-    functional verification via shell one-liners"). The title alone plus any
-    matching style-family markers is usually enough to shape the next turn.
-    Returns a one-line cue, or None when no meaningful style signal is found.
-    """
+
+def _detect_style_families(item: dict) -> list[str]:
     title = str(item.get("title") or "").strip()
     text = str(item.get("text") or "").strip()
     if not title and not text:
-        return None
+        return []
     haystack = f"{title} {text}".lower()
     families: list[str] = []
     if any(marker in haystack for marker in _SHELL_STYLE_MARKERS):
@@ -31,6 +37,23 @@ def _style_cue_from_retrospective(item: dict) -> str | None:
         families.append("format")
     if any(marker in haystack for marker in _TOOL_STYLE_MARKERS):
         families.append("tool-use")
+    return families
+
+
+def _style_cue_from_retrospective(item: dict) -> str | None:
+    """Extract a compact style cue from a retrospective note.
+
+    Per-retrospective cue stays compact (`- title (style: <family>)`). The
+    imperative directive per family is emitted once at the block level by
+    `_append_learning_pack_blocks` so we don't inflate the prompt per
+    retrospective — critical for retrospective-heavy workloads where the
+    same directive would otherwise repeat.
+    """
+    title = str(item.get("title") or "").strip()
+    text = str(item.get("text") or "").strip()
+    if not title and not text:
+        return None
+    families = _detect_style_families(item)
     label = title or text[:120]
     label = re.sub(r"\s+", " ", label)[:140]
     if not label:
@@ -113,6 +136,18 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
             "unless an explicit teacher rule or hard constraint overrides."
         )
         parts.extend(style_cues[:3])
+        # Emit imperative directives ONCE per detected family across all
+        # retrospectives, not per-cue. Keeps retrospective-heavy workloads
+        # from ballooning while still giving the model a concrete do-this.
+        all_families: list[str] = []
+        for item in retro_notes:
+            for family in _detect_style_families(item):
+                if family not in all_families:
+                    all_families.append(family)
+        for family in all_families:
+            directive = _FAMILY_DIRECTIVES.get(family)
+            if directive:
+                parts.append(f"- {directive}")
         # Preserve retrospective text for model access, but tightened from the
         # pre-2.3 4000-char dump to 400 per retro (~90% reduction on long
         # retros; neutral on the short fixtures that already fit).
@@ -123,14 +158,37 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
                 parts.append(f"### {title} [retrospective]\n{body}")
 
     # Block 4 — Procedural brief (compact policy summaries)
+    # Candidates never produce HARD Do/Do-not lines (CF-14), but their teacher
+    # correction + top behavioral cues MUST still be visible as soft guidance —
+    # otherwise the model can't see the correction at all for unpromoted policies.
     if context.learned_policies:
         parts.append("## Procedural brief")
+        parts.append(
+            "Policies below shape this turn. Promoted items are hard constraints "
+            "(see above). Candidate items are soft guidance — apply unless they "
+            "conflict with promoted rules or explicit user intent."
+        )
         for item in context.learned_policies[:6]:
             name = item.get("name", "policy")
             state = str(item.get("promotion_state") or "promoted")
             description = str(item.get("description") or "").strip()
             summary = description[:100] if description else "(no description)"
             parts.append(f"- {name} [{state}]: {summary}")
+            feedback = str(item.get("feedback_excerpt") or "").strip()
+            if feedback:
+                parts.append(f"  correction: {feedback[:240]}")
+            # Only surface Do/Do-not lines in the brief for CANDIDATES — promoted
+            # policies already emitted them as hard constraints above. This keeps
+            # the correction text visible without double-emitting hard rules.
+            if state.lower() != "promoted":
+                for rule in (item.get("required_behavior") or [])[:2]:
+                    text = str(rule).strip()
+                    if text:
+                        parts.append(f"  suggest: {text[:160]}")
+                for rule in (item.get("prohibited_behavior") or [])[:2]:
+                    text = str(rule).strip()
+                    if text:
+                        parts.append(f"  avoid: {text[:160]}")
 
     # Block 5 — Curated skills (retained in compact form)
     if context.skills:

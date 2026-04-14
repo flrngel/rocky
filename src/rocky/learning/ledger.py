@@ -373,11 +373,35 @@ def migrate_legacy_workspace(
     }
     existing_ids.discard("")
     rocky_root = workspace_root / ".rocky"
-    counters = {"migrated": 0, "already_present": 0}
+    counters = {"migrated": 0, "already_present": 0, "claimed_by_teach": 0}
 
-    def _append_if_new(lineage_id: str, record: LearningRecord, register_path: Path | None) -> None:
+    # Build a map of paths already claimed by teach-origin records so migration
+    # doesn't shadow them with mig-* duplicates. Shadow records prevent /undo
+    # from sweeping those artifacts: rollback_lineage(teach-*) moves paths
+    # registered under teach-*, but a parallel mig-* registration leaves the
+    # artifact visible elsewhere.
+    claimed_paths: set[str] = set()
+    index = ledger._read_index()
+    for record in ledger.load_all():
+        origin_type = str((record.origin or {}).get("type") or "").lower()
+        if origin_type not in {"teacher_feedback", "user_feedback"}:
+            continue
+        for path in index.get(record.id, []):
+            claimed_paths.add(str(path))
+        # Also claim paths referenced by the record's lineage dict.
+        lineage = record.lineage or {}
+        lineage_path = str(lineage.get("path") or "")
+        if lineage_path:
+            claimed_paths.add(lineage_path)
+
+    def _append_if_new(
+        lineage_id: str, record: LearningRecord, register_path: Path | None
+    ) -> None:
         if lineage_id in existing_ids:
             counters["already_present"] += 1
+            return
+        if register_path is not None and str(register_path) in claimed_paths:
+            counters["claimed_by_teach"] += 1
             return
         ledger.append(record)
         if register_path is not None and register_path.exists():
