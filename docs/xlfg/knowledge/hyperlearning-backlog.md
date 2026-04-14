@@ -10,9 +10,13 @@ This document captures every PRD obligation that remains after Phase 0. Future `
 
 ---
 
-## What's next — recommended run order (as of 2026-04-13)
+## What's next — recommended run order (as of 2026-04-14)
 
-Current state: **Phase 1 shipped, Phase 2 mostly shipped (T1/T2/T4/T5/T6/T7/T8/T9/T10), Phase 3/4 + North Star queued.**
+Current state: **Phase 1 shipped, Phase 2 behaviorally closed, Phase 3 SHIPPED (run-20260414-194516), Phase 4 + North Star queued.**
+
+### STATUS 2026-04-14 (run-20260414-194516): **PHASE 3 SHIPPED — bounded meta-learning archive**
+
+`src/rocky/meta/` package + `RetrievalConfig`/`PackingConfig` dataclasses + `cmd_meta` CLI + `MetaVariantRegistry` state machine + offline deterministic canary + safety allow-list (3-site defense in depth, weight-subtree bounds added in review F1) + append-only meta-ledger. 70 new deterministic tests; full suite **420 passed + 12 skipped** (was 350+12). Zero regressions. Baseline behavior bit-identical when no variant active. Sensitivity witness bites: zero-edit variant produces 0 canary delta; `top_k_limit=2` variant produces -8 records delta. Ready for Phase 4 — `MetaVariant.canary_results` schema is rich enough that Phase 4's `improve@N` calculator can consume it without schema changes.
 
 ### STATUS 2026-04-13 (run-20260413-032250): **PHASE 2 BEHAVIORALLY CLOSED — 12/12 live tests PASS on gemma4:26b**
 
@@ -156,11 +160,13 @@ Deferred work items:
 
 ## Phase 3 — Bounded meta-learning archive
 
+**STATUS: SHIPPED (run-20260414-194516)** — `src/rocky/meta/` package + `RetrievalConfig`/`PackingConfig` overlay + offline canary + safety allow-list + append-only meta-ledger + state machine + `cmd_meta` CLI. 70 new deterministic tests; full suite 420 passed + 12 skipped. Zero regressions. F1 weight-subtree bounds added in review.
+
 PRD references: §14 "Hyperagent-inspired archive and branching", §16.6 FR-6, §20.4 "Phase 3", §11 authority model, §21 safety rails.
 
 Goal: let Rocky improve parts of the learning procedure itself (retrieval config, promotion thresholds, packing budgets, evaluation thresholds). Meta-variants are versioned, archived, and comparable under replay canaries before any promotion.
 
-Deferred work items:
+Shipped in run-20260414-194516:
 - Define `MetaVariant` schema: `variant_id`, `parent_variant_id`, `edits` (config deltas), `archive_role` (baseline/branch/promoted), `canary_results`, `created_at`, `promoted_at`, `rolled_back_at`.
 - Implement archive storage at `.rocky/meta/variants/` — versioned directory per variant, append-only.
 - Implement replay/canary engine: given a variant and a set of replay tasks, execute them against the variant config, capture outcomes, compare against baseline. Must be offline-capable (replay uses stored traces, not live provider calls).
@@ -168,6 +174,11 @@ Deferred work items:
 - Enforce that no meta-variant can weaken security boundaries (PRD §21.1 rule 2). Implement allow-list of editable config keys; reject edits that touch permissions, freeze behavior, or tool allow/deny logic.
 - Surface variants via `/learning experiments` (PRD §17.3) once the command family lands.
 - Acceptance: Rocky can compare at least two retrieval/promotion variants; a promoted meta-variant yields statistically meaningful replay improvement without safety regressions.
+
+### Residual Phase-3 items (inherited by Phase 4 / NS-x)
+- **Live retrieval still uses legacy retrievers.** `RetrievalConfig` overlay reaches `LedgerRetriever` (used inside `CanaryRunner` only). Live `LearnedPolicyRetriever` / `MemoryRetriever` / `StudentStore.retrieve` are unaffected by an active variant. This is the pre-existing Phase 2 T3 adapter-collapse deferral (backlog line 68), not a Phase-3 regression. Closing T3 wires the retrieval overlay into production.
+- **Promotion threshold is permissive.** `validated` requires only `differs_from_baseline=True`. Phase 4 will tighten via `improve@N` on a held-out task family.
+- **Single-process assumption.** `MetaVariantRegistry` does not coordinate across concurrent runtime instances on the same workspace. Acceptable for an operator tool; revisit under NS-6.
 
 ## Phase 4 — Transfer evaluation
 

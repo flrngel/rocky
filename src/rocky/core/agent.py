@@ -21,6 +21,7 @@ from rocky.core.runtime_state import (
     prompt_requests_list_output,
     requested_minimum_list_items,
 )
+from rocky.config.models import PackingConfig, RetrievalConfig
 from rocky.core.messages import Message
 from rocky.core.router import Lane, RouteDecision, Router
 from rocky.core.system_prompt import build_system_prompt
@@ -143,6 +144,8 @@ class AgentCore:
         meta_handler: Callable[[str], str],
         *,
         create_layout: bool = True,
+        packing_config: "PackingConfig | None" = None,
+        retrieval_config: "RetrievalConfig | None" = None,
     ) -> None:
         self.router = router
         self.sessions = sessions
@@ -156,6 +159,8 @@ class AgentCore:
         if create_layout:
             self.traces_dir.mkdir(parents=True, exist_ok=True)
         self.meta_handler = meta_handler
+        self.packing_config = packing_config
+        self.retrieval_config = retrieval_config
         self.last_prompt: str | None = None
         self.last_answer: str | None = None
         self.last_trace: dict[str, Any] | None = None
@@ -2817,6 +2822,7 @@ class AgentCore:
             self.permissions.config.mode,
             prompt,
             route.task_signature,
+            packing=self.packing_config,
         )
         recent_messages = session.recent_messages(limit=12) if continue_session else []
         if not recent_messages and self._wants_prior_turn_context(prompt):

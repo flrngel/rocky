@@ -29,11 +29,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from rocky.config.models import RetrievalConfig
 from rocky.core.runtime_state import ActiveTaskThread
 from rocky.learning.ledger import LearningLedgerStore, LearningRecord
 from rocky.util.text import tokenize_keywords
 
 
+# Legacy module-level defaults. Kept as a read-only reference (and for any
+# external callers who still import them); the retriever itself reads from
+# a `RetrievalConfig` so Phase 3 meta-variants can overlay these knobs.
 _AUTHORITY_WEIGHT = {
     "teacher": 4,
     "evidence_backed": 3,
@@ -67,8 +71,13 @@ class LedgerRetriever:
     unchanged per C2.
     """
 
-    def __init__(self, ledger: LearningLedgerStore) -> None:
+    def __init__(
+        self,
+        ledger: LearningLedgerStore,
+        config: RetrievalConfig | None = None,
+    ) -> None:
         self.ledger = ledger
+        self.config = config if config is not None else RetrievalConfig()
 
     def retrieve(
         self,
@@ -76,9 +85,11 @@ class LedgerRetriever:
         task_signature: str,
         *,
         thread: ActiveTaskThread | None = None,
-        limit: int = 8,
+        limit: int | None = None,
         kind_filter: set[str] | None = None,
     ) -> list[RankedRecord]:
+        effective_limit = self.config.top_k_limit if limit is None else limit
+        cfg = self.config
         prompt_tokens = tokenize_keywords(prompt)
         thread_tokens = (
             tokenize_keywords(thread.summary_text()) if thread is not None else set()
@@ -96,11 +107,13 @@ class LedgerRetriever:
             breakdown: dict[str, float] = {}
 
             # 1. Authority
-            authority_score = _AUTHORITY_WEIGHT.get(str(record.authority or "").lower(), 0)
+            authority_score = cfg.authority_weight.get(
+                str(record.authority or "").lower(), 0
+            )
             breakdown["authority"] = float(authority_score)
 
             # 2. Promotion state
-            promotion_score = _PROMOTION_WEIGHT.get(
+            promotion_score = cfg.promotion_weight.get(
                 str(record.promotion_state or "promoted").lower(), 0
             )
             breakdown["promotion_state"] = float(promotion_score)
@@ -110,30 +123,35 @@ class LedgerRetriever:
             declared_sig = str(record.task_signature or "").strip()
             if declared_sig and task_signature:
                 if declared_sig == task_signature:
-                    ts_score = 6.0
+                    ts_score = cfg.ts_exact_score
                 elif declared_sig.endswith("*") and task_signature.startswith(
                     declared_sig[:-1]
                 ):
-                    ts_score = 3.0
+                    ts_score = cfg.ts_prefix_score
             breakdown["task_signature"] = ts_score
 
             # 4. Task-family match
             tf_score = 0.0
             declared_family = str(record.task_family or "").strip()
             if declared_family and thread_family and declared_family == thread_family:
-                tf_score = 2.0
+                tf_score = cfg.tf_score
             breakdown["task_family"] = tf_score
 
             # 5. Thread relevance (trigger tokens ∩ thread summary tokens)
             trigger_tokens: set[str] = set()
             for trigger in record.triggers or []:
                 trigger_tokens |= tokenize_keywords(str(trigger))
-            thread_relevance = float(min(len(thread_tokens & trigger_tokens), 4))
+            thread_relevance = float(
+                min(len(thread_tokens & trigger_tokens), cfg.thread_relevance_cap)
+            )
             breakdown["thread_relevance"] = thread_relevance
 
             # Additionally: prompt-token overlap (separate signal, required for
             # non-thread turns where thread_tokens is empty).
-            prompt_overlap = float(min(len(prompt_tokens & trigger_tokens), 4)) * 1.5
+            prompt_overlap = (
+                float(min(len(prompt_tokens & trigger_tokens), cfg.prompt_overlap_cap))
+                * cfg.prompt_overlap_multiplier
+            )
             breakdown["prompt_relevance"] = prompt_overlap
 
             # Trigger literal substring match — legacy compat (LearnedPolicyRetriever
@@ -143,7 +161,7 @@ class LedgerRetriever:
                 for t in (record.triggers or [])
                 if str(t).strip()
             )
-            breakdown["trigger_literal"] = 6.0 if trigger_literal else 0.0
+            breakdown["trigger_literal"] = cfg.trigger_literal_score if trigger_literal else 0.0
 
             # 6. Failure-class match
             fc_score = 0.0
@@ -151,27 +169,27 @@ class LedgerRetriever:
             if failure_class and any(
                 tok in prompt_lower for tok in tokenize_keywords(failure_class)
             ):
-                fc_score = 3.0
+                fc_score = cfg.fc_score
             breakdown["failure_class"] = fc_score
 
             # 7. Evidence-support quality
             ev_count = len(record.evidence or [])
-            breakdown["evidence_quality"] = float(min(ev_count, 4))
+            breakdown["evidence_quality"] = float(min(ev_count, cfg.evidence_quality_cap))
 
             # 8. Recency — bias toward recent `updated_at` (string-compare is
             # OK for ISO-8601; newer strings sort higher). Map to a small
             # numeric bonus so it doesn't dominate.
-            breakdown["recency"] = 1.0 if record.updated_at else 0.0
+            breakdown["recency"] = cfg.recency_score if record.updated_at else 0.0
 
             # 9. Conflict status — stub (no contradiction index yet in Phase 2.3).
-            breakdown["conflict_status"] = 0.0
+            breakdown["conflict_status"] = cfg.conflict_status_score
 
             # 10. Prior-success attribution
             try:
                 vsc = int((record.reuse_stats or {}).get("verified_success_count") or 0)
             except Exception:
                 vsc = 0
-            breakdown["prior_success"] = float(min(vsc, 4))
+            breakdown["prior_success"] = float(min(vsc, cfg.prior_success_cap))
 
             score = float(sum(breakdown.values()))
 
@@ -183,7 +201,7 @@ class LedgerRetriever:
                 or prompt_overlap > 0
                 or fc_score > 0
             )
-            if not has_signal:
+            if cfg.require_signal and not has_signal:
                 continue
 
             ranked.append(RankedRecord(record=record, score=score, rank_breakdown=breakdown))
@@ -192,4 +210,4 @@ class LedgerRetriever:
             key=lambda r: (r.score, r.record.updated_at or ""),
             reverse=True,
         )
-        return ranked[:limit]
+        return ranked[:effective_limit]

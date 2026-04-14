@@ -56,6 +56,7 @@ class CommandRegistry:
             "configure",
             "setup",
             "set-up",
+            "meta",
         ]
     )
 
@@ -298,3 +299,108 @@ class CommandRegistry:
     def cmd_init(self, args: list[str]) -> CommandResult:
         data = self.runtime.init_scaffold()
         return CommandResult("init", dump_yaml(data), data)
+
+    def cmd_meta(self, args: list[str]) -> CommandResult:
+        """Meta-learning archive operator surface (PRD Phase 3).
+
+        Subcommands:
+            /meta list                          — list known variants
+            /meta show <variant_id>             — show one variant's record
+            /meta create <id> <parent> <edits_json>   — register a candidate variant
+            /meta canary <id>                   — run the offline canary; returns metrics
+            /meta activate <id>                 — activate a validated variant (requires canary-validated)
+            /meta rollback <id>                 — rollback to prior active (or baseline)
+            /meta active                        — show the currently active overlay
+        """
+        import json as _json
+        from rocky.meta.safety import SafetyViolation
+        from rocky.meta.registry import VariantStateError
+
+        registry = self.runtime.meta_registry
+        if not args or args[0] == "list":
+            variants = [v.to_dict() for v in registry.list_variants()]
+            data = {"active_id": registry.active_id(), "variants": variants}
+            return CommandResult("meta", dump_yaml(data), data)
+        action = args[0]
+        if action == "active":
+            overlay = registry.apply_active_overlay()
+            data = {
+                "active_id": overlay.active_id,
+                "retrieval_top_k_limit": overlay.retrieval.top_k_limit,
+                "packing_workspace_brief_budget": overlay.packing.workspace_brief_budget,
+            }
+            return CommandResult("meta", dump_yaml(data), data)
+        if action == "show":
+            if len(args) < 2:
+                text = "Usage: /meta show <variant_id>"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            record = registry.show(args[1])
+            if record is None:
+                text = f"meta-variant {args[1]!r} not found"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            data = record.to_dict()
+            return CommandResult("meta", dump_yaml(data), data)
+        if action == "create":
+            if len(args) < 4:
+                text = "Usage: /meta create <variant_id> <parent_variant_id> <edits_json>"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            variant_id = args[1]
+            parent_id = args[2]
+            raw_edits = " ".join(args[3:])
+            try:
+                parsed = _json.loads(raw_edits)
+            except _json.JSONDecodeError as exc:
+                text = f"edits must be valid JSON: {exc}"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            if not isinstance(parsed, dict):
+                text = "edits must be a JSON object with dotted-path keys"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            try:
+                variant = registry.create_variant(
+                    variant_id, parsed, parent_variant_id=parent_id
+                )
+            except SafetyViolation as exc:
+                text = f"SafetyViolation: {exc.key} — {exc.reason}"
+                return CommandResult(
+                    "meta", text, {"ok": False, "reason": text, "violation_key": exc.key}
+                )
+            except (FileExistsError, ValueError) as exc:
+                text = str(exc)
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            data = variant.to_dict()
+            return CommandResult("meta", dump_yaml(data), data)
+        if action == "canary":
+            if len(args) < 2:
+                text = "Usage: /meta canary <variant_id>"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            try:
+                result = registry.canary(args[1])
+            except FileNotFoundError as exc:
+                text = str(exc)
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            data = result.to_dict()
+            return CommandResult("meta", dump_yaml(data), data)
+        if action == "activate":
+            if len(args) < 2:
+                text = "Usage: /meta activate <variant_id>"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            try:
+                variant = registry.activate(args[1])
+            except (FileNotFoundError, VariantStateError, SafetyViolation) as exc:
+                text = str(exc)
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            data = variant.to_dict()
+            return CommandResult("meta", dump_yaml(data), data)
+        if action == "rollback":
+            if len(args) < 2:
+                text = "Usage: /meta rollback <variant_id>"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            try:
+                variant = registry.rollback(args[1])
+            except FileNotFoundError as exc:
+                text = str(exc)
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            data = variant.to_dict()
+            return CommandResult("meta", dump_yaml(data), data)
+        text = "Usage: /meta [list|show|create|canary|activate|rollback|active]"
+        return CommandResult("meta", text, {"ok": False, "reason": text})

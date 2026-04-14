@@ -35,6 +35,7 @@ from rocky.learning.manager import LearningManager
 from rocky.learning.policies import LearnedPolicyLoader, LearnedPolicyRetriever
 from rocky.memory.retriever import MemoryRetriever
 from rocky.memory.store import MemoryStore
+from rocky.meta.registry import MetaVariantRegistry
 from rocky.providers.registry import ProviderRegistry
 from rocky.session.store import SessionStore
 from rocky.skills.loader import SkillLoader
@@ -69,6 +70,7 @@ class RockyRuntime:
         agent: AgentCore,
         student_store: StudentStore,
         ledger: LearningLedgerStore,
+        meta_registry: MetaVariantRegistry,
         *,
         freeze_enabled: bool = False,
         verbose_enabled: bool = False,
@@ -91,6 +93,7 @@ class RockyRuntime:
         self.agent = agent
         self.student_store = student_store
         self.ledger = ledger
+        self.meta_registry = meta_registry
         # learning_manager needs ledger to do lineage-aware rollback.
         self.learning_manager.ledger = ledger
         self.freeze_enabled = freeze_enabled
@@ -133,6 +136,8 @@ class RockyRuntime:
             except Exception:
                 # Migration must never block load; failures are visible via ledger state.
                 pass
+        meta_registry = MetaVariantRegistry(workspace.root, create_layout=not freeze)
+        active_overlay = meta_registry.apply_active_overlay()
         context_builder = ContextBuilder(
             workspace.root,
             workspace.execution_root,
@@ -175,6 +180,8 @@ class RockyRuntime:
             traces_dir=workspace.traces_dir,
             meta_handler=lambda prompt: "",
             create_layout=not freeze,
+            packing_config=active_overlay.packing,
+            retrieval_config=active_overlay.retrieval,
         )
         runtime = cls(
             workspace=workspace,
@@ -195,6 +202,7 @@ class RockyRuntime:
             agent=agent,
             student_store=student_store,
             ledger=ledger,
+            meta_registry=meta_registry,
             freeze_enabled=freeze,
             verbose_enabled=verbose,
         )

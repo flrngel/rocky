@@ -58,6 +58,71 @@ class LearningConfig:
 
 
 @dataclass(slots=True)
+class RetrievalConfig:
+    """Tunable knobs for `LedgerRetriever` ranking.
+
+    Defaults match the pre-Phase-3 hard-coded module constants so a
+    default-constructed `RetrievalConfig` produces bit-identical behavior
+    to the legacy retriever. Meta-variants overlay these knobs at runtime
+    without mutating module state (see `rocky.meta.overlay`).
+    """
+
+    top_k_limit: int = 8
+    authority_weight: dict[str, int] = field(
+        default_factory=lambda: {
+            'teacher': 4,
+            'evidence_backed': 3,
+            'self_generated': 2,
+        }
+    )
+    promotion_weight: dict[str, int] = field(
+        default_factory=lambda: {
+            'promoted': 3,
+            'validated': 2,
+            'candidate': 1,
+            'stale': -1,
+            'rejected': -3,
+        }
+    )
+    ts_exact_score: float = 6.0
+    ts_prefix_score: float = 3.0
+    tf_score: float = 2.0
+    thread_relevance_cap: int = 4
+    prompt_overlap_cap: int = 4
+    prompt_overlap_multiplier: float = 1.5
+    trigger_literal_score: float = 6.0
+    fc_score: float = 3.0
+    evidence_quality_cap: int = 4
+    recency_score: float = 1.0
+    conflict_status_score: float = 0.0
+    prior_success_cap: int = 4
+    require_signal: bool = True
+
+
+@dataclass(slots=True)
+class PackingConfig:
+    """Tunable knobs for `build_system_prompt` learning-pack blocks.
+
+    Defaults match the pre-Phase-3 hard-coded char budgets and caps so a
+    default-constructed `PackingConfig` produces bit-identical packer
+    output. Meta-variants overlay these knobs at runtime.
+    """
+
+    workspace_brief_budget: int = 2000
+    retrospective_body_budget: int = 400
+    student_profile_budget: int = 4000
+    legacy_note_budget: int = 4000
+    hard_lines_cap: int = 12
+    procedural_cap: int = 6
+    retro_cap: int = 3
+    style_cue_cap: int = 3
+    repeat_step_cap: int = 6
+    avoid_step_cap: int = 6
+    workflow_step_body_budget: int = 240
+    user_prompt_budget: int = 2000
+
+
+@dataclass(slots=True)
 class AppConfig:
     active_provider: str = 'litellm_local'
     providers: dict[str, ProviderConfig] = field(default_factory=dict)

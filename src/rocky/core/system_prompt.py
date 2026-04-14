@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from rocky.config.models import PackingConfig
 from rocky.core.context import ContextPackage
 from rocky.core.runtime_state import prompt_requests_list_output, requested_minimum_list_items
 
@@ -101,7 +102,11 @@ def _style_cue_from_retrospective(item: dict) -> str | None:
     return f"- {label}"
 
 
-def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> None:
+def _append_learning_pack_blocks(
+    parts: list[str],
+    context: ContextPackage,
+    packing: "PackingConfig | None" = None,
+) -> None:
     """Canonical 6-block learning pack per PRD §12.1.
 
     Block order (all optional — emitted only when data is present):
@@ -116,6 +121,8 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
     site) and at `core/agent.py::_learned_constraint_records` (the judge site).
     Both MUST stay aligned — see `tests/test_self_learn_scenarios.py`.
     """
+    if packing is None:
+        packing = PackingConfig()
     # Block 1 — Hard constraints (promoted only)
     hard_lines: list[str] = []
     seen_constraint: set[str] = set()
@@ -148,7 +155,7 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
     if hard_lines:
         parts.append("## Hard constraints")
         parts.append("Promoted policies — treat as hard constraints.")
-        parts.extend(hard_lines[:12])
+        parts.extend(hard_lines[: packing.hard_lines_cap])
 
     # Block 2 — Workspace brief (elevated from retrieved memory)
     workspace_brief = None
@@ -158,7 +165,7 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
             break
     if workspace_brief is not None:
         parts.append("## Workspace brief")
-        parts.append(str(workspace_brief.get("text") or "")[:2000])
+        parts.append(str(workspace_brief.get("text") or "")[: packing.workspace_brief_budget])
 
     # Block 3 — Verification / Style conventions (from retrospectives)
     retro_notes = [n for n in context.student_notes if str(n.get("kind") or "") == "retrospective"]
@@ -173,7 +180,7 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
             "Style guidance extracted from prior self-retrospectives. Apply "
             "unless an explicit teacher rule or hard constraint overrides."
         )
-        parts.extend(style_cues[:3])
+        parts.extend(style_cues[: packing.style_cue_cap])
         # Structured workflow extraction (O1): when a retrospective includes
         # `## Repeat next time` / `## Avoid next time` sections in its body,
         # emit each bullet as an imperative workflow step. This surfaces the
@@ -182,7 +189,7 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
         avoid_steps: list[str] = []
         seen_repeat: set[str] = set()
         seen_avoid: set[str] = set()
-        for item in retro_notes[:3]:
+        for item in retro_notes[: packing.retro_cap]:
             workflow = _extract_retrospective_workflow(item)
             for step in workflow["repeat"][:4]:
                 if step and step not in seen_repeat:
@@ -194,12 +201,12 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
                     avoid_steps.append(step)
         if repeat_steps:
             parts.append("Repeat the following tool-workflow steps when a similar task arises:")
-            for step in repeat_steps[:6]:
-                parts.append(f"  - do: {step[:240]}")
+            for step in repeat_steps[: packing.repeat_step_cap]:
+                parts.append(f"  - do: {step[: packing.workflow_step_body_budget]}")
         if avoid_steps:
             parts.append("Do NOT repeat the following failure patterns:")
-            for step in avoid_steps[:6]:
-                parts.append(f"  - avoid: {step[:240]}")
+            for step in avoid_steps[: packing.avoid_step_cap]:
+                parts.append(f"  - avoid: {step[: packing.workflow_step_body_budget]}")
         # Emit imperative directives ONCE per detected family across all
         # retrospectives, not per-cue.
         all_families: list[str] = []
@@ -214,9 +221,9 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
         # Preserve retrospective text for model access, but tightened from the
         # pre-2.3 4000-char dump to 400 per retro (~90% reduction on long
         # retros; neutral on the short fixtures that already fit).
-        for item in retro_notes[:3]:
+        for item in retro_notes[: packing.retro_cap]:
             title = str(item.get("title") or item.get("id") or "note")
-            body = str(item.get("text", ""))[:400]
+            body = str(item.get("text", ""))[: packing.retrospective_body_budget]
             if body.strip():
                 parts.append(f"### {title} [retrospective]\n{body}")
 
@@ -231,7 +238,7 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
             "(see above). Candidate items are soft guidance — apply unless they "
             "conflict with promoted rules or explicit user intent."
         )
-        for item in context.learned_policies[:6]:
+        for item in context.learned_policies[: packing.procedural_cap]:
             name = item.get("name", "policy")
             state = str(item.get("promotion_state") or "promoted")
             description = str(item.get("description") or "").strip()
@@ -281,10 +288,16 @@ def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> N
             parts.append(str(item.get("text", ""))[:1600])
 
 
-def _append_framing_blocks(parts: list[str], context: ContextPackage) -> None:
+def _append_framing_blocks(
+    parts: list[str],
+    context: ContextPackage,
+    packing: PackingConfig | None = None,
+) -> None:
     """Non-learning framing blocks. These live outside the learning pack and
     appear regardless of whether any learned policies/memories/retrospectives
     were retrieved."""
+    if packing is None:
+        packing = PackingConfig()
     if context.workspace_focus:
         parts.append("## Workspace focus")
         parts.append(context.workspace_focus.get("text", ""))
@@ -322,7 +335,7 @@ def _append_framing_blocks(parts: list[str], context: ContextPackage) -> None:
             parts.append("Delta-answering required: answer the current ask directly and do not replay prior setup unless strictly necessary.")
     if context.student_profile:
         parts.append("## Student profile")
-        parts.append(str(context.student_profile.get("text", ""))[:4000])
+        parts.append(str(context.student_profile.get("text", ""))[: packing.student_profile_budget])
     if context.handoffs:
         parts.append("## Project handoff")
         for item in context.handoffs:
@@ -338,10 +351,16 @@ def _append_framing_blocks(parts: list[str], context: ContextPackage) -> None:
         parts.append("All tools are available. Prioritize these families first when relevant: " + ", ".join(context.tool_families))
 
 
-def _append_context_blocks(parts: list[str], context: ContextPackage) -> None:
+def _append_context_blocks(
+    parts: list[str],
+    context: ContextPackage,
+    packing: PackingConfig | None = None,
+) -> None:
     """Compose framing blocks + canonical 6-block learning pack."""
-    _append_framing_blocks(parts, context)
-    _append_learning_pack_blocks(parts, context)
+    if packing is None:
+        packing = PackingConfig()
+    _append_framing_blocks(parts, context, packing)
+    _append_learning_pack_blocks(parts, context, packing)
 
 
 def _append_context_blocks_legacy(parts: list[str], context: ContextPackage) -> None:
@@ -382,7 +401,7 @@ def _append_context_blocks_legacy(parts: list[str], context: ContextPackage) -> 
             parts.append("Delta-answering required: answer the current ask directly and do not replay prior setup unless strictly necessary.")
     if context.student_profile:
         parts.append("## Student profile")
-        parts.append(str(context.student_profile.get("text", ""))[:4000])
+        parts.append(str(context.student_profile.get("text", ""))[:4000])  # legacy packer unchanged
     if context.student_notes:
         parts.append("## Student notebook")
         if any(str(item.get("kind") or "") == "retrospective" for item in context.student_notes):
@@ -451,7 +470,11 @@ def build_system_prompt(
     mode: str,
     user_prompt: str = "",
     task_signature: str = "",
+    *,
+    packing: PackingConfig | None = None,
 ) -> str:
+    if packing is None:
+        packing = PackingConfig()
     parts: list[str] = [
         "You are Rocky, a CLI-first, file-first, workspace-aware, local-model-first teachable student agent.",
         "Be concise, concrete, and operational.",
@@ -528,10 +551,10 @@ def build_system_prompt(
         parts.append("When reporting a verified automation or mini-project result, mention the exact script or command you ran and the exact observed output, not just a paraphrase. Use at least three successful tool steps: `write_file`, reread it with `read_file`, and verify with `run_shell_command`. Once the main script exists, verify within your first five successful tool calls unless the user explicitly asked for multiple files before verification.")
     if not context.tool_families:
         parts.append("Never imply that you executed commands, read files, or browsed the web unless a tool actually did it.")
-    _append_context_blocks(parts, context)
+    _append_context_blocks(parts, context, packing)
     if user_prompt:
         parts.append("## Current task")
-        parts.append(user_prompt[:2000])
+        parts.append(user_prompt[: packing.user_prompt_budget])
     parts.append("When doing live-source or browsing work, cite URLs or clearly name the sources used.")
     return "\n\n".join(parts)
 
