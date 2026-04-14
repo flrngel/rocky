@@ -218,12 +218,14 @@ def test_candidate_policy_never_hard(tmp_path, monkeypatch) -> None:
         user_prompt="merge decisions",
         task_signature="repo/shell_execution",
     )
-    assert "## Learned constraints" not in candidate_prompt, (
-        "candidate policies must not produce a Learned constraints block"
+    # Phase 2.3 packer rename: `## Learned constraints` → `## Hard constraints`;
+    # `## Learned policies` → `## Procedural brief`. Candidate-never-hard invariant holds.
+    assert "## Hard constraints" not in candidate_prompt, (
+        "candidate policies must not produce a Hard constraints block"
     )
     assert "Do not: Include commentary or prose outside the requested JSON." not in candidate_prompt
-    assert "## Learned policies" in candidate_prompt, (
-        "candidate policies remain visible informationally"
+    assert "## Procedural brief" in candidate_prompt, (
+        "candidate policies remain visible informationally in the procedural brief"
     )
 
     _promote_on_disk(policy_path)
@@ -245,7 +247,7 @@ def test_candidate_policy_never_hard(tmp_path, monkeypatch) -> None:
         user_prompt="merge decisions",
         task_signature="repo/shell_execution",
     )
-    assert "## Learned constraints" in promoted_prompt
+    assert "## Hard constraints" in promoted_prompt
     assert "Do not: Include commentary or prose outside the requested JSON." in promoted_prompt
 
 

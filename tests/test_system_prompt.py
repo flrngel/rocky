@@ -147,14 +147,15 @@ def test_system_prompt_gates_learned_constraints_on_promotion() -> None:
     )
 
     # Candidate policies MUST NOT emit hard constraints (PRD §11 Crucial change, §16.8 FR-8).
-    assert "## Learned constraints" not in candidate_prompt
+    # (Block renamed from "## Learned constraints" to "## Hard constraints" in Phase 2.3
+    # canonical 6-block packer; the invariant — candidates-never-hard — is what matters.)
+    assert "## Hard constraints" not in candidate_prompt
     assert "Do not: Include distinct variants once the established item family is known." not in candidate_prompt
     assert "Do: Keep only the established item family once it is supported by the evidence." not in candidate_prompt
-    # Candidate policies remain visible informationally under "Learned policies".
-    assert "## Learned policies" in candidate_prompt
-    # The policy prose still guides the model but explicitly qualifies hard behavior on promotion state.
-    assert "promoted learned policies" in candidate_prompt
-    assert "even if the policy is still marked candidate" not in candidate_prompt
+    # Candidate policies remain visible informationally in the procedural brief.
+    assert "## Procedural brief" in candidate_prompt
+    # The promoted-only hard-rule framing is attached to the Hard constraints block when it appears.
+    assert "Promoted learned policies are corrective memories" not in candidate_prompt
 
     promoted_prompt = build_system_prompt(
         ContextPackage(
@@ -169,10 +170,10 @@ def test_system_prompt_gates_learned_constraints_on_promotion() -> None:
         task_signature="repo/shell_execution",
     )
 
-    assert "## Learned constraints" in promoted_prompt
+    assert "## Hard constraints" in promoted_prompt
     assert "Do not: Include distinct variants once the established item family is known." in promoted_prompt
     assert "Do: Keep only the established item family once it is supported by the evidence." in promoted_prompt
-    assert "## Learned policies" in promoted_prompt
+    assert "## Procedural brief" in promoted_prompt
 
 
 def test_system_prompt_marks_self_retrospectives_as_soft_conventions() -> None:
@@ -196,7 +197,12 @@ def test_system_prompt_marks_self_retrospectives_as_soft_conventions() -> None:
         user_prompt="say hello again",
     )
 
-    assert "## Student notebook" in prompt
-    assert "Self retrospectives are Rocky's own compact lessons" in prompt
-    assert "Use them as soft conventions" in prompt
-    assert "Keep greeting turns compact [retrospective]" in prompt
+    # Phase 2.3: retrospectives now surface under "## Verification / Style conventions"
+    # as a compact style cue (extracted title + detected style families). The SPIRIT —
+    # retrospectives are soft guidance, explicit teacher/hard rules override — is preserved.
+    assert "## Verification / Style conventions" in prompt
+    assert "Style guidance extracted from prior self-retrospectives" in prompt
+    assert (
+        "unless an explicit teacher rule or hard constraint overrides" in prompt
+    )
+    assert "Keep greeting turns compact" in prompt

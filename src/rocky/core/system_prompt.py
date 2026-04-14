@@ -1,10 +1,229 @@
 from __future__ import annotations
 
+import re
+
 from rocky.core.context import ContextPackage
 from rocky.core.runtime_state import prompt_requests_list_output, requested_minimum_list_items
 
 
+_SHELL_STYLE_MARKERS = ("shell", "bash", "cli", "terminal", "one-liner", "python3 -c", "`")
+_FORMAT_STYLE_MARKERS = ("json", "yaml", "markdown", "table", "bullet", "fenced", "quoted")
+_TOOL_STYLE_MARKERS = ("read_file", "run_shell_command", "fetch_url", "search_web", "agent_browser")
+
+
+def _style_cue_from_retrospective(item: dict) -> str | None:
+    """Extract a compact style cue from a retrospective note.
+
+    Retrospectives carry a *title* that already names a style (e.g. "Python
+    functional verification via shell one-liners"). The title alone plus any
+    matching style-family markers is usually enough to shape the next turn.
+    Returns a one-line cue, or None when no meaningful style signal is found.
+    """
+    title = str(item.get("title") or "").strip()
+    text = str(item.get("text") or "").strip()
+    if not title and not text:
+        return None
+    haystack = f"{title} {text}".lower()
+    families: list[str] = []
+    if any(marker in haystack for marker in _SHELL_STYLE_MARKERS):
+        families.append("shell")
+    if any(marker in haystack for marker in _FORMAT_STYLE_MARKERS):
+        families.append("format")
+    if any(marker in haystack for marker in _TOOL_STYLE_MARKERS):
+        families.append("tool-use")
+    label = title or text[:120]
+    label = re.sub(r"\s+", " ", label)[:140]
+    if not label:
+        return None
+    if families:
+        return f"- {label} (style: {', '.join(families)})"
+    return f"- {label}"
+
+
+def _append_learning_pack_blocks(parts: list[str], context: ContextPackage) -> None:
+    """Canonical 6-block learning pack per PRD §12.1.
+
+    Block order (all optional — emitted only when data is present):
+      1. Hard constraints summary — deduped Do / Do not from PROMOTED records only.
+      2. Workspace brief — the project_brief memory, elevated.
+      3. Verification / Style conventions — extracted from retrospective records.
+      4. Procedural brief — compact 1-line summaries of top learned policies.
+      5. Curated skills — retained for manual/high-authority guidance.
+      6. Retrieved memory + student notebook — compact form for transparency.
+
+    CF-14 preservation: promoted-only filter is enforced at block 1 (this
+    site) and at `core/agent.py::_learned_constraint_records` (the judge site).
+    Both MUST stay aligned — see `tests/test_self_learn_scenarios.py`.
+    """
+    # Block 1 — Hard constraints (promoted only)
+    hard_lines: list[str] = []
+    seen_constraint: set[str] = set()
+    for item in context.learned_policies:
+        promotion_state = str(item.get("promotion_state") or "promoted").lower()
+        if promotion_state != "promoted":
+            continue
+        feedback = str(item.get("feedback_excerpt") or "").strip()
+        if feedback:
+            key = f"tf:{feedback}"
+            if key not in seen_constraint:
+                seen_constraint.add(key)
+                hard_lines.append(f"- Teacher correction: {feedback}")
+        for rule in (item.get("prohibited_behavior") or [])[:3]:
+            text = str(rule).strip()
+            if not text:
+                continue
+            key = f"no:{text}"
+            if key not in seen_constraint:
+                seen_constraint.add(key)
+                hard_lines.append(f"- Do not: {text}")
+        for rule in (item.get("required_behavior") or [])[:3]:
+            text = str(rule).strip()
+            if not text:
+                continue
+            key = f"do:{text}"
+            if key not in seen_constraint:
+                seen_constraint.add(key)
+                hard_lines.append(f"- Do: {text}")
+    if hard_lines:
+        parts.append("## Hard constraints")
+        parts.append("Promoted policies — treat as hard constraints.")
+        parts.extend(hard_lines[:12])
+
+    # Block 2 — Workspace brief (elevated from retrieved memory)
+    workspace_brief = None
+    for item in context.memories:
+        if str(item.get("kind") or "") == "project_brief":
+            workspace_brief = item
+            break
+    if workspace_brief is not None:
+        parts.append("## Workspace brief")
+        parts.append(str(workspace_brief.get("text") or "")[:2000])
+
+    # Block 3 — Verification / Style conventions (from retrospectives)
+    retro_notes = [n for n in context.student_notes if str(n.get("kind") or "") == "retrospective"]
+    style_cues: list[str] = []
+    for item in retro_notes:
+        cue = _style_cue_from_retrospective(item)
+        if cue:
+            style_cues.append(cue)
+    if style_cues:
+        parts.append("## Verification / Style conventions")
+        parts.append(
+            "Style guidance extracted from prior self-retrospectives. Apply "
+            "unless an explicit teacher rule or hard constraint overrides."
+        )
+        parts.extend(style_cues[:3])
+        # Preserve retrospective text for model access, but tightened from the
+        # pre-2.3 4000-char dump to 400 per retro (~90% reduction on long
+        # retros; neutral on the short fixtures that already fit).
+        for item in retro_notes[:3]:
+            title = str(item.get("title") or item.get("id") or "note")
+            body = str(item.get("text", ""))[:400]
+            if body.strip():
+                parts.append(f"### {title} [retrospective]\n{body}")
+
+    # Block 4 — Procedural brief (compact policy summaries)
+    if context.learned_policies:
+        parts.append("## Procedural brief")
+        for item in context.learned_policies[:6]:
+            name = item.get("name", "policy")
+            state = str(item.get("promotion_state") or "promoted")
+            description = str(item.get("description") or "").strip()
+            summary = description[:100] if description else "(no description)"
+            parts.append(f"- {name} [{state}]: {summary}")
+
+    # Block 5 — Curated skills (retained in compact form)
+    if context.skills:
+        parts.append("## Curated skills")
+        for item in context.skills[:4]:
+            name = item.get("name", "skill")
+            description = str(item.get("description") or "").strip()
+            summary = description[:140] if description else "(no description)"
+            parts.append(f"- **{name}**: {summary}")
+
+    # Block 6 — Retrieved memory (non-brief) + student notebook (non-retrospective)
+    other_memories = [
+        m for m in context.memories if str(m.get("kind") or "") != "project_brief"
+    ]
+    if other_memories:
+        parts.append("## Retrieved memory")
+        for item in other_memories[:4]:
+            parts.append(f"### {item['name']} ({item['scope']})\n{str(item.get('text') or '')[:1200]}")
+    non_retro_notes = [
+        n for n in context.student_notes if str(n.get("kind") or "") != "retrospective"
+    ]
+    if non_retro_notes:
+        parts.append("## Student notebook")
+        for item in non_retro_notes[:4]:
+            header = f"### {item.get('title', item.get('id', 'note'))} [{item.get('kind', 'note')}]"
+            parts.append(header)
+            parts.append(str(item.get("text", ""))[:1600])
+
+
+def _append_framing_blocks(parts: list[str], context: ContextPackage) -> None:
+    """Non-learning framing blocks. These live outside the learning pack and
+    appear regardless of whether any learned policies/memories/retrospectives
+    were retrieved."""
+    if context.workspace_focus:
+        parts.append("## Workspace focus")
+        parts.append(context.workspace_focus.get("text", ""))
+    if context.thread_summary:
+        parts.append("## Active task thread")
+        parts.append(context.thread_summary.get("text", ""))
+        unresolved = context.thread_summary.get("unresolved_questions") or []
+        if unresolved:
+            parts.append("Unresolved questions: " + "; ".join(str(item) for item in unresolved[:6]))
+        recent_tools = context.thread_summary.get("recent_tools") or []
+        if recent_tools:
+            parts.append("Recent tools: " + ", ".join(str(item) for item in recent_tools[:8]))
+    if context.evidence_summary:
+        parts.append("## Evidence summary")
+        for claim in context.evidence_summary.get("claims", [])[:10]:
+            parts.append(
+                f"- [{claim.get('provenance_type', 'unknown')}] {claim.get('text', '')}"
+            )
+        artifacts = context.evidence_summary.get("artifacts") or []
+        if artifacts:
+            parts.append("Artifacts in scope: " + ", ".join(str(item.get("ref")) for item in artifacts[:8]))
+    if context.contradictions:
+        parts.append("## Contradictions")
+        for item in context.contradictions[:6]:
+            parts.append(f"- disputed: {item.get('text', '')}")
+    if context.answer_target:
+        parts.append("## Answer contract")
+        target = context.answer_target
+        parts.append(f"Current question: {target.get('current_question', '')}")
+        if target.get("missing_evidence"):
+            parts.append("Missing evidence: " + "; ".join(str(item) for item in target.get("missing_evidence", [])[:6]))
+        if target.get("uncertainty_required"):
+            parts.append("If the answer depends on missing support, say so explicitly instead of sounding certain.")
+        if target.get("do_not_repeat_context"):
+            parts.append("Delta-answering required: answer the current ask directly and do not replay prior setup unless strictly necessary.")
+    if context.student_profile:
+        parts.append("## Student profile")
+        parts.append(str(context.student_profile.get("text", ""))[:4000])
+    if context.handoffs:
+        parts.append("## Project handoff")
+        for item in context.handoffs:
+            parts.append(
+                f"### {item.get('session_id', 'session')} [{item.get('verification', 'unknown')}] @ {item.get('execution_cwd', '.')}\n{item.get('text', '')}"
+            )
+    if context.instructions:
+        parts.append("## Project instructions")
+        for item in context.instructions:
+            parts.append(f"### {item['path']}\n{item['text']}")
+    if context.tool_families:
+        parts.append("## Tool exposure")
+        parts.append("All tools are available. Prioritize these families first when relevant: " + ", ".join(context.tool_families))
+
+
 def _append_context_blocks(parts: list[str], context: ContextPackage) -> None:
+    """Compose framing blocks + canonical 6-block learning pack."""
+    _append_framing_blocks(parts, context)
+    _append_learning_pack_blocks(parts, context)
+
+
+def _append_context_blocks_legacy(parts: list[str], context: ContextPackage) -> None:
     if context.workspace_focus:
         parts.append("## Workspace focus")
         parts.append(context.workspace_focus.get("text", ""))
@@ -194,3 +413,30 @@ def build_system_prompt(
         parts.append(user_prompt[:2000])
     parts.append("When doing live-source or browsing work, cite URLs or clearly name the sources used.")
     return "\n\n".join(parts)
+
+
+def build_system_prompt_legacy(
+    context: ContextPackage,
+    mode: str,
+    user_prompt: str = "",
+    task_signature: str = "",
+) -> str:
+    """Pre-Phase-2.3 packer. Preserved for benchmark comparison (T8).
+
+    This builds the same prompt as `build_system_prompt` but with the
+    pre-canonical `_append_context_blocks_legacy` body — verbose
+    `## Learned policies` dumps, 4000-char retrospective bodies, no
+    style extraction. Used only by `tests/test_context_budget_benchmark.py`.
+    """
+    # Capture the system prompt using the legacy assembly so char counts are
+    # measurable before/after without disturbing production callers.
+    full = build_system_prompt(context, mode, user_prompt, task_signature)
+    # Rebuild only the variable learning-pack region via the legacy path.
+    legacy_parts: list[str] = []
+    _append_context_blocks_legacy(legacy_parts, context)
+    canonical_parts: list[str] = []
+    _append_framing_blocks(canonical_parts, context)
+    _append_learning_pack_blocks(canonical_parts, context)
+    if canonical_parts and legacy_parts:
+        return full.replace("\n\n".join(canonical_parts), "\n\n".join(legacy_parts))
+    return full

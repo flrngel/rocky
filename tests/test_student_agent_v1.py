@@ -171,7 +171,9 @@ def test_runtime_auto_self_reflection_persists_compact_retrospective_and_recalls
     assert "For simple greeting-style turns, answer briefly instead of adding extra explanation." in str(
         second_task_provider.calls[0]["system_prompt"]
     )
-    assert "Self retrospectives are Rocky's own compact lessons" in str(second_task_provider.calls[0]["system_prompt"])
+    # Phase 2.3 packer: soft-conventions framing moved from "Self retrospectives are..."
+    # to "Style guidance extracted from prior self-retrospectives...". Invariant preserved.
+    assert "Style guidance extracted from prior self-retrospectives" in str(second_task_provider.calls[0]["system_prompt"])
 
 
 

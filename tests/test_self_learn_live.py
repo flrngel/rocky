@@ -409,25 +409,6 @@ def test_sl_retrospect_phase_B_structural_retrospective_loaded(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "gemma4:26b — autonomous retrospective loads into T2's context (structural "
-        "phase B passes) but does NOT reliably shape generation in a style-specific "
-        "way. Live probe captured the retrospective title 'Python functional "
-        "verification via shell one-liners' persisted to disk and loaded into T2's "
-        "context.student_notes, yet the T2 answer for 'Create divider.py that divides "
-        "two integers with type hints — verify it works' emits an 'Observed output:' "
-        "code block instead of a `python3 -c` shell one-liner. The retrospective "
-        "content is INJECTED but does not measurably influence the model's chosen "
-        "verification form. This is an honest self-learning limitation of the "
-        "retrospect → generation pipeline against the current model: retrospectives "
-        "persist but their style-specific guidance is diluted in context. An XPASS "
-        "here means either a ranker/context-packer change made retrospective style "
-        "more influential (Phase 2 retrieval rewrite target) or a stronger model was "
-        "swapped in — update/remove this xfail when that happens."
-    ),
-)
 def test_sl_retrospect_phase_B_behavioral_style_carries_over(
     retrospect_result: _RetrospectResult,
 ) -> None:
@@ -776,26 +757,6 @@ def test_sl_undo_structural_lineage_aware_rollback(undo_result: _UndoResult) -> 
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Phase-1 scope limitation — derived-autonomous leak. /undo correctly moves the "
-        "teach-fanout artifacts (tested structurally in test_sl_undo_structural_lineage_aware_rollback) "
-        "but does NOT clear DERIVED autonomous artifacts: when the correction is reused "
-        "before /undo (step T3), `capture_project_memory` auto-writes "
-        ".rocky/memories/candidates/*.json + .rocky/memories/auto/*.json + "
-        ".rocky/memories/project_brief.md carrying the pnpm preference. Those auto-memories "
-        "are registered under a turn-lineage (ln-<uuid>), not the teach-lineage, so "
-        "teach-lineage rollback doesn't move them. Post-undo runs see the auto-memories "
-        "and continue preferring pnpm. Fix owner: Phase 2 (canonical retrieval + packer). "
-        "Options: (1) link derived-autonomous lineages to the teach-lineage that was "
-        "active at capture time, (2) include contamination-check on /undo: scan memories "
-        "whose evidence_excerpt matches the rolled-back feedback and move them too, (3) "
-        "Phase 2's unified retriever filters out memories that were captured while a "
-        "rolled-back policy was active. XPASS here means Phase 2 closed the derived-"
-        "autonomous leak — remove this xfail."
-    ),
-)
 def test_sl_undo_behavioral_correction_fully_gone(undo_result: _UndoResult) -> None:
     """SL-UNDO behavioral (XFAIL Phase 1): correction PREFERENCE fully gone post-/undo.
 
