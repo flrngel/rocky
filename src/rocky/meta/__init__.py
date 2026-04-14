@@ -23,6 +23,7 @@ from rocky.meta.canary import (
     CanaryRunner,
     CanaryTask,
     default_corpus,
+    improve_at_n,
 )
 from rocky.meta.ledger import MetaLedger, MetaLedgerEvent
 from rocky.meta.overlay import apply_variant_edits
@@ -51,5 +52,6 @@ __all__ = [
     "SafetyViolation",
     "apply_variant_edits",
     "default_corpus",
+    "improve_at_n",
     "validate_edits",
 ]

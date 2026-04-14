@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 import shlex
 from typing import TYPE_CHECKING, Any
 
@@ -402,5 +403,39 @@ class CommandRegistry:
                 return CommandResult("meta", text, {"ok": False, "reason": text})
             data = variant.to_dict()
             return CommandResult("meta", dump_yaml(data), data)
-        text = "Usage: /meta [list|show|create|canary|activate|rollback|active]"
+        if action == "improve_at_n":
+            # Phase 4 (run-20260414-221947): compute transfer-evaluation deltas
+            # for a variant using its stored `canary_results` history. Baseline
+            # comes from a fresh no-variant canary run on the same corpus.
+            if len(args) < 2:
+                text = "Usage: /meta improve_at_n <variant_id> [target_family]"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            from rocky.config.models import PackingConfig, RetrievalConfig
+            from rocky.meta.canary import CanaryRunner, improve_at_n
+            variant_id = args[1]
+            target_family = args[2] if len(args) >= 3 else "repo"
+            variant = registry.show(variant_id)
+            if variant is None:
+                text = f"meta-variant {variant_id!r} not found"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            if not variant.canary_results:
+                text = f"variant {variant_id!r} has no canary history; run /meta canary {variant_id} first"
+                return CommandResult("meta", text, {"ok": False, "reason": text})
+            # Compute a baseline aggregate on the registry's corpus.
+            import tempfile as _tempfile
+            runner = CanaryRunner(registry.corpus)
+            with _tempfile.TemporaryDirectory() as _tmp:
+                baseline_result = runner.run(
+                    "baseline",
+                    RetrievalConfig(),
+                    PackingConfig(),
+                    Path(_tmp),
+                )
+            computed = improve_at_n(
+                list(variant.canary_results),
+                baseline_result.aggregate,
+                target_family=target_family,
+            )
+            return CommandResult("meta", dump_yaml(computed), computed)
+        text = "Usage: /meta [list|show|create|canary|activate|rollback|active|improve_at_n]"
         return CommandResult("meta", text, {"ok": False, "reason": text})
