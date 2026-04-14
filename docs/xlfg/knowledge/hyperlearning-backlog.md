@@ -8,6 +8,50 @@ Provenance
 
 This document captures every PRD obligation that remains after Phase 0. Future `/xlfg` runs can resume each phase independently; the phases are loosely ordered but not strictly sequential once the ledger exists.
 
+---
+
+## What's next — recommended run order (as of 2026-04-13)
+
+Current state: **Phase 1 shipped, Phase 2 mostly shipped (T1/T2/T4/T5/T6/T7/T8/T9/T10), Phase 3/4 + North Star queued.**
+
+### NEXT-1 (blocking for "Phase 2 fully verified") — Operator live-harness verification
+Before starting any new phase, **the operator must run the live suite** to confirm the two decorator-removed tests actually flip on gemma4:26b:
+```bash
+ROCKY_LLM_SMOKE=1 .venv/bin/pytest tests/test_self_learn_live.py -v
+```
+- **Both regular → PASS**: Phase 2 is behaviorally closed. T3 can be picked up as cleanup; skip to NEXT-3.
+- **Either FAILS**: open **Phase 2.4** — investigate whether style block needs stronger placement (higher in the pack, bigger font), whether retrospective cue needs a more imperative phrasing, or whether the target model simply can't carry the signal (in which case the test should carry an explicit model-capability guard, not an xfail).
+
+### NEXT-2 (only if NEXT-1 flags a model-capability gap) — Phase 2.4 packer-influence hardening
+Scope narrowed by the specific live failure:
+- If **retrospect** test fails: elevate `## Verification / Style conventions` above `## Project instructions`; try imperative rewording of the style cue ("Use `python3 -c` for verification" instead of "style: shell"); consider giving retrospectives a `## Operator preference` promotion when their failure_class matches the current task.
+- If **undo** test fails: contamination-scan fallback per CF-10 option 2 — on `/undo`, also scan memory evidence_excerpt fields for the rolled-back feedback text, move matches.
+Acceptance: original live test flips to PASS.
+
+### NEXT-3 (cleanup, unblocks Phase 3) — T3 adapter collapse
+Wire `LearnedPolicyRetriever / MemoryRetriever / StudentStore.retrieve` to internally delegate to `LedgerRetriever`, preserving their public signatures. Low-urgency; code-cleanup only. Do it alongside Phase 3 work once `LedgerRetriever.retrieve` is known-good from operator usage.
+
+### NEXT-4 (next phase) — Phase 3 bounded meta-learning archive
+See Phase 3 section below. Blocks on: stable ledger reads (Phase 2 done), canary harness (can reuse `tests/test_context_budget_benchmark.py` pattern + deterministic replay). Depends on no live xfails outstanding.
+
+### NEXT-5 (after Phase 3) — Phase 4 transfer evaluation
+See Phase 4 section below.
+
+### NEXT-6 (post-learning-stack) — North Star productization (NS-1..NS-8)
+The learning substrate is instrumental, not the goal. Once Phase 3+4 stabilize, begin North Star. Priorities within NS:
+- **NS-5 typed `/teach` response**: most operator-visible; would retire the Phase 2.1 guard by narrowing task_signatures at write time.
+- **NS-1 `/learning` command family**: makes the ledger operator-navigable.
+- **NS-2 metrics dashboard**: every future change ships with a before/after metric.
+- **NS-3 safety governance**: freeze mode + adversarial `/teach` rejection.
+- **NS-4/6/7/8**: legacy cleanup, reliability hardening, cross-model robustness, workspace portability.
+
+### Parking lot / deprioritized
+- PRD §17.1 `/memory` redesign — touches user-facing command surface; wait for Phase 2 live verification + NS-1 before reopening.
+- PRD §18 legacy removal (`cmd_student`, `slow_learner`) — migration window still open; defer until NS-4.
+
+---
+
+
 ## Phase 1 — Canonical Learning Ledger
 
 **STATUS: SHIPPED (run-20260412-142114)** — `src/rocky/learning/ledger.py` + migration + lineage-aware /undo + self-reflect rollback gate + 5 deterministic ledger tests + 1 live regular-PASS + 1 live behavioral XFAIL(strict) scoping the derived-autonomous leak to Phase 2. SL-UNDO structural test proves 4 teach-fanout artifacts move on /undo (vs the pre-Phase-1 single-store behavior).
@@ -36,8 +80,34 @@ PRD references: §12 "Runtime retrieval and context assembly redesign", §16.5 F
 
 Goal: replace "retrieve everything relevant" with "retrieve one packed operating brief". Reduce learning-related prompt chars by 30%+ without regressing replay performance (PRD §20.3 success criteria).
 
+**Teach over-tagging fix — SHIPPED in run-20260413-124455**: Guard in `AgentCore._maybe_upgrade_route_from_project_context` at `src/rocky/core/agent.py:237-253`. When a POLICY (not skill) declares multiple task_signatures including the current route, the guard prefers the current route (skips cross-family upgrade). Evidence: 5 parametrized tests in `tests/test_route_intersection.py` using the captured real `/teach` policy from run-20260412-013706 evidence tree. Sensitivity check: fix reverted → all 5 tests fail → restore → 5 pass. Full suite 313 passed (from 308 baseline + 5 new). Legitimate cross-family upgrades protected: `test_learned_tool_refusal_policy_can_upgrade_conversation_route_to_research` (single-declared policy passes), 3 product-catalog skill tests (skills exempt from guard).
+
 Deferred work items:
-- **Teach over-tagging fix (concrete item, discovered in run-20260412-013706):** `AgentCore._refine_route_with_project_guidance` (`src/rocky/core/agent.py:307-336`) re-infers route signatures by running the lexical router over a concatenation of the current prompt + policy description + feedback_excerpt + required_behavior + prohibited_behavior + evidence_requirements. Because `/teach` auto-generates policies with broad descriptions, a learned policy for a greeting correction can hijack subsequent greeting prompts into `repo/shell_execution` or `site/understanding/general` with `source=project_context, confidence=0.93`. Fix in Phase 2: make the reinference honor declared `task_signatures` as an upper-bound allowlist instead of augmenting it, OR restrict reinference to policies whose declared `task_family` matches the current prompt's lexical class.
+- **Teach over-tagging fix (historical — SHIPPED run-20260413-124455):** The current symbol is `AgentCore._maybe_upgrade_route_from_project_context` (`src/rocky/core/agent.py:215–305`, renamed from `_refine_route_with_project_guidance`) with helper `_infer_route_signatures_from_guidance` at 307–336. It re-infers route signatures by running the lexical router over a concatenation of the current prompt + policy description + feedback_excerpt + required_behavior + prohibited_behavior + evidence_requirements. Because `/teach` auto-generates policies with broad descriptions, a learned policy for a greeting correction can hijack subsequent greeting prompts into `repo/shell_execution` or `site/understanding/general` with `source=project_context, confidence=0.93`.
+  - **Run-20260413-115313 finding**: The naive "intersection allowlist" fix (skip inference-extension when guidance declared any task_signatures) is **too aggressive**. It regresses `tests/test_agent_runtime.py::test_learned_tool_refusal_policy_can_upgrade_conversation_route_to_research` — a test that explicitly proves a policy declaring `task_signatures: [conversation/general]` MUST upgrade to `research/live_compare/general` via description-driven inference when the prompt semantically aligns. This is intentional product behavior.
+  - **Revised fix directions for Phase 2.1** (pick one or combine):
+    1. Raise the scoring threshold or add a misalignment penalty in the inference-extension scoring path (`_maybe_upgrade_route_from_project_context:281`), not the candidate-enumeration path. The bug vs feature distinction is prompt-policy semantic alignment — a continuous signal, not a binary declared/undeclared flag.
+    2. Add a per-policy `allow_inference_extension` metadata flag (default True for legacy, False for future auto-generated `/teach` output). Requires `/teach` to stop over-tagging at write time — pair this with a write-side narrowing pass that scopes task_signatures to lexically-aligned classes only.
+    3. Score inferred-only (not declared) signatures differently from declared-plus-inferred signatures, so declared alignment weighs higher than pure inference.
+  - **Both regression tests must stay green simultaneously**:
+    - `test_learned_tool_refusal_policy_can_upgrade_conversation_route_to_research` (exists; defends the legitimate cross-family upgrade case).
+    - `test_greeting_policy_does_not_reroute_greeting_to_shell` (does NOT exist; must be added alongside any future O1 fix).
+
+**T7 at-capture teach-lineage linking — SHIPPED in run-20260413-161313**: `src/rocky/learning/ledger.py::find_teach_lineage_for_policy` + `src/rocky/app.py::_active_teach_lineages` + call in `run_prompt` that registers derived-autonomous memory artifacts under any reused-teach-lineage IN ADDITION to the turn-lineage. Closes the "derived-autonomous leak" at the write-registration layer. 5 deterministic tests in `tests/test_at_capture_lineage.py`. CF-4 (autonomous pathway preservation) maintained — only fires when trace.selected_policies has teach-origin records.
+
+**T4 retriever-side rollback filter — SHIPPED in run-20260413-161313**: `src/rocky/learning/ledger.py::is_path_in_rolled_back_lineage` + `src/rocky/core/context.py::ContextBuilder._is_artifact_rolled_back` + filter application in memories/skills/policies/student-notes collection. Belt-and-suspenders: artifacts whose lineage is rolled back are dropped from context even if the file is still on disk. 3 deterministic tests in `tests/test_rollback_filter.py`.
+
+**Phase 2.3 shipped (run-20260413-162250)**:
+- **T2 LedgerRetriever + 10-factor ranking** — new module `src/rocky/learning/ledger_retriever.py` exposing `LedgerRetriever.retrieve(prompt, task_signature, *, thread=None, limit=8, kind_filter=None) -> list[RankedRecord]`. Each record carries a `rank_breakdown` dict with the PRD §12.3 10 factors (authority, promotion_state, task_signature, task_family, thread_relevance, prompt_relevance, trigger_literal, failure_class, evidence_quality, recency, conflict_status, prior_success). Additive — existing retrievers untouched. 7 deterministic tests in `tests/test_ledger_retriever.py`.
+- **T5 6-block context packer** — `src/rocky/core/system_prompt.py` reorganized into `_append_framing_blocks` + `_append_learning_pack_blocks`. Canonical 6-block layout per PRD §12.1: Hard constraints, Workspace brief, Verification/Style conventions, Procedural brief, Curated skills, Retrieved memory+student notebook. CF-14 two-site gate preserved (filter at `system_prompt.py:76` + judge at `core/agent.py::_learned_constraint_records`).
+- **T6 retrospective style extraction** — new helper `_style_cue_from_retrospective(note)` detects shell/format/tool-use style families from retrospective title + text; surfaces a compact cue in the Verification block. Retrospective bodies retained in compact form (400-char limit, down from 4000).
+- **T8 context-budget benchmark** — `tests/test_context_budget_benchmark.py` with 3-fixture corpus (policy_heavy, retrospective_heavy, mixed). Policy-dominated workloads achieve ≥20% reduction floor on the compact fixtures; ad-hoc measurement on realistic 4-policy fixture (~1.6 KB per body) shows **55.2% reduction** (12909 → 5781 chars), well above PRD §20.3 30% target. Retrospective-heavy honestly does not regress.
+- **T9 xfail decorator removal** — `test_sl_retrospect_phase_B_behavioral_style_carries_over` and `test_sl_undo_behavioral_correction_fully_gone` now regular tests. Will pass or fail honestly under `ROCKY_LLM_SMOKE=1` — no more `xfail(strict=True)` gating. Operator verification via live harness is the integration-level sensitivity check for T5+T6+T7.
+- **T10 sensitivity-check documentation** — `docs/xlfg/runs/run-20260413-162250/verification.md` enumerates per-task revert-to-bite checks; live T9 flips deferred to operator auth.
+
+**Still queued (T3 + operator verification)**:
+- **T3 adapter collapse** — internally wire `LearnedPolicyRetriever`, `MemoryRetriever`, `StudentStore.retrieve` to delegate to `LedgerRetriever` while preserving public signatures. Deferred from Phase 2.3 because the legacy retrievers already work and the refactor risks regressions without matching behavioral improvement. A future Phase 2.4 run can do this with full-suite regression coverage.
+- **Operator live verification** — run `ROCKY_LLM_SMOKE=1 pytest tests/test_self_learn_live.py` to confirm T6 and T7 actually flip behaviorally on gemma4:26b. Either outcome is honest; a failure would name Phase 2.4 model-capability work.
 - Unify into one ledger retriever with kind filters + one curated-skill retriever. Delete or collapse `MemoryRetriever`, `StudentStore.retrieve()`, and the second-layer dedup path in `ContextBuilder`.
 - Implement ranking engine per PRD §12.3 factors: authority, promotion state (`candidate<validated<promoted`), task-signature match, task-family match, thread relevance, failure-class match, evidence-support quality, recency, conflict status, prior-success attribution.
 - Implement context packer per PRD §12.1 blocks: (1) hard-constraints summary (deduped, authority-aware), (2) workspace brief, (3) procedural brief, (4) ≤2 examples, (5) curated skills only when stronger than procedure briefs, (6) thread handoff + evidence + answer contract. Retire the current `## Learned policies` verbose injection.
@@ -94,3 +164,27 @@ These must be picked up alongside Phases 1–3 rather than as a dedicated run.
 3. Phase 3 (meta archive) depends on Phases 1+2 because it needs a stable read surface + a knob surface to vary.
 4. Phase 4 (transfer eval) depends on Phase 3 because it needs variants to compare and an archive to sample from.
 5. `/learning` command family and `/teach` typed response can ship incrementally during Phases 1+2.
+
+## North Star — Production-grade, trusted CLI general agent
+
+Source: `MANIFESTO.md` ("One sentence": production-grade, CLI-first general agent that people trust with real work). The learning subsystem is instrumental to this, not the goal.
+
+The learning roadmap (Phases 1–4) is a **necessary-but-not-sufficient** substrate. After Phases 1–4 ship, the North Star still requires a productization slice that turns the learning substrate into a trustworthy operator surface.
+
+North Star work items (each is its own future `/xlfg` run; all depend on Phases 1–4 being stable):
+
+- **NS-1 — Operator trust surface.** The `/learning` command family per PRD §17.3 (`status`, `list`, `show`, `review`, `approve`, `reject`, `rollback`, `trace`, `experiments`). An operator must be able to inspect any learned record, see its lineage and reuse stats, and roll it back without reading JSON files. Acceptance: a new operator can answer "why did Rocky do that?" for any turn using only `/learning trace <turn-id>`.
+- **NS-2 — Observability & metrics.** PRD §23 dashboards surfaced via `/learning status --metrics`. Local reporter: retrieval hit-rate, promotion rate, rollback rate, context-budget share, replay canary delta, transfer delta. Acceptance: every learning-system change must ship with a measurable before/after on these metrics in its PR.
+- **NS-3 — Safety governance.** PRD §21 — freeze mode (halts all promotion + new writes), hard-rule allow-list on candidates, explicit human-oversight gates for meta-variants touching tool/permission configs. Acceptance: an adversarial `/teach` that would weaken a security boundary is rejected with a named safety violation, not silently absorbed.
+- **NS-4 — Legacy cleanup per PRD §18.** After migration windows close, delete `cmd_student`, legacy `skills/learned` write path, and the heuristic `slow_learner` entirely. Acceptance: code search shows no writes to legacy paths; existing read adapters are the only legacy touchpoint and only during migration.
+- **NS-5 — Typed `/teach` response.** PRD §17.2 — structured `classification`, `scope`, `authority`, `activation_mode`, `promotion_state`, `record_id`, `why`, `derived_actions`. Acceptance: teach traces contain a machine-parseable response object; operator UI can show "this teach created record X with authority Y, activation Z."
+- **NS-6 — Reliability hardening.** Failure-mode inventory: provider timeouts, partial tool failures, corrupted ledger lines, half-finished migrations, clock skew, concurrent runtime instances on same workspace. Each gets a named failure test + recovery path. Acceptance: ledger corruption on one record does not block startup; `rocky /learning status` surfaces the corruption and offers quarantine.
+- **NS-7 — Cross-model robustness.** Phase 2's retrospective-influence fix lands on gemma4:26b, not just frontier models. Acceptance: every live xfail that passes on `claude-opus` also passes on the configured local Ollama model, OR is explicitly scoped as "frontier-only" in the test marker with a cited model-capability reason.
+- **NS-8 — Workspace portability.** A `.rocky/` directory is transferable across machines without breaking. Absolute paths in records become relative on load; ledger is git-mergeable (deterministic ordering, stable IDs). Acceptance: two engineers can share the same `.rocky/` via git without conflict on happy-path teach events.
+
+**Non-goals for the North Star slice:**
+- Cloud-hosted Rocky, multi-user memory sharing across accounts — remains local-first per MANIFESTO.md.
+- Replacing the file-first legibility contract with opaque binary stores — `.rocky/` must stay `cat`/`grep`/`git diff`-able.
+- Automated teach-generation from user mistakes without an explicit `/teach` event — violates "candidates never hard" unless the captured record enters as candidate and earns promotion via verified reuse.
+
+**North Star acceptance (composite):** a new operator can hand Rocky a non-trivial repo task, observe learning happen autonomously, inspect what was learned via `/learning` commands, trust the safety rails to reject adversarial teaches, and see quantified learning quality metrics — all without reading a single file under `.rocky/` unless they choose to. Until that story is end-to-end clean, the North Star is not met.

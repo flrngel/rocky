@@ -1,6 +1,18 @@
 # Rocky — Current State
 
-Last updated: 2026-04-12 (run-20260412-142114 — Phase 1 canonical ledger shipped)
+Last updated: 2026-04-13 (run-20260413-162250 — Phase 2.3 T2/T5/T6/T8/T9/T10 SHIPPED)
+
+## 2026-04-13 run (run-20260413-162250) — Phase 2.3 T2/T5/T6/T8/T9/T10 SHIPPED
+6 of 7 remaining Phase 2 tasks shipped: T2 `LedgerRetriever` with 10-factor PRD §12.3 ranking (new `src/rocky/learning/ledger_retriever.py`, 7 tests), T5+T6 canonical 6-block packer + retrospective style extraction (`src/rocky/core/system_prompt.py` reorganized with `_append_framing_blocks` + `_append_learning_pack_blocks`, 6 tests), T8 deterministic context-budget benchmark (`tests/test_context_budget_benchmark.py`, 6 tests), T9 xfail decorator removals on both live behavioral tests (`test_sl_retrospect_phase_B_behavioral_style_carries_over` + `test_sl_undo_behavioral_correction_fully_gone`), T10 sensitivity-check documentation. Only T3 adapter collapse deferred — legacy retrievers kept alongside `LedgerRetriever` (additive). Full suite 340 passed, 12 skipped (from 321 baseline + 19 net). Realistic policy-heavy workload measured at **55.2% char reduction** (PRD §20.3 target 30%, exceeded). Operator next action: `ROCKY_LLM_SMOKE=1 pytest tests/test_self_learn_live.py` to verify behavioral xfails flip on gemma4:26b.
+
+## 2026-04-13 run (run-20260413-161313) — Phase 2.2 /undo leak two-layer defense SHIPPED
+T7 at-capture teach-lineage linking + T4 retriever-side rollback filter shipped. 8 new deterministic tests, zero regressions. Full suite 321 passed, 12 skipped. T7 links derived-autonomous memories to reused teach-lineages at capture time (via `ledger.find_teach_lineage_for_policy` + `_active_teach_lineages`); T4 filters rolled-back artifacts at read time (via `ledger.is_path_in_rolled_back_lineage` + `ContextBuilder._is_artifact_rolled_back`). Together they close the derived-autonomous leak at the structural layer. T9 live xfail flip (test_sl_undo_behavioral_correction_fully_gone) deferred to Phase 2.3 — will serve as integration-level sensitivity check once T5/T6 retriever+packer rewrite lands.
+
+## 2026-04-13 run (run-20260413-124455) — Phase 2.1 teach-overtag guard SHIPPED
+Refined O1 shipped. `AgentCore._maybe_upgrade_route_from_project_context` at `src/rocky/core/agent.py:237-253` now gates on "policy declares multiple task_signatures including current route". 5 parametrized regression tests in `tests/test_route_intersection.py` use the captured real `/teach` policy from run-20260412-013706 — not a synthetic fixture. Sensitivity check bites. Full suite 313 passed, 12 skipped. Legitimate cross-family upgrades preserved (tool-use-refusal single-declared policy + 3 product-catalog shell skills untouched).
+
+## 2026-04-13 run (run-20260413-115313) — Phase 2 planning + honest-RED on O1
+Planning artifacts produced for full Phase 2 (spec.md + context.md + solution-decision.md + test-contract.md + test-readiness.md). Scope was honestly narrowed mid-implement to T1 only given the user's "don't cheat, battle tested" directive and the ~1,000 LOC scope of T2..T10. T1 (teach over-tagging intersection allowlist) was implemented, passed isolated tests, then regressed `test_learned_tool_refusal_policy_can_upgrade_conversation_route_to_research` in the full suite — proving CF-8 as stated is architecturally insufficient. Fix reverted; 308-test baseline restored. T2..T10 + a refined O1 re-queued to Phase 2.1. North Star NS-1..NS-8 appended to backlog.
 
 ## Test suite
 - **308 deterministic tests**, ~10s, zero LLM dependency (bare `pytest -q`). +5 from new `tests/test_learning_ledger.py`.
