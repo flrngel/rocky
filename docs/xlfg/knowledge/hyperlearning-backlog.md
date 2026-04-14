@@ -12,11 +12,24 @@ This document captures every PRD obligation that remains after Phase 0. Future `
 
 ## What's next — recommended run order (as of 2026-04-14)
 
-Current state: **Phase 1 shipped, Phase 2 behaviorally closed, Phase 3 SHIPPED (run-20260414-194516), Phase 4 + North Star queued.**
+Current state: **Phase 1 shipped, Phase 2 behaviorally closed, Phase 3 SHIPPED (run-20260414-194516); T3 limit-overlay reach + LIVE LLM evidence shipped (run-20260414-203004), Phase 4 + North Star queued.**
+
+### STATUS 2026-04-14 (run-20260414-203004): **T3 limit-overlay reach + LIVE LLM evidence**
+
+User flagged that the prior Phase 3 closeout shipped without live-LLM proof. This run resolves that gap and additionally ships T3 limit-overlay so meta-variants reach LIVE retrieval (not just canary). Three retriever constructors (`LearnedPolicyRetriever`, `MemoryRetriever`, `StudentStore`) gained an optional `config: RetrievalConfig | None = None` kwarg; `RockyRuntime.load_from` threads `active_overlay.retrieval` into each — but only when an actual meta-variant is active (CF-4 baseline-parity guard via `meta_registry.is_baseline_active()`). 8 new deterministic tests in `tests/test_meta_variant_live_reach.py`; sensitivity bites (revert overlay → 4 != 2 → restore → 2 == 2). Full suite **428 passed + 12 skipped** (was 420+12, +8 net).
+
+**LIVE LLM EVIDENCE** (gemma4:26b @ ainbr-research-fast):
+- Pre-T3 baseline: **11 passed, 1 failed** in 165.88s (`test_sl_undo_behavioral_correction_fully_gone` regressed stochastically — same suite that Phase 2.5 closeout claimed 12/12 on).
+- Post-T3: **9 passed, 3 errors** in 141.46s (`sl_promote_A/B/C` errored at fixture-setup level because gemma's reflection chose `memory_kind=lesson` instead of `policy` for the SL-PROMOTE setup teach — module-scoped fixture cascades to both downstream tests).
+- **Different tests fail in different runs.** Phase 3 changed nothing in `runtime.teach()` / reflection / `_promote_policy_meta` paths. Both failure modes are stochastic gemma4:26b reflection variance, not a Phase-3 regression. Evidence: `docs/xlfg/runs/run-20260414-203004/evidence/live/{baseline,postT3}_full_run.txt`.
+
+Honest reframing of prior compound claims:
+- The Phase 2.5 "12/12 PASS in 196s" was a single point-in-time observation, not a stable baseline. Live behavioral testing on local-model reflection-driven publish-vs-lesson decisions is inherently noisy.
+- The Phase 3 closeout's "Zero regressions" is true for deterministic tests (still true: 428 vs 420 baseline) but was unsubstantiated for live LLM behavior at the time. This run substantiates that Phase 3 deterministic surface is rock-solid AND that live LLM stochasticity exists independent of Phase-3 changes.
 
 ### STATUS 2026-04-14 (run-20260414-194516): **PHASE 3 SHIPPED — bounded meta-learning archive**
 
-`src/rocky/meta/` package + `RetrievalConfig`/`PackingConfig` dataclasses + `cmd_meta` CLI + `MetaVariantRegistry` state machine + offline deterministic canary + safety allow-list (3-site defense in depth, weight-subtree bounds added in review F1) + append-only meta-ledger. 70 new deterministic tests; full suite **420 passed + 12 skipped** (was 350+12). Zero regressions. Baseline behavior bit-identical when no variant active. Sensitivity witness bites: zero-edit variant produces 0 canary delta; `top_k_limit=2` variant produces -8 records delta. Ready for Phase 4 — `MetaVariant.canary_results` schema is rich enough that Phase 4's `improve@N` calculator can consume it without schema changes.
+`src/rocky/meta/` package + `RetrievalConfig`/`PackingConfig` dataclasses + `cmd_meta` CLI + `MetaVariantRegistry` state machine + offline deterministic canary + safety allow-list (3-site defense in depth, weight-subtree bounds added in review F1) + append-only meta-ledger. 70 new deterministic tests; full suite **420 passed + 12 skipped** (was 350+12). Zero **deterministic** regressions (live LLM stability not measured at the time — see run-20260414-203004 above). Baseline behavior bit-identical when no variant active. Sensitivity witness bites: zero-edit variant produces 0 canary delta; `top_k_limit=2` variant produces -8 records delta.
 
 ### STATUS 2026-04-13 (run-20260413-032250): **PHASE 2 BEHAVIORALLY CLOSED — 12/12 live tests PASS on gemma4:26b**
 
@@ -86,9 +99,10 @@ The learning substrate is instrumental, not the goal. Once Phase 3+4 stabilize, 
 - **NS-3 safety governance**: freeze mode + adversarial `/teach` rejection.
 - **NS-4/6/7/8**: legacy cleanup, reliability hardening, cross-model robustness, workspace portability.
 
-### Parking lot / deprioritized
-- PRD §17.1 `/memory` redesign — touches user-facing command surface; wait for Phase 2 live verification + NS-1 before reopening.
-- PRD §18 legacy removal (`cmd_student`, `slow_learner`) — migration window still open; defer until NS-4.
+### Parking lot / deprioritized — REASSESSED 2026-04-14 (run-20260414-203004)
+- **PRD §17.1 `/memory` redesign** — KEPT DEFERRED. Reason updated: now blocks on T3-Deep ranking-collapse (rather than just "Phase 2 live verification + NS-1"), because the planned `/memory list|add|set|show|remove` redesign is supposed to route through the ledger as canonical read source. T3-Deep is the prerequisite. Successor owner: T3-Deep run.
+- **PRD §18 `slow_learner` removal** — KEPT DEFERRED with updated rationale. `LearningConfig.slow_learner_enabled` defaults to False since Phase 0; `run_slow_learner()` short-circuits on the flag (`learning/manager.py:474`); `learning/slow.py` is unreachable from production. Deletion is mechanically safe but produces zero behavioral change. Reason to defer: deleting now adds churn and bumps the `LearningConfig` schema (potential test rebaseline noise) for no operator-visible win. Bundle with NS-4 legacy cleanup.
+- **PRD §18 `cmd_student` removal** — REJECTED (not legacy). `/student` is operator-facing per `commands/registry.py:184` (full subcommand tree: status/list/show/add). It's actively documented in `_help_text()` at registry.py:101. Removing it would be a UX regression. Decision: keep `cmd_student` as a permanent operator surface; remove from §18 deletion list.
 
 ---
 
@@ -146,9 +160,10 @@ Deferred work items:
 - **T9 xfail decorator removal** — `test_sl_retrospect_phase_B_behavioral_style_carries_over` and `test_sl_undo_behavioral_correction_fully_gone` now regular tests. Will pass or fail honestly under `ROCKY_LLM_SMOKE=1` — no more `xfail(strict=True)` gating. Operator verification via live harness is the integration-level sensitivity check for T5+T6+T7.
 - **T10 sensitivity-check documentation** — `docs/xlfg/runs/run-20260413-162250/verification.md` enumerates per-task revert-to-bite checks; live T9 flips deferred to operator auth.
 
-**Still queued (T3 + operator verification)**:
-- **T3 adapter collapse** — internally wire `LearnedPolicyRetriever`, `MemoryRetriever`, `StudentStore.retrieve` to delegate to `LedgerRetriever` while preserving public signatures. Deferred from Phase 2.3 because the legacy retrievers already work and the refactor risks regressions without matching behavioral improvement. A future Phase 2.4 run can do this with full-suite regression coverage.
-- **Operator live verification** — run `ROCKY_LLM_SMOKE=1 pytest tests/test_self_learn_live.py` to confirm T6 and T7 actually flip behaviorally on gemma4:26b. Either outcome is honest; a failure would name Phase 2.4 model-capability work.
+**Still queued — REASSESSED in run-20260414-203004**:
+- **T3 limit-overlay reach — CLOSED in run-20260414-203004.** Three retriever constructors gained `config: RetrievalConfig | None = None`; `RockyRuntime.load_from` threads `active_overlay.retrieval` through when a meta-variant is active. Confirmed bit-identical baseline parity (no-variant path uses legacy defaults: 4/4/5).
+- **T3 ranking-collapse (T3-Deep) — REMAINS DEFERRED** with explicit rationale: requires a stable live-LLM baseline to validate equivalence; live baseline currently stochastic (see Residual Phase-3 items). Cannot land safely without rebaseline. Re-evaluate after Phase 4 / NS-7.
+- **Operator live verification — DONE in run-20260414-203004.** `ROCKY_LLM_SMOKE=1 pytest tests/test_self_learn_live.py` ran twice (pre/post-T3) on gemma4:26b. Both runs surfaced 1–3 stochastic failures (different tests each run). Honest outcome: Phase 2 deterministic surface is solid; live behavioral surface is gemma-stochasticity-bound, not a Phase-2 regression.
 - Unify into one ledger retriever with kind filters + one curated-skill retriever. Delete or collapse `MemoryRetriever`, `StudentStore.retrieve()`, and the second-layer dedup path in `ContextBuilder`.
 - Implement ranking engine per PRD §12.3 factors: authority, promotion state (`candidate<validated<promoted`), task-signature match, task-family match, thread relevance, failure-class match, evidence-support quality, recency, conflict status, prior-success attribution.
 - Implement context packer per PRD §12.1 blocks: (1) hard-constraints summary (deduped, authority-aware), (2) workspace brief, (3) procedural brief, (4) ≤2 examples, (5) curated skills only when stronger than procedure briefs, (6) thread handoff + evidence + answer contract. Retire the current `## Learned policies` verbose injection.
@@ -175,10 +190,12 @@ Shipped in run-20260414-194516:
 - Surface variants via `/learning experiments` (PRD §17.3) once the command family lands.
 - Acceptance: Rocky can compare at least two retrieval/promotion variants; a promoted meta-variant yields statistically meaningful replay improvement without safety regressions.
 
-### Residual Phase-3 items (inherited by Phase 4 / NS-x)
-- **Live retrieval still uses legacy retrievers.** `RetrievalConfig` overlay reaches `LedgerRetriever` (used inside `CanaryRunner` only). Live `LearnedPolicyRetriever` / `MemoryRetriever` / `StudentStore.retrieve` are unaffected by an active variant. This is the pre-existing Phase 2 T3 adapter-collapse deferral (backlog line 68), not a Phase-3 regression. Closing T3 wires the retrieval overlay into production.
+### Residual Phase-3 items (post-run-20260414-203004)
+- **`top_k_limit` overlay reaches live retrieval — CLOSED in run-20260414-203004.** All three legacy retrievers honor `RetrievalConfig.top_k_limit` when an active meta-variant is present. CF-4 baseline parity preserved when no variant is active.
+- **Ranking-weight overlay (authority_weight, promotion_weight, ts_*, fc_*, etc.) — REFRAMED as "T3-Deep, deferred."** The legacy retrievers (`LearnedPolicyRetriever` etc.) have their own scoring shapes (`PROMOTION_WEIGHT`, `PROVENANCE_WEIGHT`, `CONTRADICTION_PENALTY`, inline kind weights) that are not aligned with `LedgerRetriever`'s 10-factor model. Forcibly unifying the scoring would require a behavioral rebaseline against gemma4:26b, which depends on first having a stable live-LLM baseline (currently demonstrably stochastic). Defer until: (a) Phase 4 transfer evaluation lands, OR (b) NS-7 cross-model robustness identifies a model that produces a stable live baseline. Until then: ranking-weight overlays affect canary outcomes only — which is the right scope for "compare ≥2 variants" per PRD §14.
 - **Promotion threshold is permissive.** `validated` requires only `differs_from_baseline=True`. Phase 4 will tighten via `improve@N` on a held-out task family.
 - **Single-process assumption.** `MetaVariantRegistry` does not coordinate across concurrent runtime instances on the same workspace. Acceptable for an operator tool; revisit under NS-6.
+- **Live LLM stability is stochastic** — flagged here because it affects how every future "shipped" claim must be qualified. Live tests on gemma4:26b vary run-to-run on the same code (run-20260414-203004 caught this empirically). Action: every future closeout that claims "live X PASS" must cite the run id and acknowledge stochasticity, OR pin to a deterministic-only proof.
 
 ## Phase 4 — Transfer evaluation
 
@@ -236,3 +253,43 @@ North Star work items (each is its own future `/xlfg` run; all depend on Phases 
 - Automated teach-generation from user mistakes without an explicit `/teach` event — violates "candidates never hard" unless the captured record enters as candidate and earns promotion via verified reuse.
 
 **North Star acceptance (composite):** a new operator can hand Rocky a non-trivial repo task, observe learning happen autonomously, inspect what was learned via `/learning` commands, trust the safety rails to reject adversarial teaches, and see quantified learning quality metrics — all without reading a single file under `.rocky/` unless they choose to. Until that story is end-to-end clean, the North Star is not met.
+
+---
+
+## Risk resolution table — last reconciled run-20260414-203004
+
+Every open risk in this backlog as of 2026-04-14, with explicit disposition.
+
+| Risk / item                                                         | Status      | Disposition                                                                                                | Successor owner            |
+|---------------------------------------------------------------------|-------------|-------------------------------------------------------------------------------------------------------------|----------------------------|
+| Phase 0 — candidate-never-hard invariant                            | RESOLVED    | Two-site gate at `core/system_prompt.py` + `core/agent.py::_learned_constraint_records`. Tested & live.    | —                          |
+| Phase 1 — canonical learning ledger                                 | RESOLVED    | `LearningLedgerStore` + lineage-aware `/undo` + migration. 5+ deterministic tests.                          | —                          |
+| Phase 1 — A4 retriever-reads-ledger-first                           | RESOLVED (limit-narrowed) | Run-20260414-203004 wired the ledger-driven `top_k_limit` into all 3 legacy retrievers.        | T3-Deep for ranking       |
+| Phase 1 — derived-autonomous leak                                   | RESOLVED    | Phase 2.2 (T7 at-capture lineage linking) + 2.5 (content-overlap fallback in `_active_teach_lineages`).    | —                          |
+| Phase 2.1 — `/teach` over-tagging route hijack                      | RESOLVED    | `_maybe_upgrade_route_from_project_context` guard + 5 parametrized regression tests.                       | —                          |
+| Phase 2.2 — `/undo` multi-store leak                                | RESOLVED    | T7 (write-side at-capture linking) + T4 (read-side rollback filter). 8 deterministic tests.                | —                          |
+| Phase 2.3 — context-budget reduction                                | RESOLVED    | 6-block packer; ad-hoc 55.2% reduction on realistic policy-heavy fixture (PRD target 30%).                 | —                          |
+| Phase 2.5 — retrospective style influence                           | RESOLVED (deterministic), STOCHASTIC (live) | Workflow extraction + post-gen style-gap repair shipped. Live `test_sl_retrospect_phase_B_behavioral_style_carries_over` is gemma-stochasticity-bound. | NS-7 (cross-model)         |
+| Phase 3 — `MetaVariant` schema + storage                            | RESOLVED    | `src/rocky/meta/variants.py`; 9 deterministic tests; append-only.                                          | —                          |
+| Phase 3 — safety allow-list                                         | RESOLVED    | 3-site defense in depth; 16+1 deterministic tests including weight-bounds.                                  | —                          |
+| Phase 3 — offline canary                                            | RESOLVED    | `CanaryRunner` + fixed corpus; sensitivity bites; 6 deterministic tests.                                    | —                          |
+| Phase 3 — promotion/rollback state machine                          | RESOLVED    | `MetaVariantRegistry`; 13 deterministic tests; meta-ledger; pointer flips reversibly.                       | —                          |
+| Phase 3 — `cmd_meta` operator surface                               | RESOLVED    | `commands/registry.py::cmd_meta`; 7 deterministic tests; safety-violation surfacing.                        | —                          |
+| Phase 3 — `top_k_limit` overlay reaches live retrieval              | RESOLVED    | Run-20260414-203004 (T3 limit-narrowed + 8 new tests + sensitivity bite).                                   | —                          |
+| Phase 3 — ranking-weight overlay reaches live retrieval             | DEFERRED (T3-Deep) | Requires stable live-LLM baseline; gemma4:26b is stochastic. Defer until Phase 4 / NS-7.            | T3-Deep run                |
+| Phase 3 — promotion threshold permissive (`differs_from_baseline`)  | DEFERRED    | Intentional; tighten via `improve@N` in Phase 4.                                                            | Phase 4                    |
+| Phase 3 — single-process meta-registry assumption                   | DEFERRED    | Operator tool, not server. Revisit if multi-process operator workflow emerges.                              | NS-6                       |
+| Phase 3 — never tested through LLM (user complaint)                 | RESOLVED    | Run-20260414-203004 captured pre/post-T3 evidence under `evidence/live/`.                                   | —                          |
+| Live LLM stability is stochastic on gemma4:26b                      | OPEN (named) | Empirically demonstrated this run. Affects every future "shipped" claim.                                   | NS-7                       |
+| Phase 4 — `improve@N` / transfer evaluation                         | QUEUED      | Phase 3 `MetaVariant.canary_results` schema is rich enough; ready for Phase 4.                             | Phase 4 run                |
+| PRD §17.1 — `/memory` redesign                                       | DEFERRED    | Blocks on T3-Deep ranking-collapse (`/memory` should route through canonical ledger reads).                | T3-Deep + NS-1             |
+| PRD §17.2 — typed `/teach` response                                  | QUEUED      | NS-5; would retire Phase 2.1 over-tagging guard by narrowing task_signatures at write time.                | NS-5                       |
+| PRD §17.3 — `/learning` command family                               | QUEUED      | NS-1; current `cmd_meta` is the minimal substrate, NS-1 is the productized UX.                             | NS-1                       |
+| PRD §18 — `slow_learner` removal                                     | DEFERRED    | Inert (config default False, short-circuited). Bundle with NS-4 to avoid solo-cleanup churn.               | NS-4                       |
+| PRD §18 — `cmd_student` removal                                      | REJECTED    | `/student` is operator-facing (registry.py:184 + help text:101); not legacy.                                | none — keep                |
+| PRD §18 — `skills/learned` legacy write path                         | DEFERRED    | Migration window still open; `LearnedPolicyLoader._scan` still reads it. Bundle with NS-4.                 | NS-4                       |
+| PRD §21 — safety governance                                          | PARTIAL     | Phase 0 candidate-never-hard + Phase 3 meta-variant safety allow-list shipped. Freeze-mode + adversarial-teach rejection still NS-3. | NS-3 |
+| PRD §23 — success metrics dashboard                                  | QUEUED      | NS-2.                                                                                                       | NS-2                       |
+| North Star NS-1..NS-8 productization                                | QUEUED      | All depend on Phases 1–4 stability; Phase 4 is the next gate.                                              | dedicated NS runs           |
+
+**Reading rule for this table**: anything not listed as RESOLVED is a deferred or open commitment. RESOLVED items have a runtime + tests + cited closeout; DEFERRED items have a named successor owner; REJECTED items have a documented reason for staying. No item without one of those three labels.

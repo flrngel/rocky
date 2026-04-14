@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from rocky.config.models import RetrievalConfig
 from rocky.core.runtime_state import ActiveTaskThread
 from rocky.util.io import read_text
 from rocky.util.text import tokenize_keywords
@@ -151,8 +152,18 @@ class LearnedPolicyLoader:
 
 
 class LearnedPolicyRetriever:
-    def __init__(self, policies: list[LearnedPolicy]) -> None:
+    _LEGACY_DEFAULT_LIMIT = 4
+
+    def __init__(
+        self,
+        policies: list[LearnedPolicy],
+        config: RetrievalConfig | None = None,
+    ) -> None:
         self.policies = policies
+        # Phase 3 T3 (limit-narrowed): when an active meta-variant supplies a
+        # `RetrievalConfig` overlay, top-K is sourced from `config.top_k_limit`.
+        # Without an overlay, the legacy default (4) is preserved bit-identically.
+        self.config = config
 
     def inventory(self) -> list[dict[str, Any]]:
         return [policy.as_record() for policy in self.policies]
@@ -163,8 +174,14 @@ class LearnedPolicyRetriever:
         task_signature: str,
         *,
         thread: ActiveTaskThread | None = None,
-        limit: int = 4,
+        limit: int | None = None,
     ) -> list[LearnedPolicy]:
+        if limit is None:
+            limit = (
+                self.config.top_k_limit
+                if self.config is not None
+                else self._LEGACY_DEFAULT_LIMIT
+            )
         prompt_lower = prompt.lower()
         query_words = tokenize_keywords(prompt)
         thread_words = tokenize_keywords(thread.summary_text()) if thread is not None else set()

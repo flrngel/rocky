@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from rocky.config.models import RetrievalConfig
 from rocky.core.runtime_state import ActiveTaskThread
 from rocky.memory.store import AUTO_KIND_PRIORITY, MemoryNote
 from rocky.util.text import tokenize_keywords
@@ -22,8 +23,16 @@ CONTRADICTION_PENALTY = {
 
 
 class MemoryRetriever:
-    def __init__(self, notes: list[MemoryNote]) -> None:
+    _LEGACY_DEFAULT_LIMIT = 4
+
+    def __init__(
+        self,
+        notes: list[MemoryNote],
+        config: RetrievalConfig | None = None,
+    ) -> None:
         self.notes = notes
+        # Phase 3 T3 (limit-narrowed): see `LearnedPolicyRetriever` for rationale.
+        self.config = config
 
     def project_brief(self) -> MemoryNote | None:
         for note in self.notes:
@@ -37,8 +46,14 @@ class MemoryRetriever:
         *,
         task_signature: str = "",
         thread: ActiveTaskThread | None = None,
-        limit: int = 4,
+        limit: int | None = None,
     ) -> list[MemoryNote]:
+        if limit is None:
+            limit = (
+                self.config.top_k_limit
+                if self.config is not None
+                else self._LEGACY_DEFAULT_LIMIT
+            )
         query_words = tokenize_keywords(prompt)
         thread_tokens = tokenize_keywords(thread.summary_text()) if thread is not None else set()
         scored: list[tuple[tuple[float, float, float, str], MemoryNote]] = []

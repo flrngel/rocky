@@ -121,14 +121,11 @@ class RockyRuntime:
         if not freeze:
             sessions.ensure_current()
         bundled_root = Path(__file__).resolve().parent / "data" / "bundled_skills"
-        skill_loader = SkillLoader(workspace.root, global_root, bundled_root)
-        skill_retriever = SkillRetriever(skill_loader.load_all())
-        policy_loader = LearnedPolicyLoader(workspace.root)
-        policy_retriever = LearnedPolicyRetriever(policy_loader.load_all())
-        memory_store = MemoryStore(workspace.memories_dir, global_root / "memories", create_layout=not freeze)
-        memory_retriever = MemoryRetriever(memory_store.load_all())
-        student_store = StudentStore(workspace.student_dir, create_layout=not freeze)
-        instruction_candidates = workspace.instruction_candidates + [global_root / "AGENTS.md"]
+        # Phase 3 T3 (limit-narrowed): construct the meta-registry first so the
+        # active overlay's RetrievalConfig flows into the three legacy retrievers.
+        # This is what makes the meta-variant top_k_limit overlay reach LIVE
+        # retrieval (not just the canary). When no variant is active, the overlay
+        # equals baseline and behavior is bit-identical.
         ledger = LearningLedgerStore(workspace.root, create_layout=not freeze)
         if not freeze:
             try:
@@ -138,6 +135,30 @@ class RockyRuntime:
                 pass
         meta_registry = MetaVariantRegistry(workspace.root, create_layout=not freeze)
         active_overlay = meta_registry.apply_active_overlay()
+        # CF-4 baseline parity: when no real variant is active, pass `config=None`
+        # to the legacy retrievers so they use their *historical* defaults
+        # (LearnedPolicy=4, Memory=4, Student=5) — NOT the RetrievalConfig()
+        # default (top_k_limit=8). The overlay only affects live retrieval when
+        # an operator has explicitly activated a meta-variant.
+        retrieval_overlay = (
+            active_overlay.retrieval if not meta_registry.is_baseline_active() else None
+        )
+        skill_loader = SkillLoader(workspace.root, global_root, bundled_root)
+        skill_retriever = SkillRetriever(skill_loader.load_all())
+        policy_loader = LearnedPolicyLoader(workspace.root)
+        policy_retriever = LearnedPolicyRetriever(
+            policy_loader.load_all(), config=retrieval_overlay
+        )
+        memory_store = MemoryStore(workspace.memories_dir, global_root / "memories", create_layout=not freeze)
+        memory_retriever = MemoryRetriever(
+            memory_store.load_all(), config=retrieval_overlay
+        )
+        student_store = StudentStore(
+            workspace.student_dir,
+            create_layout=not freeze,
+            config=retrieval_overlay,
+        )
+        instruction_candidates = workspace.instruction_candidates + [global_root / "AGENTS.md"]
         context_builder = ContextBuilder(
             workspace.root,
             workspace.execution_root,
@@ -210,9 +231,20 @@ class RockyRuntime:
         return runtime
 
     def refresh_knowledge(self) -> None:
+        active_overlay = self.meta_registry.apply_active_overlay()
+        retrieval_overlay = (
+            active_overlay.retrieval
+            if not self.meta_registry.is_baseline_active()
+            else None
+        )
         self.skill_retriever = SkillRetriever(self.skill_loader.load_all())
-        self.policy_retriever = LearnedPolicyRetriever(self.policy_loader.load_all())
-        self.memory_retriever = MemoryRetriever(self.memory_store.load_all())
+        self.policy_retriever = LearnedPolicyRetriever(
+            self.policy_loader.load_all(), config=retrieval_overlay
+        )
+        self.memory_retriever = MemoryRetriever(
+            self.memory_store.load_all(), config=retrieval_overlay
+        )
+        # student_store keeps its own config — it's stable across refresh.
         instruction_candidates = self.workspace.instruction_candidates + [self.global_root / "AGENTS.md"]
         self.context_builder = ContextBuilder(
             self.workspace.root,

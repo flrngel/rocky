@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from rocky.config.models import RetrievalConfig
 from rocky.core.runtime_state import ActiveTaskThread
 from rocky.util.io import read_text, write_text
 from rocky.util.text import tokenize_keywords
@@ -112,7 +113,15 @@ def _parse_markdown_note(path: Path) -> StudentNote | None:
 
 
 class StudentStore:
-    def __init__(self, root: Path, *, create_layout: bool = True) -> None:
+    _LEGACY_DEFAULT_LIMIT = 5
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        create_layout: bool = True,
+        config: RetrievalConfig | None = None,
+    ) -> None:
         self.root = root
         self.readme_path = root / "README.md"
         self.profile_path = root / "profile.md"
@@ -121,6 +130,10 @@ class StudentStore:
         self.patterns_dir = root / "patterns"
         self.examples_dir = root / "examples"
         self.retrospectives_dir = root / "retrospectives"
+        # Phase 3 T3 (limit-narrowed): when an active meta-variant supplies a
+        # `RetrievalConfig` overlay, top-K is sourced from `config.top_k_limit`.
+        # Without an overlay, the legacy default (5) is preserved bit-identically.
+        self.config = config
         if create_layout:
             self.ensure_layout()
 
@@ -350,8 +363,14 @@ class StudentStore:
         *,
         task_signature: str = "",
         thread: ActiveTaskThread | None = None,
-        limit: int = 5,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
+        if limit is None:
+            limit = (
+                self.config.top_k_limit
+                if self.config is not None
+                else self._LEGACY_DEFAULT_LIMIT
+            )
         query_tokens = tokenize_keywords(prompt)
         thread_tokens = tokenize_keywords(thread.summary_text()) if thread is not None else set()
         task_tokens = tokenize_keywords(task_signature.replace("/", " ")) if task_signature else set()
