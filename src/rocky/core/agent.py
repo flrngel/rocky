@@ -236,6 +236,21 @@ class AgentCore:
 
         for guidance in retrieved_guidance:
             guidance_kind = "policy" if getattr(guidance, "kind", "") == "learned_policy" else "skill"
+            # Teach over-tagging guard (policies only): /teach auto-generates
+            # policies declaring multiple task_signatures (conversation/general +
+            # domain families) from a single correction. If the current route is
+            # one of those declared AND other signatures are declared too, the
+            # policy is ambiguously scoped — prefer the current route. Skills are
+            # manually authored; their multi-signature declarations are intentional
+            # (e.g., short-prompt → shell upgrade) and must not be gated here.
+            if guidance_kind == "policy":
+                declared_raw = [
+                    str(item).strip()
+                    for item in (guidance.task_signatures or [])
+                    if str(item).strip()
+                ]
+                if route.task_signature in declared_raw and len(declared_raw) > 1:
+                    continue
             candidate_signatures = [
                 resolved
                 for resolved in (self._resolve_project_task_signature(item) for item in guidance.task_signatures)
