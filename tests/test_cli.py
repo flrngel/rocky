@@ -58,6 +58,7 @@ class _FakeRuntime:
         event_handler,
         continue_session: bool = True,
         freeze: bool | None = None,
+        **kwargs,
     ):
         self.prompts.append(text)
         self.continue_session_values.append(continue_session)
@@ -73,7 +74,7 @@ class _FakeRuntime:
 
 def test_cli_reads_task_from_stdin(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
-    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False: runtime)
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False, **kwargs: runtime)
     monkeypatch.setattr("sys.stdin", _FakeStdin("summarize this\n"))
 
     exit_code = main(["--json"])
@@ -87,7 +88,7 @@ def test_cli_reads_task_from_stdin(monkeypatch, capsys) -> None:
 
 def test_cli_maps_command_aliases(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
-    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False: runtime)
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False, **kwargs: runtime)
 
     exit_code = main(["configure", "--json"])
 
@@ -99,7 +100,7 @@ def test_cli_maps_command_aliases(monkeypatch, capsys) -> None:
 
 def test_cli_routes_multiword_memory_commands(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
-    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False: runtime)
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False, **kwargs: runtime)
 
     exit_code = main(["memory", "add", "style", "Prefer terse output.", "--json"])
 
@@ -111,7 +112,7 @@ def test_cli_routes_multiword_memory_commands(monkeypatch, capsys) -> None:
 
 def test_cli_can_opt_into_session_continuation(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
-    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False: runtime)
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False, **kwargs: runtime)
 
     exit_code = main(["--continue", "say hi", "--json"])
 
@@ -144,7 +145,7 @@ def test_cli_version_prints_and_exits_without_runtime(monkeypatch, capsys) -> No
 
 def test_cli_verification_output_is_plain_text(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
-    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False: runtime)
+    monkeypatch.setattr("rocky.cli.RockyRuntime.load_from", lambda cwd, cli_overrides=None, freeze=False, verbose=False, **kwargs: runtime)
 
     def _run_prompt(
         text: str,
@@ -152,6 +153,7 @@ def test_cli_verification_output_is_plain_text(monkeypatch, capsys) -> None:
         event_handler,
         continue_session: bool = True,
         freeze: bool | None = None,
+        **kwargs,
     ):
         runtime.prompts.append(text)
         runtime.continue_session_values.append(continue_session)
@@ -179,7 +181,7 @@ def test_cli_freeze_flag_reaches_runtime(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
     load_calls: list[bool] = []
 
-    def _load_from(cwd, cli_overrides=None, freeze=False, verbose=False):
+    def _load_from(cwd, cli_overrides=None, freeze=False, verbose=False, **kwargs):
         load_calls.append(freeze)
         runtime.freeze_enabled = freeze
         runtime.verbose_enabled = verbose
@@ -200,7 +202,7 @@ def test_cli_verbose_flag_reaches_runtime(monkeypatch, capsys) -> None:
     runtime = _FakeRuntime()
     load_calls: list[bool] = []
 
-    def _load_from(cwd, cli_overrides=None, freeze=False, verbose=False):
+    def _load_from(cwd, cli_overrides=None, freeze=False, verbose=False, **kwargs):
         load_calls.append(verbose)
         runtime.verbose_enabled = verbose
         return runtime

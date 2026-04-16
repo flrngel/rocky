@@ -47,6 +47,7 @@ class ToolConfig:
     max_tool_output_chars: int = 12000
     shell_timeout_s: int = 60
     python_timeout_s: int = 60
+    tool_output_limits: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -54,6 +55,12 @@ class LearningConfig:
     enabled: bool = True
     auto_publish_project_skills: bool = True
     auto_self_reflection_enabled: bool = True
+
+
+@dataclass(slots=True)
+class VerifierConfig:
+    semantic_enabled: bool = True
+    semantic_threshold: float = 0.5
 
 
 @dataclass(slots=True)
@@ -128,6 +135,7 @@ class AppConfig:
     permissions: PermissionConfig = field(default_factory=PermissionConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
+    verifier: VerifierConfig = field(default_factory=VerifierConfig)
 
     def provider(self, name: str | None = None) -> ProviderConfig:
         selected = name or self.active_provider

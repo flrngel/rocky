@@ -104,6 +104,8 @@ class ContextBuilder:
         session_store: SessionStore | None = None,
         student_store: StudentStore | None = None,
         ledger=None,
+        *,
+        ignore_retros: bool = False,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.execution_root = execution_root.resolve()
@@ -114,6 +116,7 @@ class ContextBuilder:
         self.session_store = session_store
         self.student_store = student_store
         self.ledger = ledger
+        self.ignore_retros = ignore_retros
 
     def _is_artifact_rolled_back(self, path) -> bool:
         if self.ledger is None or not path:
@@ -210,6 +213,8 @@ class ContextBuilder:
         notes = self.student_store.retrieve(prompt, task_signature=task_signature, thread=thread, limit=5)
         if self.ledger is not None:
             notes = [n for n in notes if not self._is_artifact_rolled_back(n.get("path"))]
+        if self.ignore_retros:
+            notes = [n for n in notes if n.get("kind") != "retrospective"]
         return profile, notes
 
     def build(

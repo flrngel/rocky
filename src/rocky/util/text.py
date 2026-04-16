@@ -15,6 +15,7 @@ STOP_WORDS = {
     "as",
     "at",
     "be",
+    "but",
     "by",
     "can",
     "do",
@@ -22,6 +23,8 @@ STOP_WORDS = {
     "from",
     "get",
     "give",
+    "had",
+    "has",
     "help",
     "how",
     "i",
@@ -31,12 +34,18 @@ STOP_WORDS = {
     "is",
     "it",
     "just",
+    "let",
+    "may",
     "me",
     "my",
+    "need",
+    "nor",
+    "not",
     "of",
     "on",
     "or",
     "our",
+    "per",
     "please",
     "show",
     "so",
@@ -52,7 +61,9 @@ STOP_WORDS = {
     "up",
     "use",
     "using",
+    "via",
     "want",
+    "was",
     "what",
     "when",
     "where",
@@ -60,6 +71,7 @@ STOP_WORDS = {
     "who",
     "why",
     "with",
+    "yet",
     "you",
     "your",
 }
@@ -69,7 +81,12 @@ def truncate(text: str, limit: int = 4000) -> str:
     if len(text) <= limit:
         return text
     keep = max(0, limit - 32)
-    return text[:keep] + f"\n... [truncated {len(text) - keep} chars]"
+    boundary = text.rfind("\n", 0, keep)
+    keep_end = boundary + 1 if boundary != -1 else keep
+    kept = text[:keep_end]
+    omitted = len(text) - len(kept)
+    suffix = "" if kept.endswith("\n") or kept == "" else "\n"
+    return kept + suffix + f"[rocky-truncated: {omitted} chars omitted]"
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -98,8 +115,11 @@ def extract_json_candidate(text: str) -> str | None:
 
 def tokenize_keywords(text: str) -> set[str]:
     tokens: set[str] = set()
-    for word in re.findall(r"[a-zA-Z0-9_:+./-]+", text.lower()):
-        if len(word) <= 2 or word in STOP_WORDS:
+    for raw in re.findall(r"[a-zA-Z0-9_:+./-]+", text.lower()):
+        word = raw.rstrip(".,;:!?")
+        if not word:
+            continue
+        if len(word) < 4 or word in STOP_WORDS:
             continue
         tokens.add(word)
         if word.endswith("s") and len(word) > 4:

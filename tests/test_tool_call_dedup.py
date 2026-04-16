@@ -1,4 +1,8 @@
-"""Tests for O11 — per-turn tool-call dedup and loop-guard injection.
+"""
+status: DONE
+task: O11
+
+Tests for O11 — per-turn tool-call dedup and loop-guard injection.
 
 The dedup logic lives in the module-level helper
 ``rocky.core.agent._maybe_cached_tool_call`` which is unit-testable in

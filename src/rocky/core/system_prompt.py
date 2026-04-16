@@ -11,6 +11,16 @@ _SHELL_STYLE_MARKERS = ("shell", "bash", "cli", "terminal", "one-liner", "python
 _FORMAT_STYLE_MARKERS = ("json", "yaml", "markdown", "table", "bullet", "fenced", "quoted")
 _TOOL_STYLE_MARKERS = ("read_file", "run_shell_command", "fetch_url", "search_web", "agent_browser")
 
+# Canonical family -> tool name mapping.  Kept in sync with tools/registry.py
+# registrations.  Used to build the route-scoped tool exposure list in the
+# system prompt so the LLM only sees tool names that are actually available.
+_FAMILY_TOOL_NAMES: dict[str, list[str]] = {
+    "filesystem": ["read_file", "write_file"],
+    "shell": ["run_shell_command"],
+    "web": ["fetch_url", "search_web"],
+    "browser": ["agent_browser"],
+}
+
 
 _FAMILY_DIRECTIVES = {
     "shell": (
@@ -348,7 +358,21 @@ def _append_framing_blocks(
             parts.append(f"### {item['path']}\n{item['text']}")
     if context.tool_families:
         parts.append("## Tool exposure")
-        parts.append("All tools are available. Prioritize these families first when relevant: " + ", ".join(context.tool_families))
+        exposed_names: list[str] = []
+        for family in context.tool_families:
+            exposed_names.extend(_FAMILY_TOOL_NAMES.get(family, []))
+        if exposed_names:
+            parts.append(
+                "The following tools are available for this task (families: "
+                + ", ".join(context.tool_families)
+                + "): "
+                + ", ".join(exposed_names)
+                + ". Do not call any tool not listed here."
+            )
+        else:
+            parts.append(
+                "Tool families active for this task: " + ", ".join(context.tool_families)
+            )
 
 
 def _append_context_blocks(
@@ -462,7 +486,21 @@ def _append_context_blocks_legacy(parts: list[str], context: ContextPackage) -> 
             )
     if context.tool_families:
         parts.append("## Tool exposure")
-        parts.append("All tools are available. Prioritize these families first when relevant: " + ", ".join(context.tool_families))
+        exposed_names_legacy: list[str] = []
+        for family in context.tool_families:
+            exposed_names_legacy.extend(_FAMILY_TOOL_NAMES.get(family, []))
+        if exposed_names_legacy:
+            parts.append(
+                "The following tools are available for this task (families: "
+                + ", ".join(context.tool_families)
+                + "): "
+                + ", ".join(exposed_names_legacy)
+                + ". Do not call any tool not listed here."
+            )
+        else:
+            parts.append(
+                "Tool families active for this task: " + ", ".join(context.tool_families)
+            )
 
 
 def build_system_prompt(

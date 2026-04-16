@@ -1019,6 +1019,7 @@ class VerifierRegistry:
         answer_contract: AnswerContract | None = None,
         prior_answer: str | None = None,
         continuation_expected: bool = False,
+        config: Any = None,
     ) -> VerificationResult:
         result = self._route_validity(prompt, route, active_thread, continuation_expected)
         if result.status != "pass":
@@ -1076,7 +1077,7 @@ class VerifierRegistry:
             return discipline
         memory_allowed = not bool((answer_contract.missing_evidence if answer_contract else [])) and not bool(result.unsupported_claim_ids)
         learning_allowed = True
-        return VerificationResult(
+        default_result = VerificationResult(
             "default_v1",
             "pass",
             "Passed verification",
@@ -1084,6 +1085,116 @@ class VerifierRegistry:
             memory_promotion_allowed=memory_allowed,
             learning_promotion_allowed=learning_allowed,
         )
+        # Run semantic_research_v1 for research/* routes when enabled.
+        semantic_enabled = True
+        semantic_threshold = 0.5
+        if config is not None:
+            verifier_cfg = getattr(config, "verifier", None)
+            if verifier_cfg is not None:
+                semantic_enabled = bool(getattr(verifier_cfg, "semantic_enabled", True))
+                semantic_threshold = float(getattr(verifier_cfg, "semantic_threshold", 0.5))
+        if semantic_enabled and route.task_signature.startswith("research/"):
+            return self._run_semantic_research_v1(
+                output, tool_events, route, semantic_threshold, default_result
+            )
+        return default_result
+
+    # ------------------------------------------------------------------
+    # semantic_research_v1
+    # ------------------------------------------------------------------
+
+    _PROPER_NOUN_RE = re.compile(
+        r'"[^"]{3,}"'                              # quoted verbatim claims
+        r'|'
+        r'\b[A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*)+\b',  # multi-word proper nouns
+    )
+
+    def _extract_claims(self, text: str) -> list[str]:
+        """Return a deduplicated list of candidate factual claims from *text*.
+
+        A "claim" here is either a quoted string (≥3 chars) or a run of two+
+        consecutive capitalised tokens (proper noun / named entity heuristic).
+        """
+        seen: set[str] = set()
+        claims: list[str] = []
+        for m in self._PROPER_NOUN_RE.finditer(text):
+            claim = m.group(0).strip().strip('"')
+            if claim and claim not in seen:
+                seen.add(claim)
+                claims.append(claim)
+        return claims
+
+    def _run_semantic_research_v1(
+        self,
+        output: str,
+        tool_events: list[dict],
+        route: RouteDecision,
+        threshold: float,
+        default_result: VerificationResult,
+    ) -> VerificationResult:
+        """Merge semantic claim-grounding check with *default_result*.
+
+        Extracts factual claims from *output*, checks each against tool event
+        payloads via token overlap (min_overlap=2), flags unsupported claims,
+        and escalates status to ``needs_review`` when the unsupported fraction
+        exceeds *threshold*.  Always preserves ``default_result`` fields inside
+        ``details["default_v1"]``.
+        """
+        from rocky.util.evidence import ground_evidence_citations
+
+        # When the answer explicitly acknowledges uncertainty or missing evidence,
+        # the answer is not making unsupported factual claims — skip semantic check.
+        if self._acknowledges_missing_evidence(output):
+            return VerificationResult(
+                name="semantic_research_v1",
+                status=default_result.status,
+                message=default_result.message,
+                failure_class=default_result.failure_class,
+                unsupported_claim_ids=[],
+                missing_evidence_ids=default_result.missing_evidence_ids,
+                answer_drift_score=default_result.answer_drift_score,
+                memory_promotion_allowed=default_result.memory_promotion_allowed,
+                learning_promotion_allowed=default_result.learning_promotion_allowed,
+                details={**default_result.details, "default_v1": default_result.as_record()},
+            )
+
+        all_claims = self._extract_claims(output)
+        supported: list[str] = []
+        if all_claims:
+            supported = ground_evidence_citations(
+                all_claims,
+                tool_events,
+                direction="claim",
+                min_overlap=2,
+            )
+        supported_set = set(supported)
+        unsupported = [c for c in all_claims if c not in supported_set]
+        fraction = len(unsupported) / max(1, len(all_claims)) if all_claims else 0.0
+
+        status = default_result.status
+        message = default_result.message
+        if fraction > threshold:
+            status = "needs_review"
+            message = (
+                f"semantic_research_v1: {len(unsupported)} of {len(all_claims)} "
+                f"claims could not be grounded in fetched source payloads "
+                f"(fraction={fraction:.2f} > threshold={threshold:.2f}). "
+                "Answer may contain unsupported assertions."
+            )
+
+        merged = VerificationResult(
+            name="semantic_research_v1",
+            status=status,
+            message=message,
+            failure_class="unsupported_claims" if status == "needs_review" else default_result.failure_class,
+            unsupported_claim_ids=unsupported,
+            missing_evidence_ids=default_result.missing_evidence_ids,
+            answer_drift_score=default_result.answer_drift_score,
+            memory_promotion_allowed=default_result.memory_promotion_allowed and status == "pass",
+            learning_promotion_allowed=default_result.learning_promotion_allowed,
+            details={**default_result.details, "default_v1": default_result.as_record()},
+        )
+        return merged
 
     def _expected_tool_use(
         self,

@@ -43,6 +43,7 @@ from rocky.skills.retriever import SkillRetriever
 from rocky.student.store import StudentStore
 from rocky.tools.base import ToolContext
 from rocky.tools.registry import ToolRegistry
+from rocky.util.evidence import ground_evidence_citations
 from rocky.util.io import read_yaml, write_text
 from rocky.util.paths import WorkspacePaths, discover_workspace, ensure_global_layout
 from rocky.util.time import utc_iso
@@ -74,6 +75,7 @@ class RockyRuntime:
         *,
         freeze_enabled: bool = False,
         verbose_enabled: bool = False,
+        tool_families_override: list[str] | None = None,
     ) -> None:
         self.workspace = workspace
         self.global_root = global_root
@@ -98,6 +100,8 @@ class RockyRuntime:
         self.learning_manager.ledger = ledger
         self.freeze_enabled = freeze_enabled
         self.verbose_enabled = verbose_enabled
+        self.tool_families_override: list[str] | None = tool_families_override
+        self.route_override: str | None = None
         self.freeze_session_seed = sessions.peek_current() if freeze_enabled else None
         self.commands = CommandRegistry(self)
 
@@ -107,11 +111,14 @@ class RockyRuntime:
         cwd: Path | None = None,
         cli_overrides: dict[str, Any] | None = None,
         *,
+        state_dir: Path | None = None,
         freeze: bool = False,
         verbose: bool = False,
+        route_override: str | None = None,
+        tool_families_override: list[str] | None = None,
     ) -> "RockyRuntime":
         cwd = (cwd or Path.cwd()).resolve()
-        workspace = discover_workspace(cwd)
+        workspace = discover_workspace(cwd, state_dir_override=state_dir)
         if not freeze:
             workspace.ensure_layout()
         global_root = ensure_global_layout(create_layout=not freeze)
@@ -169,6 +176,7 @@ class RockyRuntime:
             sessions,
             student_store,
             ledger=ledger,
+            ignore_retros=freeze,
         )
         tool_context = ToolContext(
             workspace.root,
@@ -226,8 +234,10 @@ class RockyRuntime:
             meta_registry=meta_registry,
             freeze_enabled=freeze,
             verbose_enabled=verbose,
+            tool_families_override=tool_families_override,
         )
         agent.meta_handler = runtime.meta_answer
+        runtime.route_override = route_override
         return runtime
 
     def refresh_knowledge(self) -> None:
@@ -274,8 +284,14 @@ class RockyRuntime:
         event_handler=None,
         continue_session: bool = True,
         freeze: bool | None = None,
+        route_override: str | None = None,
+        tool_families_override: list[str] | None = None,
     ) -> AgentResponse:
         effective_freeze = self.freeze_enabled if freeze is None else freeze
+        effective_route_override = route_override if route_override is not None else self.route_override
+        effective_tool_families_override = (
+            tool_families_override if tool_families_override is not None else self.tool_families_override
+        )
         response = self.agent.run(
             prompt,
             stream=stream,
@@ -283,6 +299,8 @@ class RockyRuntime:
             continue_session=continue_session,
             freeze=effective_freeze,
             session_seed=self.freeze_session_seed if effective_freeze else None,
+            route_override=effective_route_override,
+            tool_families_override=effective_tool_families_override,
         )
         turn_lineage_id = new_lineage_id("turn")
         response.trace["turn_lineage_id"] = turn_lineage_id
@@ -526,6 +544,22 @@ class RockyRuntime:
                     pass
             return
         retrospective = dict(result.get("retrospective") or {})
+        # O5: filter evidence citations to only those whose tokens overlap with
+        # at least one non-empty tool event payload.  This prevents fabricated
+        # citations (hallucinated by the retro generator) from being persisted.
+        # Other retrospective fields (summary, keywords, etc.) pass through
+        # unchanged.  An empty evidence list is acceptable — do NOT drop the
+        # retrospective itself.
+        try:
+            _tool_events = list(response.trace.get("tool_events") or [])
+            _raw_evidence = [str(e) for e in (retrospective.get("evidence") or []) if e]
+            retrospective["evidence"] = ground_evidence_citations(
+                _raw_evidence,
+                _tool_events,
+                direction="retro",
+            )
+        except Exception:
+            pass
         try:
             note_result = self.student_store.add(
                 "retrospective",

@@ -13,6 +13,7 @@ from rocky import __version__
 from rocky.app import RockyRuntime
 from rocky.config.loader import ConfigLoader
 from rocky.config.wizard import run_config_wizard
+from rocky.ui.ndjson_printer import NdjsonEventPrinter
 from rocky.ui.repl import EventPrinter, RockyRepl, make_console, make_live_console, render_console_text
 from rocky.util.paths import discover_workspace, ensure_global_layout
 
@@ -21,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rocky", description="Rocky general agent")
     parser.add_argument("task", nargs="*", help="Task string or command")
     parser.add_argument("--cwd", type=Path, help="Working directory")
+    parser.add_argument("--state-dir", type=Path, dest="state_dir", default=None, help="Directory where Rocky stores state (.rocky/). Defaults to --cwd.")
     parser.add_argument("--provider", help="Provider name override")
     parser.add_argument("--model", help="Model override for the selected provider")
     parser.add_argument("--base-url", help="Base URL override for the selected provider")
@@ -29,9 +31,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--continue-session", dest="continue_session", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--freeze", action="store_true", help="Read existing Rocky state but do not persist new Rocky state")
     parser.add_argument("--verbose", action="store_true", help="Show full tool call and tool result logs")
+    parser.add_argument("--format", choices=["ndjson"], default=None, dest="format", help="Output format for one-shot tasks (ndjson = one JSON object per line)")
     parser.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--json", action="store_true", help="Print machine-readable output for one-shot tasks")
     parser.add_argument("-V", "--version", action="store_true", help="Print Rocky version and exit")
+    parser.add_argument("--route", dest="route", default=None, metavar="TASK_SIGNATURE", help="Override lexical route classification with a known task signature (e.g. research/live_compare/general)")
+    parser.add_argument(
+        "--tools",
+        dest="tools",
+        default=None,
+        metavar="FAMILIES",
+        type=lambda s: [f.strip() for f in s.split(",") if f.strip()],
+        help="Comma-separated extra tool families to compose on top of the route's default profile (e.g. filesystem). Default unchanged when omitted.",
+    )
     return parser
 def _task_text(args) -> str | None:
     if args.task:
@@ -78,7 +90,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.version:
         print(f"rocky {__version__}")
         return 0
+
+    # stats subcommand — read-only aggregation; dispatch before any provider init
     requested_text = " ".join(args.task).strip() if args.task else None
+    if requested_text == "stats" or (args.task and args.task[0] == "stats"):
+        from rocky.commands.stats import rocky_stats
+        return rocky_stats(cwd=cwd, output_json=args.json)
+
+    requested_text = requested_text  # already set above
     configure_requested = requested_text in {"configure", "/configure"}
 
     if not args.freeze:
@@ -100,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     cli_overrides: dict[str, object] = {}
     if args.provider:
         cli_overrides["active_provider"] = args.provider
-    runtime = RockyRuntime.load_from(cwd, cli_overrides=cli_overrides, freeze=args.freeze, verbose=args.verbose)
+    runtime = RockyRuntime.load_from(cwd, cli_overrides=cli_overrides, state_dir=args.state_dir, freeze=args.freeze, verbose=args.verbose, route_override=args.route, tool_families_override=args.tools)
     provider_name = args.provider or runtime.config.active_provider
     provider_cfg = runtime.config.provider(provider_name)
     runtime.config.active_provider = provider_name
@@ -129,13 +148,23 @@ def main(argv: list[str] | None = None) -> int:
                 render_console_text(console, result.text)
             return 0
 
-        printer = None if args.json else EventPrinter(make_live_console(console), verbose=args.verbose)
+        if args.verbose and getattr(args, "format", None) == "ndjson":
+            parser.error("--verbose and --format ndjson are mutually exclusive")
+        if getattr(args, "format", None) == "ndjson":
+            printer = NdjsonEventPrinter()
+        elif args.json:
+            printer = None
+        else:
+            printer = EventPrinter(make_live_console(console), verbose=args.verbose)
+        _use_ndjson = getattr(args, "format", None) == "ndjson"
         response = runtime.run_prompt(
             text,
             stream=not args.json,
             event_handler=printer,
             continue_session=args.continue_session,
             freeze=args.freeze,
+            route_override=args.route,
+            tool_families_override=args.tools,
         )
         if args.json:
             print(
@@ -150,6 +179,13 @@ def main(argv: list[str] | None = None) -> int:
                     ensure_ascii=False,
                 )
             )
+        elif _use_ndjson:
+            assert isinstance(printer, NdjsonEventPrinter)
+            printer.finish()
+            if not printer.streamed_text:
+                printer({"type": "answer", "text": response.text})
+            if response.verification.get("status") != "pass":
+                printer({"type": "verification", "status": response.verification.get("status"), "message": response.verification.get("message", "")})
         else:
             if printer and printer.streamed_text:
                 printer.finish()

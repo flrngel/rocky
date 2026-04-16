@@ -6,6 +6,28 @@ from rocky.tools import browser, filesystem, shell, web
 from rocky.tools.base import Tool, ToolContext, ToolResult
 
 
+# Maps tool name -> canonical route signature hint for reroute suggestions.
+# Used by blocked-tool error reporting and by O12 argv[0] detection.
+_TOOL_ROUTE_HINTS: dict[str, str] = {
+    "search_web": "research/live_compare/general",
+    "fetch_url": "research/live_compare/general",
+    "agent_browser": "research/live_compare/general",
+    "run_shell_command": "repo/shell_execution",
+    "read_file": "repo/shell_execution",
+    "write_file": "automation/general",
+}
+
+
+def _suggest_route_for_tool(name: str) -> str | None:
+    """Return the canonical route signature for ``name``, or None if unknown.
+
+    Used to populate ``reroute_to`` in blocked-tool ToolResult payloads and
+    by the O12 argv[0] guard. Mapping is intentionally minimal and hand-curated
+    to avoid false precision; update ``_TOOL_ROUTE_HINTS`` as new tools land.
+    """
+    return _TOOL_ROUTE_HINTS.get(name)
+
+
 READ_ONLY_TOOL_NAMES = {
     "read_file",
     "run_shell_command",
@@ -67,6 +89,19 @@ TASK_TOOL_PRIORITY: dict[str, list[str]] = {
     ],
 }
 
+# Module-level frozenset of all built-in tool names registered at import time.
+# Used by O12 argv[0] detection in shell.py so it can check without a registry
+# instance.  Keep in sync with the Tool(...) registrations in
+# filesystem, shell, web, and browser modules.
+ALL_TOOL_NAMES: frozenset[str] = frozenset({
+    "read_file",
+    "write_file",
+    "run_shell_command",
+    "fetch_url",
+    "search_web",
+    "agent_browser",
+})
+
 _URL_RE = re.compile(r"https?://\S+", re.I)
 
 
@@ -75,12 +110,29 @@ def _prompt_contains_explicit_url(user_prompt: str) -> bool:
 
 
 class ToolRegistry:
-    def __init__(self, context: ToolContext) -> None:
+    def __init__(
+        self,
+        context: ToolContext,
+        *,
+        exposed_names: frozenset[str] | None = None,
+        current_route: str = "",
+    ) -> None:
         self.context = context
+        self._exposed_names: frozenset[str] | None = exposed_names
+        self._current_route: str = current_route
         items: list[Tool] = []
         for module in [filesystem, shell, web, browser]:
             items.extend(module.tools())
         self.tools = {tool.name: tool for tool in items}
+
+    @property
+    def tool_names(self) -> frozenset[str]:
+        """All registered tool names regardless of route.
+
+        Used by O12 argv[0] detection to check whether a shell command matches
+        a known Rocky tool name without requiring a route context.
+        """
+        return frozenset(self.tools.keys())
 
     def list_tools(self) -> list[dict]:
         return [
@@ -100,8 +152,9 @@ class ToolRegistry:
         self,
         families: list[str] | None,
         task_signature: str,
+        tool_families_override: list[str] | None = None,
     ) -> list[dict]:
-        return [tool.openai_schema() for tool in self.select_for_task(families, task_signature)]
+        return [tool.openai_schema() for tool in self.select_for_task(families, task_signature, tool_families_override=tool_families_override)]
 
     def select(self, families: list[str] | None = None) -> list[Tool]:
         if families is None:
@@ -116,16 +169,36 @@ class ToolRegistry:
         families: list[str] | None,
         task_signature: str,
         user_prompt: str = "",
+        tool_families_override: list[str] | None = None,
     ) -> list[Tool]:
-        selected = self.select(families) if families else list(self.tools.values())
+        # Merge override families additively with the route's default families.
+        effective_families: list[str] | None = families
+        override_set: frozenset[str] = frozenset(tool_families_override or [])
+        if tool_families_override:
+            base = list(families or [])
+            merged = list(base)
+            for fam in tool_families_override:
+                if fam not in merged:
+                    merged.append(fam)
+            effective_families = merged
+
+        selected = self.select(effective_families) if effective_families else list(self.tools.values())
         if task_signature in READ_ONLY_TASK_SIGNATURES:
-            selected = [tool for tool in selected if tool.name in READ_ONLY_TOOL_NAMES]
+            # Apply the read-only gate, but bypass it for tools whose family is
+            # explicitly in the override.  This is what allows `write_file`
+            # (family=filesystem) on a research route when the caller opts in
+            # via tool_families_override=["filesystem"].  Families NOT in the
+            # override still obey the read-only constraint.
+            selected = [
+                tool for tool in selected
+                if tool.name in READ_ONLY_TOOL_NAMES or tool.family in override_set
+            ]
         priority = list(TASK_TOOL_PRIORITY.get(task_signature, []))
         if task_signature == "research/live_compare/general" and _prompt_contains_explicit_url(user_prompt):
             priority = ["fetch_url", "search_web", "agent_browser"]
         order = {name: index for index, name in enumerate(priority)}
         fallback = len(order) + 100
-        preferred_families = set(families or [])
+        preferred_families = set(effective_families or [])
         return sorted(
             selected,
             key=lambda tool: (
@@ -143,4 +216,28 @@ class ToolRegistry:
     def run(self, name: str, arguments: dict) -> ToolResult:
         if name not in self.tools:
             return ToolResult(False, {}, f'Unknown tool: {name}')
+        if self._exposed_names is not None and name not in self._exposed_names:
+            reroute = _suggest_route_for_tool(name)
+            route_label = self._current_route or "current route"
+            reason = (
+                f"Tool {name} is not exposed for route {route_label}. "
+                f"Use one of the route's tools, or invoke rocky with "
+                f"--route {reroute} to access this tool."
+                if reroute
+                else (
+                    f"Tool {name} is not exposed for route {route_label}. "
+                    f"Use one of the route's exposed tools instead."
+                )
+            )
+            data: dict = {
+                "error": "tool_not_exposed",
+                "tool": name,
+                "reroute_to": reroute,
+                "reason": reason,
+            }
+            summary = (
+                f"Tool `{name}` is not exposed for route `{route_label}`. "
+                + (f"Try --route {reroute}." if reroute else "Use an exposed tool.")
+            )
+            return ToolResult(False, data, summary)
         return self.tools[name].handler(self.context, arguments)

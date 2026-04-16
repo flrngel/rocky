@@ -218,10 +218,48 @@ class Router:
         'command', 'commands', 'alias', 'aliases', 'cli',
     }
     SHELL_FENCE_RE = re.compile(r"```(?:bash|sh|zsh|shell)?\s*\n(?P<body>.*?)```", re.I | re.S)
-    SHELL_TOKEN_RE = re.compile(r"(^|\s)(?:[a-z0-9_./-]+)(?:\s+[-\\w./:=@]+)*(?:\s*(?:&&|\|\||\||;|>|>>)\s*.+)+", re.I | re.M)
+    # SHELL_TOKEN_RE matches unambiguous shell operators (&&, ||, ;, >, >>)
+    # but does NOT match bare | — prose data-separators use | without commands.
+    # Bare pipe is handled separately in _pipe_has_shell_command_context().
+    SHELL_TOKEN_RE = re.compile(r"(^|\s)(?:[a-z0-9_./-]+)(?:\s+[-\\w./:=@]+)*(?:\s*(?:&&|\|\||;(?=\s)|>>?|<(?!<))\s*.+)+", re.I | re.M)
+    # PIPE_RE matches a bare | that is NOT part of || (lookahead/lookbehind guards)
+    PIPE_RE = re.compile(r"(?<!\|)\|(?!\|)")
+    # Common shell/CLI command tokens — a pipe next to one of these is a shell pipe
+    SHELL_COMMANDS: frozenset[str] = frozenset({
+        'ls', 'cat', 'grep', 'rg', 'awk', 'sed', 'sort', 'uniq', 'head', 'tail',
+        'wc', 'find', 'xargs', 'jq', 'git', 'curl', 'wget', 'echo', 'printf', 'tr',
+        'cut', 'tee', 'make', 'python', 'python3', 'node', 'npm', 'pnpm', 'yarn',
+        'docker', 'kubectl', 'ssh', 'scp', 'rsync', 'tar', 'gzip', 'gunzip', 'zip',
+        'unzip', 'ffmpeg', 'convert', 'diff', 'patch', 'cp', 'mv', 'rm', 'mkdir',
+        'touch', 'chmod', 'chown', 'ln', 'xargs', 'env', 'export', 'source',
+        'sudo', 'su', 'bash', 'sh', 'zsh', 'fish', 'ps', 'kill', 'pkill', 'top',
+        'df', 'du', 'free', 'mount', 'ping', 'netstat', 'ss', 'ip', 'ifconfig',
+        'awk', 'perl', 'ruby', 'go', 'cargo', 'pip', 'pip3', 'brew', 'apt', 'yum',
+        'dnf', 'pacman', 'systemctl', 'journalctl', 'crontab', 'at', 'nohup',
+        'screen', 'tmux', 'strace', 'ltrace', 'lsof', 'nc', 'ncat', 'socat',
+        'openssl', 'base64', 'md5sum', 'sha256sum', 'xxd', 'od', 'hexdump',
+        'strings', 'file', 'stat', 'readlink', 'realpath', 'dirname', 'basename',
+        'seq', 'yes', 'true', 'false', 'test', 'expr', 'bc', 'date', 'cal',
+        'uname', 'hostname', 'id', 'groups', 'w', 'who', 'last', 'uptime',
+    })
+    # Extracts the last word before a pipe (left side) or first word after (right side)
+    _PIPE_LEFT_RE = re.compile(r"(\w+)\s*(?=\|(?!\|))", re.I)
+    _PIPE_RIGHT_RE = re.compile(r"(?<!\|)\|\s*(\w+)", re.I)
     INLINE_COMMAND_RE = re.compile(r"`(?P<body>[^`\n]+)`")
     SCRIPT_PATH_RE = re.compile(r"(?<![\w/])(?:\./)?[a-z0-9_.-]+\.(?:sh|py|rb|js|ts|tsx|pl|php)(?![\w/])", re.I)
     PATH_HINTS = ('.py', '.ts', '.tsx', '.js', '.jsx', '.rb', '.go', '.rs', '.java', '.json', '.yaml', '.yml', '.toml', '.md')
+    # Filename-looking token: at least one word char + optional path separator, then extension.
+    # Requires a real filename (e.g. README.md, foo/bar.py) not a bare ".md" standalone token.
+    PATH_HINTS_RE = re.compile(
+        r"(?:[\w./\-]+/)?\w[\w.\-]*\.(?:py|ts|tsx|js|jsx|rb|go|rs|java|json|yaml|yml|toml|md)\b",
+        re.I,
+    )
+    # Descriptive sentence openers — if found near a filename, treat as prose not repo-op
+    DESCRIPTIVE_OPENERS = re.compile(
+        r"\b(?:what\s+is|what\s+are|what\s+does|explain|describe|summari[sz]e|about|"
+        r"purpose\s+of|meaning\s+of|tell\s+me\s+about|show\s+me\s+what|how\s+does)\b",
+        re.I,
+    )
     SHELL_INFO_PHRASES = (
         'current shell', 'shell history', 'last history', 'last command', 'latest shell command', 'command history',
         'what shell am i using', 'what shell am i', 'where am i', 'current directory', 'working directory', 'who am i',
@@ -338,9 +376,40 @@ class Router:
     def _tokens(self, lowered: str) -> set[str]:
         return set(re.findall(r"[a-z0-9_.+-]+", lowered))
 
+    def _pipe_has_shell_command_context(self, text: str) -> bool:
+        """Return True only if a bare | in text has a known shell command adjacent to it.
+
+        A known command must appear as the FIRST WORD in a pipe segment (i.e., the token
+        immediately after | or at the very start of the text/line before |). This avoids
+        matching column headers like "ID | Status" where "id" is a Unix command name but
+        appears as a prose label (preceded by whitespace and a colon separator, not at the
+        start of the segment).
+        """
+        if not self.PIPE_RE.search(text):
+            return False
+
+        # Split on bare | (not ||) to get pipe segments
+        segments = self.PIPE_RE.split(text)
+        for segment in segments:
+            stripped = segment.strip()
+            if not stripped:
+                continue
+            # Extract the first word of this segment
+            m = re.match(r"([a-zA-Z0-9_./-]+)", stripped)
+            if m:
+                first_word = m.group(1).lower()
+                # Strip path prefix: "cat", "./run", "/usr/bin/grep" -> take last component
+                first_word = first_word.rsplit("/", 1)[-1]
+                if first_word in self.SHELL_COMMANDS:
+                    return True
+        return False
+
     def _looks_like_shell_task(self, text: str, lowered: str) -> bool:
         has_fenced_shell = bool(self.SHELL_FENCE_RE.search(text))
+        # SHELL_TOKEN_RE now only matches unambiguous operators (&&, ||, ;, >, >>).
+        # Bare pipe is checked separately with command-context awareness.
         has_shell_tokens = bool(self.SHELL_TOKEN_RE.search(text))
+        has_pipe_with_command = self._pipe_has_shell_command_context(text)
         has_inline_command = self._looks_like_inline_command_reference(text)
         mentions_existing_script = any(
             phrase in lowered
@@ -360,7 +429,7 @@ class Router:
         starts_with_verb = lowered.startswith(self.COMMAND_VERBS)
         if mentions_run_verb and (has_inline_command or mentions_existing_script):
             return True
-        return has_fenced_shell or has_shell_tokens or asks_to_run or starts_with_verb or (mentions_run_verb and has_inline_command)
+        return has_fenced_shell or has_shell_tokens or has_pipe_with_command or asks_to_run or starts_with_verb or (mentions_run_verb and has_inline_command)
 
     def _looks_like_inline_command_reference(self, text: str) -> bool:
         for match in self.INLINE_COMMAND_RE.finditer(text):
@@ -390,9 +459,24 @@ class Router:
 
     def _looks_like_repo_task(self, lowered: str) -> bool:
         tokens = self._tokens(lowered)
-        return bool(tokens & {'test', 'repo', 'code', 'bug', 'refactor', 'git', 'file', 'directory', 'module'}) or any(
-            hint in lowered for hint in self.PATH_HINTS
-        )
+        # Strong operational tokens that reliably indicate repo work
+        STRONG_REPO_TOKENS = {'test', 'repo', 'code', 'bug', 'refactor', 'git', 'directory', 'module'}
+        # 'file' and 'files' are too generic — guard them with a descriptive-opener check
+        GUARDED_REPO_TOKENS = {'file', 'files'}
+        if tokens & STRONG_REPO_TOKENS:
+            return True
+        if tokens & GUARDED_REPO_TOKENS and not self.DESCRIPTIVE_OPENERS.search(lowered):
+            return True
+        # Require the extension to appear as part of a real filename token (e.g. README.md,
+        # src/foo.py) rather than a bare ".md" or descriptive mention.
+        filename_match = self.PATH_HINTS_RE.search(lowered)
+        if not filename_match:
+            return False
+        # If the sentence is descriptive/explanatory, the filename is being mentioned in
+        # prose context — do not treat as a repo operation.
+        if self.DESCRIPTIVE_OPENERS.search(lowered):
+            return False
+        return True
 
     def extract_runtime_targets(self, prompt: str) -> list[str]:
         lowered = prompt.lower().strip()

@@ -17,6 +17,23 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:72] or "policy"
 
 
+def _filter_llm_keywords(raw_keywords: list[str] | None) -> set[str]:
+    """Filter LLM-supplied keyword strings through tokenize_keywords.
+
+    Each raw keyword (may be multi-word) is tokenized so that noise tokens
+    like "not", "need", trailing-punctuation forms, and 3-char stop-words are
+    removed before they are persisted as retrospective tags.
+    Returns an empty set when *raw_keywords* is None or empty.
+    """
+    if not raw_keywords:
+        return set()
+    filtered: set[str] = set()
+    for kw in raw_keywords:
+        if kw and isinstance(kw, str):
+            filtered |= tokenize_keywords(kw)
+    return filtered
+
+
 @dataclass(slots=True)
 class PolicyDraft:
     policy_id: str
@@ -790,8 +807,9 @@ class PolicySynthesizer:
         verification = resolved_trace.get("verification") or {}
         query_keywords = list(tokenize_keywords(" ".join([last_prompt, task_signature, resolved_task_family])))[:16]
         recall_when = self._string_list(payload.get("recall_when"), limit=6)
+        llm_keywords = sorted(_filter_llm_keywords(self._string_list(payload.get("keywords"), limit=12)))
         keywords = []
-        for item in [*self._string_list(payload.get("keywords"), limit=12), *query_keywords]:
+        for item in [*llm_keywords, *query_keywords]:
             if item and item not in keywords:
                 keywords.append(item)
         title = str(payload.get("title") or "").strip() or f"{task_signature.replace('/', ' ')} retrospective"
@@ -1063,8 +1081,9 @@ class PolicySynthesizer:
         for item in [*self._string_list(payload.get("triggers"), limit=12), *heuristic.triggers]:
             if item and item not in triggers:
                 triggers.append(item)
+        llm_kw = sorted(_filter_llm_keywords(self._string_list(payload.get("keywords"), limit=12)))
         keywords = []
-        for item in [*self._string_list(payload.get("keywords"), limit=12), *heuristic.keywords]:
+        for item in [*llm_kw, *heuristic.keywords]:
             if item and item not in keywords:
                 keywords.append(item)
         required_behavior = self._string_list(payload.get("required_behavior"), limit=8) or heuristic.required_behavior

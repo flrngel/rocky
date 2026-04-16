@@ -8,7 +8,8 @@ import shutil
 import subprocess
 from typing import Any
 
-from rocky.tools.base import Tool, ToolContext, ToolResult
+from rocky.tools.base import Tool, ToolContext, ToolResult, _tool_cap
+from rocky.util.redaction import BLOCKED_VERIFICATION_COMMANDS, redact_env_output
 from rocky.util.text import truncate
 
 
@@ -175,6 +176,47 @@ def _capture_version(command_path: Path) -> str | None:
 
 def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     command = str(args['command'])
+    import shlex as _shlex
+    try:
+        argv0 = _shlex.split(command)[0] if command.strip() else ""
+    except ValueError:
+        argv0 = ""
+    if argv0 in BLOCKED_VERIFICATION_COMMANDS:
+        return ToolResult(
+            False,
+            {
+                "error": "blocked_verification_command",
+                "command": argv0,
+                "message": (
+                    f"`{argv0}` is blocked to prevent leaking sensitive environment variables. "
+                    "Use specific env-var lookups instead."
+                ),
+            },
+            f"Command `{argv0}` is blocked",
+        )
+    # O12: argv[0] tool-name guard — detect when the LLM tries to invoke a
+    # rocky tool as a CLI command (e.g. run_shell_command("search_web '...'")).
+    if argv0:
+        from rocky.tools.registry import ALL_TOOL_NAMES, _suggest_route_for_tool
+        if argv0 in ALL_TOOL_NAMES:
+            reroute_to = _suggest_route_for_tool(argv0)
+            route_hint = (
+                f"available on route {reroute_to}" if reroute_to else "not exposed on any route"
+            )
+            return ToolResult(
+                False,
+                {
+                    "error": "tool_name_in_shell",
+                    "tool": argv0,
+                    "message": (
+                        f"`{argv0}` is a rocky tool, not a CLI command. "
+                        f"Invoke it via a structured tool call. "
+                        f"It is currently {route_hint}."
+                    ),
+                    "reroute_to": reroute_to,
+                },
+                f"Command `{argv0}` is a rocky tool name; use a structured tool call instead",
+            )
     timeout_s = int(args.get('timeout_s', ctx.config.tools.shell_timeout_s))
     writes = any(marker in f' {command} ' for marker in WRITE_MARKERS)
     cwd, requested_cwd = ctx.resolve_execution_cwd(
@@ -202,8 +244,8 @@ def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             'command': command,
             'cwd': str(cwd.relative_to(ctx.workspace_root)),
             'returncode': proc.returncode,
-            'stdout': truncate(proc.stdout, ctx.config.tools.max_tool_output_chars),
-            'stderr': truncate(proc.stderr, ctx.config.tools.max_tool_output_chars),
+            'stdout': redact_env_output(truncate(proc.stdout, _tool_cap(ctx.config.tools, "run_shell_command"))),
+            'stderr': redact_env_output(truncate(proc.stderr, _tool_cap(ctx.config.tools, "run_shell_command"))),
             'shell': shell_program,
         }
         return ToolResult(proc.returncode == 0, data, f'Command exited with {proc.returncode}', metadata)
@@ -212,8 +254,8 @@ def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             'command': command,
             'cwd': str(cwd.relative_to(ctx.workspace_root)),
             'timeout_s': timeout_s,
-            'stdout': truncate(exc.stdout or '', ctx.config.tools.max_tool_output_chars),
-            'stderr': truncate(exc.stderr or '', ctx.config.tools.max_tool_output_chars),
+            'stdout': redact_env_output(truncate(exc.stdout or '', _tool_cap(ctx.config.tools, "run_shell_command"))),
+            'stderr': redact_env_output(truncate(exc.stderr or '', _tool_cap(ctx.config.tools, "run_shell_command"))),
             'shell': shell_program,
         }, f'Command timed out after {timeout_s}s', metadata)
 

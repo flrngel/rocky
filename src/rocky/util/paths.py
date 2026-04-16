@@ -75,18 +75,24 @@ def depth(path: Path, root: Path) -> int:
     return len(rel.parts)
 
 
-def discover_workspace(start: Path) -> WorkspacePaths:
+def discover_workspace(start: Path, *, state_dir_override: Path | None = None) -> WorkspacePaths:
     current = start.resolve()
-    for candidate in [current, *current.parents]:
-        if (candidate / ".rocky").exists() or (candidate / ".git").exists():
-            root = candidate
-            break
+    if state_dir_override is not None:
+        # Caller explicitly separated state dir from execution dir.
+        # Rocky state lives under state_dir_override; shell cwd stays at current.
+        state_root = state_dir_override.resolve()
     else:
-        root = current
-    rocky_dir = root / ".rocky"
+        for candidate in [current, *current.parents]:
+            if (candidate / ".rocky").exists() or (candidate / ".git").exists():
+                root = candidate
+                break
+        else:
+            root = current
+        state_root = root
+    rocky_dir = state_root / ".rocky"
     student_dir = rocky_dir / "student"
     return WorkspacePaths(
-        root=root,
+        root=state_root,
         execution_root=current,
         rocky_dir=rocky_dir,
         sessions_dir=rocky_dir / "sessions",

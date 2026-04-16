@@ -1602,7 +1602,9 @@ Use web search tools for live queries.
     response = runtime.run_prompt("github repos right now", continue_session=False)
 
     assert response.route.task_signature == "research/live_compare/general"
-    assert response.verification["status"] == "pass"
+    # O6 semantic verifier may mark an unsourced research answer as needs_review;
+    # this test's load-bearing invariant is the route upgrade, not the verification status.
+    assert response.verification["status"] in {"pass", "needs_review"}
     assert provider.tool_calls
     assert "search_web" in response.trace["selected_tools"]
     assert any(event["name"] == "search_web" for event in response.trace["tool_events"])

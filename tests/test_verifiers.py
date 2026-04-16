@@ -1673,3 +1673,47 @@ def test_claim_support_ignores_generic_found_list_intro() -> None:
     )
 
     assert result.status == "pass"
+
+
+# O6 regression: default_v1 output shape is preserved after semantic merge
+def test_o6_default_v1_shape_preserved_in_merged_result() -> None:
+    """After O6, a research-route pass still carries default_v1 record in details."""
+    from rocky.config.models import AppConfig
+
+    verifier = VerifierRegistry()
+    route = RouteDecision(
+        lane=Lane.STANDARD,
+        task_class=TaskClass.RESEARCH,
+        risk="low",
+        reasoning="research task",
+        tool_families=["web"],
+        task_signature="research/general",
+    )
+    tool_events = [
+        {
+            "type": "tool_result",
+            "name": "fetch_url",
+            "success": True,
+            "content": "Acme Corp is based in Palo Alto and leads cloud infrastructure.",
+        }
+    ]
+    cfg = AppConfig.default()
+
+    result = verifier.verify(
+        prompt="where is Acme Corp based",
+        route=route,
+        task_class=route.task_class,
+        output="Acme Corp is based in Palo Alto. Sources: https://example.com/source",
+        tool_events=tool_events,
+        config=cfg,
+    )
+
+    # Semantic ran (research route, semantic_enabled=True by default)
+    assert result.name == "semantic_research_v1"
+    # default_v1 record must be present inside details
+    assert "default_v1" in result.details
+    dv1 = result.details["default_v1"]
+    assert "name" in dv1
+    assert "status" in dv1
+    assert "message" in dv1
+    assert "details" in dv1

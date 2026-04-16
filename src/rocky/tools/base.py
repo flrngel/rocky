@@ -4,9 +4,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from rocky.config.models import AppConfig
+from rocky.config.models import AppConfig, ToolConfig
 from rocky.core.permissions import PermissionManager, PermissionRequest
 from rocky.util.text import safe_json
+
+
+def _tool_cap(tool_config: ToolConfig, tool_name: str) -> int:
+    """Return the per-tool output cap override, or the global default.
+
+    A per-tool override is valid only when it is a positive int.  Any other
+    type (e.g. a YAML string "50") or a non-positive value is silently ignored
+    and the global ``max_tool_output_chars`` is used instead, preserving
+    backward-compatible behaviour (CF-4).
+    """
+    override = tool_config.tool_output_limits.get(tool_name)
+    if isinstance(override, int) and override > 0:
+        return override
+    return tool_config.max_tool_output_chars
 
 
 def _sanitize_input_schema(value: Any) -> Any:
