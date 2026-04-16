@@ -12,7 +12,6 @@ from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.json import JSON
 from rich.markdown import Markdown
-from rich.panel import Panel
 from rich.text import Text
 
 from rocky.commands.registry import CommandResult
@@ -37,6 +36,13 @@ def render_console_text(console: Console, text: str) -> None:
         console.print(Markdown(text))
         return
     console.print(Text(text))
+
+
+def make_console() -> Console:
+    import sys
+    if sys.stdout.isatty():
+        return Console()
+    return Console(no_color=True, highlight=False, force_terminal=False)
 
 
 def make_live_console(console: Console) -> Console:
@@ -183,11 +189,12 @@ class EventPrinter:
             if not self.verbose:
                 self._print_status(self._tool_call_message(str(event.get("name", ""))), style="cyan")
                 return
-            body = Text()
-            body.append(str(event.get("name", "")), style="bold cyan")
-            body.append("\n")
-            body.append(safe_json(event.get("arguments") or {}))
-            self.console.print(Panel(body, title="tool call", border_style="cyan"))
+            line = Text()
+            line.append("    tool_call  ", style="bold cyan")
+            line.append(str(event.get("name", "")))
+            line.append("  ")
+            line.append(safe_json(event.get("arguments") or {}))
+            self.console.print(line)
         elif kind == "tool_result":
             self._close_stream_line()
             if not self.verbose:
@@ -195,13 +202,12 @@ class EventPrinter:
                     return
                 self._print_status(self._tool_failure_message(event), style="red")
                 return
-            self.console.print(
-                Panel(
-                    Text(tool_event_debug_text(event)),
-                    title=f"tool result: {event.get('name', '')}",
-                    border_style="green" if event.get("success") else "red",
-                )
-            )
+            result_style = "bold green" if event.get("success") else "bold red"
+            result_line = Text()
+            result_line.append("  tool_result  ", style=result_style)
+            result_line.append(f"{event.get('name', '')}  ")
+            result_line.append(tool_event_debug_text(event))
+            self.console.print(result_line)
 
     def finish(self) -> None:
         self._close_stream_line()
@@ -210,7 +216,7 @@ class EventPrinter:
 class RockyRepl:
     def __init__(self, runtime) -> None:
         self.runtime = runtime
-        self.console = Console()
+        self.console = make_console()
         self.live_console = make_live_console(self.console)
         self.prompt_style = Style.from_dict(
             {
@@ -534,10 +540,7 @@ class RockyRepl:
             else:
                 self.print_text(response.text)
             if response.verification.get("status") != "pass":
-                self.console.print(
-                    Panel(
-                        Text(str(response.verification.get("message", ""))),
-                        title="verification",
-                        border_style="yellow",
-                    )
-                )
+                vline = Text()
+                vline.append(" verification  ", style="bold yellow")
+                vline.append(str(response.verification.get("message", "")))
+                self.console.print(vline)

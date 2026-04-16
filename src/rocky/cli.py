@@ -12,7 +12,7 @@ from rocky import __version__
 from rocky.app import RockyRuntime
 from rocky.config.loader import ConfigLoader
 from rocky.config.wizard import run_config_wizard
-from rocky.ui.repl import EventPrinter, RockyRepl, make_live_console, render_console_text
+from rocky.ui.repl import EventPrinter, RockyRepl, make_console, make_live_console, render_console_text
 from rocky.util.paths import discover_workspace, ensure_global_layout
 
 
@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     cwd = args.cwd or Path.cwd()
-    console = Console()
+    console = make_console()
     if args.version:
         print(f"rocky {__version__}")
         return 0

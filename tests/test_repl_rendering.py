@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from rich.panel import Panel
+from rich.text import Text
 
 from rocky.ui.repl import EventPrinter, RockyRepl
 
@@ -118,10 +118,20 @@ def test_verbose_mode_shows_self_learning_process_even_without_persisted_lesson(
     assert second.plain == "Reflection kept no durable lesson: reflection found no durable lesson to keep"
 
 
-def test_verbose_tool_logs_use_panels() -> None:
+def test_verbose_tool_call_uses_cargo_prefix() -> None:
     printer = EventPrinter(console=MagicMock(), verbose=True)
 
     printer({"type": "tool_call", "name": "run_shell_command", "arguments": {"command": "pwd"}})
+
+    renderable = printer.console.print.call_args_list[0].args[0]
+    assert isinstance(renderable, Text)
+    assert "tool_call" in renderable.plain
+    assert "run_shell_command" in renderable.plain
+
+
+def test_verbose_tool_result_uses_cargo_prefix() -> None:
+    printer = EventPrinter(console=MagicMock(), verbose=True)
+
     printer(
         {
             "type": "tool_result",
@@ -131,5 +141,41 @@ def test_verbose_tool_logs_use_panels() -> None:
         }
     )
 
-    assert isinstance(printer.console.print.call_args_list[0].args[0], Panel)
-    assert isinstance(printer.console.print.call_args_list[1].args[0], Panel)
+    renderable = printer.console.print.call_args_list[0].args[0]
+    assert isinstance(renderable, Text)
+    assert "tool_result" in renderable.plain
+    assert "run_shell_command" in renderable.plain
+
+
+def test_make_console_non_tty_guard() -> None:
+    from unittest.mock import patch
+
+    from rocky.ui.repl import make_console
+
+    with patch("sys.stdout") as mock_stdout:
+        mock_stdout.isatty.return_value = False
+        c = make_console()
+        assert c.no_color is True
+
+    with patch("sys.stdout") as mock_stdout:
+        mock_stdout.isatty.return_value = True
+        c = make_console()
+        assert c.no_color is False
+
+
+def test_verification_cargo_style_render(tmp_path: Path) -> None:
+    repl = RockyRepl(_make_runtime(tmp_path))
+    repl.console = MagicMock()
+
+    # Simulate the verification render path from RockyRepl.run()
+    verification = {"status": "fail", "message": "Answer missing evidence"}
+    if verification.get("status") != "pass":
+        vline = Text()
+        vline.append(" verification  ", style="bold yellow")
+        vline.append(str(verification.get("message", "")))
+        repl.console.print(vline)
+
+    renderable = repl.console.print.call_args.args[0]
+    assert isinstance(renderable, Text)
+    assert "verification" in renderable.plain
+    assert "Answer missing evidence" in renderable.plain

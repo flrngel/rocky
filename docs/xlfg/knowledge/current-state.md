@@ -89,6 +89,15 @@ The `MetaVariant.canary_results` field is rich enough that Phase 4 (`improve@N` 
 - Token usage label: `Tok P{prompt} C{completion} T{total}/{context_window}({pct}%)`
 - Built-in defaults: litellm_local=32768, ollama=131072, openai=128000
 
+## 2026-04-16 run (20260416-023819-cargo-style-verbose) — Cargo-style verbose output + non-TTY auto-degrade SHIPPED
+Replaced Rich `Panel` bordered boxes with cargo-style right-aligned prefix lines in verbose mode. Added non-TTY auto-degrade via `make_console()` helper. Three Panel sites eliminated: verbose tool_call (repl.py:193), verbose tool_result (repl.py:207), verification failure (repl.py:544). `from rich.panel import Panel` removed from repl.py. `make_console()` added to repl.py and wired into both `RockyRepl.__init__` and `cli.py:main()`. Non-TTY detection: `sys.stdout.isatty()` → returns `Console(no_color=True, highlight=False, force_terminal=False)` when piped. All prefix labels right-aligned to 15-char column width. 3 new tests, full suite 448 passed + 12 skipped. Residual: cli.py:158 verification message still uses plain f-string (not cargo-style) — was already pipe-safe, left for consistency follow-up.
+
+## Console and verbose output
+- `make_console()` at `ui/repl.py` — factory that checks `sys.stdout.isatty()`. Used by both `RockyRepl.__init__` and `cli.py:main()`. Returns guarded Console for non-TTY.
+- `make_live_console()` at `ui/repl.py` — derives a no-color console from an existing one. Used for streaming text output.
+- Verbose mode uses cargo-style `Text()` prefix lines, not `Panel`. No Rich Panel import in repl.py.
+- Prefix format: `"    tool_call  "` / `"  tool_result  "` / `" verification  "` — 15-char right-aligned column.
+
 ## Learning subsystem — Hyperlearning v2 Phase 0 shipped (2026-04-12)
 - **Candidate-never-hard invariant now enforced at two sites:**
   - `core/system_prompt.py` `## Learned constraints` block filters policies to `promotion_state == "promoted"` (default-on-missing). Candidate policies are still listed under `## Learned policies` for visibility but do NOT emit `Do not:` / `Do:` hard-constraint lines.
