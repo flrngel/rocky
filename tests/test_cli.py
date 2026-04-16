@@ -170,7 +170,8 @@ def test_cli_verification_output_is_plain_text(monkeypatch, capsys) -> None:
 
     assert exit_code == 0
     output = capsys.readouterr().out
-    assert "Verification: [Errno 61] Connection refused" in output
+    assert "verification" in output
+    assert "[Errno 61] Connection refused" in output
     assert "[yellow]" not in output
 
 

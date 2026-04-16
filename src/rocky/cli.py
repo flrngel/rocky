@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from rich.console import Console
+from rich.text import Text
 
 from rocky import __version__
 from rocky.app import RockyRuntime
@@ -155,7 +156,10 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 render_console_text(console, response.text)
             if response.verification.get("status") != "pass":
-                console.print(f"Verification: {response.verification.get('message')}", style="yellow", markup=False)
+                vline = Text()
+                vline.append(" verification  ", style="bold yellow")
+                vline.append(str(response.verification.get("message", "")))
+                console.print(vline)
         return 0
     except Exception as exc:
         if args.json:
