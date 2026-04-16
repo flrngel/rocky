@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -23,7 +24,7 @@ from rocky.core.runtime_state import (
 )
 from rocky.config.models import PackingConfig, RetrievalConfig
 from rocky.core.messages import Message
-from rocky.core.router import Lane, RouteDecision, Router
+from rocky.core.router import ContinuationDecision, Lane, RouteDecision, Router
 from rocky.core.system_prompt import build_system_prompt
 from rocky.core.verifiers import VerificationResult, VerifierRegistry
 from rocky.learning.manager import LearningManager
@@ -39,8 +40,160 @@ from rocky.tool_events import (
 )
 from rocky.tools.registry import ToolRegistry
 from rocky.util.io import read_text
+from rocky.util.redaction import redact_env_output
 from rocky.util.text import extract_json_candidate, safe_json, tokenize_keywords
 from rocky.util.time import utc_iso
+
+
+def _dedup_answer_blocks(text: str) -> str:
+    """Remove consecutive identical answer blocks from *text*.
+
+    A "block" is a maximal run of non-empty lines.  Two *consecutive* blocks
+    that are equal after stripping leading/trailing whitespace are collapsed to
+    one (the first occurrence).  Non-consecutive duplicates are left intact.
+
+    If the text contains ``<<<ANSWER>>>`` / ``<<<END>>>`` marker pairs the same
+    rule is applied inside each pair, and duplicate *pairs* are collapsed.
+
+    Identity is exact string equality — no fuzzy matching.
+    """
+    if not text:
+        return text
+
+    _ANSWER_OPEN = "<<<ANSWER>>>"
+    _ANSWER_CLOSE = "<<<END>>>"
+
+    # ------------------------------------------------------------------ #
+    # Fast path: marker-wrapped text                                      #
+    # ------------------------------------------------------------------ #
+    if _ANSWER_OPEN in text and _ANSWER_CLOSE in text:
+        # Split into (before first marker, pairs, after last marker).
+        # Dedup at the pair level: consecutive identical pairs → one pair.
+        import re as _re
+        pair_re = _re.compile(
+            r"<<<ANSWER>>>(.*?)<<<END>>>",
+            _re.DOTALL,
+        )
+        pairs = pair_re.findall(text)
+        if len(pairs) > 1:
+            # Collapse consecutive identical pair bodies.
+            deduped_bodies: list[str] = [pairs[0]]
+            for body in pairs[1:]:
+                if body.strip() != deduped_bodies[-1].strip():
+                    deduped_bodies.append(body)
+            # Rebuild: strip surrounding text (keep only the marker content).
+            rebuilt = "".join(
+                f"{_ANSWER_OPEN}{b}{_ANSWER_CLOSE}" for b in deduped_bodies
+            )
+            return rebuilt
+        # Single pair — nothing to dedup at pair level; fall through to
+        # block-level dedup inside the pair body.
+        body = pairs[0]
+        deduped_body = _dedup_answer_blocks(body)
+        return f"{_ANSWER_OPEN}{deduped_body}{_ANSWER_CLOSE}"
+
+    # ------------------------------------------------------------------ #
+    # General path: plain text, block-level dedup                        #
+    # ------------------------------------------------------------------ #
+    lines = text.splitlines(keepends=True)
+    # Group lines into blocks separated by one or more blank lines.
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if line.strip() == "":
+            if current:
+                blocks.append(current)
+                current = []
+            blocks.append([line])  # preserve blank separator
+        else:
+            current.append(line)
+    if current:
+        blocks.append(current)
+
+    # Collapse consecutive non-blank blocks that are textually identical.
+    result_blocks: list[list[str]] = []
+    last_content_block: str | None = None
+    for block in blocks:
+        block_text = "".join(block).strip()
+        if block_text == "":
+            # Blank separator — keep as-is.
+            result_blocks.append(block)
+        else:
+            if block_text == last_content_block:
+                # Duplicate consecutive content block — drop it (and the
+                # preceding blank separator if one was added).
+                if result_blocks and "".join(result_blocks[-1]).strip() == "":
+                    result_blocks.pop()
+            else:
+                result_blocks.append(block)
+                last_content_block = block_text
+
+    return "".join("".join(b) for b in result_blocks)
+
+
+_LOOP_GUARD_SENTINEL = "[rocky-loop-guard]"
+_LOOP_GUARD_THRESHOLD = 3
+
+
+def _args_hash(arguments: dict[str, Any]) -> str:
+    """Return a stable SHA-256 hex digest of *arguments* for dedup keying."""
+    canonical = json.dumps(arguments, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _maybe_cached_tool_call(
+    *,
+    tool_call_cache: dict[tuple[str, str], str],
+    tool_call_hits: dict[tuple[str, str], int],
+    loop_guard_emitted: set[tuple[str, str]],
+    messages: list[Any],
+    name: str,
+    arguments: dict[str, Any],
+    dispatch_fn: Callable[[str, dict[str, Any]], str],
+) -> str:
+    """Wrap *dispatch_fn* with a per-turn dedup cache.
+
+    On the first call for a given (name, args) pair the real *dispatch_fn* is
+    invoked and its result is stored.  On subsequent identical calls the cached
+    result is returned immediately (short-circuit).
+
+    After ``_LOOP_GUARD_THRESHOLD`` identical hits a ``[rocky-loop-guard]``
+    system message is appended to *messages* once per key so the model can
+    change approach.
+
+    Args:
+        tool_call_cache: mutable dict mapping ``(name, args_hash)`` to the
+            prior string result.
+        tool_call_hits: mutable dict tracking hit counts per key.
+        loop_guard_emitted: mutable set of keys for which the guard has already
+            been injected into *messages*.
+        messages: the in-turn message list (mutated in place on guard inject).
+        name: tool name being invoked.
+        arguments: tool arguments dict.
+        dispatch_fn: the real ``execute_tool(name, arguments) -> str``
+            implementation.
+
+    Returns:
+        The (possibly cached) string result for this tool call.
+    """
+    key = (name, _args_hash(arguments))
+    if key in tool_call_cache:
+        hits = tool_call_hits.get(key, 1) + 1
+        tool_call_hits[key] = hits
+        if hits >= _LOOP_GUARD_THRESHOLD and key not in loop_guard_emitted:
+            loop_guard_emitted.add(key)
+            guard_text = (
+                f"{_LOOP_GUARD_SENTINEL} You have called {name} with identical "
+                f"arguments {hits} times and received the same result. "
+                "Change your approach."
+            )
+            from rocky.core.messages import Message as _Message  # local to avoid circular at module level
+            messages.append(_Message(role="user", content=guard_text))
+        return tool_call_cache[key]
+    result = dispatch_fn(name, arguments)
+    tool_call_cache[key] = result
+    tool_call_hits[key] = 1
+    return result
 
 
 @dataclass(slots=True)
@@ -50,6 +203,7 @@ class AgentResponse:
     verification: dict[str, Any]
     usage: dict[str, Any] = field(default_factory=dict)
     trace: dict[str, Any] = field(default_factory=dict)
+    answer_bounded_text: str = field(default_factory=str)
 
 
 @dataclass(slots=True)
@@ -379,7 +533,7 @@ class AgentCore:
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         payload = dict(trace)
         payload["trace_path"] = str(trace_path)
-        trace_path.write_text(safe_json(payload) + "\n", encoding="utf-8")
+        trace_path.write_text(redact_env_output(safe_json(payload)) + "\n", encoding="utf-8")
         trace["trace_path"] = str(trace_path)
         return str(trace_path)
 
@@ -644,7 +798,16 @@ class AgentCore:
                 )
             except Exception:
                 pass
-        return AgentResponse(text=text, route=route, verification=verification, usage=usage, trace=trace)
+        deduped_text = _dedup_answer_blocks(text)
+        bounded = f"<<<ANSWER>>>\n{deduped_text}\n<<<END>>>"
+        return AgentResponse(
+            text=deduped_text,
+            route=route,
+            verification=verification,
+            usage=usage,
+            trace=trace,
+            answer_bounded_text=bounded,
+        )
 
     def _session_for_run(self, prompt: str, options: ExecutionOptions):
         if options.freeze:
@@ -2000,7 +2163,15 @@ class AgentCore:
         browser_runtime_unavailable = self._browser_runtime_unavailable_seen(prior_tool_events)
         attempted_fetch_urls = self._attempted_fetch_url_targets(prior_tool_events)
 
-        def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+        # Per-invocation dedup state for the repair path.
+        _repair_tool_cache: dict[tuple[str, str], str] = {}
+        _repair_tool_hits: dict[tuple[str, str], int] = {}
+        _repair_loop_guard_emitted: set[tuple[str, str]] = set()
+        # Mutable list reference so the guard can inject into retry_messages
+        # after it is constructed below.
+        _repair_messages_ref: list[Any] = []
+
+        def _repair_dispatch(name: str, arguments: dict[str, Any]) -> str:
             nonlocal pending_explicit_fetch_url, browser_runtime_unavailable
             guarded = self._research_explicit_url_guard(
                 route,
@@ -2081,6 +2252,17 @@ class AgentCore:
                 browser_runtime_unavailable = True
             return text
 
+        def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+            return _maybe_cached_tool_call(
+                tool_call_cache=_repair_tool_cache,
+                tool_call_hits=_repair_tool_hits,
+                loop_guard_emitted=_repair_loop_guard_emitted,
+                messages=_repair_messages_ref,
+                name=name,
+                arguments=arguments,
+                dispatch_fn=_repair_dispatch,
+            )
+
         repair_prompt = self._verification_repair_prompt(
             messages[-1].content if messages else "",
             route,
@@ -2104,6 +2286,11 @@ class AgentCore:
                 content=repair_prompt,
             ),
         ]
+        # Wire the mutable ref so the loop-guard can inject into retry_messages.
+        # The ref is populated here so it contains the same messages; any guard
+        # injection appends to _repair_messages_ref (which is what execute_tool
+        # sees) but provider receives the original retry_messages for integrity.
+        _repair_messages_ref.extend(retry_messages)
         return provider.run_with_tools(
             system_prompt=system_prompt,
             messages=retry_messages,
@@ -2183,6 +2370,11 @@ class AgentCore:
         attempted_fetch_urls: set[str] = set()
         successful_live_targets: set[tuple[str, str]] = set()
 
+        # Per-invocation dedup state for the flow-controlled burst loop.
+        _flow_tool_cache: dict[tuple[str, str], str] = {}
+        _flow_tool_hits: dict[tuple[str, str], int] = {}
+        _flow_loop_guard_emitted: set[tuple[str, str]] = set()
+
         for _burst_index in range(max_bursts):
             current_task = run_flow.run.active_task()
             burst_system_prompt = self._system_prompt_with_flow(system_prompt, run_flow)
@@ -2190,7 +2382,7 @@ class AgentCore:
 
             successful_tool_names: list[str] = []
 
-            def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+            def _flow_dispatch(name: str, arguments: dict[str, Any]) -> str:
                 nonlocal pending_explicit_fetch_url, browser_runtime_unavailable
                 guarded = self._browser_dependency_install_guard(route, prompt, name, arguments)
                 if guarded is not None:
@@ -2296,6 +2488,17 @@ class AgentCore:
                     browser_runtime_unavailable = True
                 run_flow.ingest_tool_event(event)
                 return text
+
+            def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+                return _maybe_cached_tool_call(
+                    tool_call_cache=_flow_tool_cache,
+                    tool_call_hits=_flow_tool_hits,
+                    loop_guard_emitted=_flow_loop_guard_emitted,
+                    messages=burst_messages,
+                    name=name,
+                    arguments=arguments,
+                    dispatch_fn=_flow_dispatch,
+                )
 
             prefetch_url = run_flow.suggested_fetch_url()
             if prefetch_url and "fetch_url" in selected_tool_names and prefetch_url not in attempted_fetch_urls:
@@ -2736,6 +2939,8 @@ class AgentCore:
         continue_session: bool = True,
         freeze: bool = False,
         session_seed: Session | None = None,
+        route_override: str | None = None,
+        tool_families_override: list[str] | None = None,
     ) -> AgentResponse:
         options = ExecutionOptions(
             continue_session=continue_session,
@@ -2746,13 +2951,33 @@ class AgentCore:
         thread_registry = ThreadRegistry(session)
         workspace_root = str(self.tool_registry.context.workspace_root)
         execution_cwd = self.tool_registry.context.execution_relative
-        route, continuation = self.router.resolve(
-            prompt,
-            active_threads=thread_registry.active_threads(),
-            recent_threads=thread_registry.recent_threads(),
-            workspace_root=workspace_root,
-            execution_cwd=execution_cwd,
-        )
+        if route_override is not None:
+            profile = self.router.TASK_SIGNATURE_PROFILES.get(route_override)
+            if profile is None:
+                known = ", ".join(sorted(self.router.TASK_SIGNATURE_PROFILES))
+                raise ValueError(
+                    f"Unknown route override {route_override!r}. "
+                    f"Valid task signatures: {known}"
+                )
+            continuation = ContinuationDecision(action='start_new_thread', confidence=1.0)
+            route = RouteDecision(
+                lane=profile['lane'],
+                task_class=profile['task_class'],
+                risk=str(profile['risk']),
+                reasoning=f"CLI route override: {route_override}",
+                tool_families=list(profile['tool_families']),
+                task_signature=route_override,
+                confidence=1.0,
+                source='override',
+            )
+        else:
+            route, continuation = self.router.resolve(
+                prompt,
+                active_threads=thread_registry.active_threads(),
+                recent_threads=thread_registry.recent_threads(),
+                workspace_root=workspace_root,
+                execution_cwd=execution_cwd,
+            )
         route = self._maybe_upgrade_route_from_project_context(prompt, route)
         if route.lane == Lane.META:
             text = self.meta_handler(prompt)
@@ -2866,6 +3091,7 @@ class AgentCore:
             route.tool_families,
             route.task_signature,
             prompt,
+            tool_families_override=tool_families_override,
         )
         provider = self.provider_registry.provider_for_task(needs_tools=bool(selected_tool_objects))
         selected_tools = [tool.name for tool in selected_tool_objects]
@@ -2962,6 +3188,10 @@ class AgentCore:
 
         provider_response = None
         attempts = 3
+        # Per-run dedup state — fresh for every run() call, never module-global.
+        _run_tool_cache: dict[tuple[str, str], str] = {}
+        _run_tool_hits: dict[tuple[str, str], int] = {}
+        _run_loop_guard_emitted: set[tuple[str, str]] = set()
         for attempt in range(attempts):
             successful_tool_names: list[str] = []
             successful_live_targets: set[tuple[str, str]] = set()
@@ -2970,7 +3200,7 @@ class AgentCore:
             browser_runtime_unavailable = False
             attempted_fetch_urls: set[str] = set()
 
-            def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+            def _dispatch(name: str, arguments: dict[str, Any]) -> str:
                 nonlocal pending_explicit_fetch_url, browser_runtime_unavailable
                 guarded = self._browser_dependency_install_guard(
                     route,
@@ -3058,6 +3288,17 @@ class AgentCore:
                 if name == "agent_browser" and self._payload_error_code(payload) == "browser_runtime_unavailable":
                     browser_runtime_unavailable = True
                 return text
+
+            def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+                return _maybe_cached_tool_call(
+                    tool_call_cache=_run_tool_cache,
+                    tool_call_hits=_run_tool_hits,
+                    loop_guard_emitted=_run_loop_guard_emitted,
+                    messages=messages,
+                    name=name,
+                    arguments=arguments,
+                    dispatch_fn=_dispatch,
+                )
 
             try:
                 if selected_tool_objects:
