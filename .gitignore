@@ -37,3 +37,8 @@ Thumbs.db
 docs/xlfg/runs/*
 !docs/xlfg/runs/.gitkeep
 !docs/xlfg/runs/README.md
+
+# skills related for this project
+.agents
+.claude
+skills-lock.json
