@@ -85,3 +85,30 @@ def test_ground_evidence_citations_matches_legacy_event_shape() -> None:
         min_overlap=2,
     )
     assert kept, "Legacy event shape (stdout) must still ground citations."
+
+
+def test_payload_text_modern_branch_returns_raw_text() -> None:
+    """A3 follow-up: direct witness of the modern branch (evidence.py:49-51).
+
+    Schema-drift guard: if ``raw_text`` is renamed on the producer side
+    (``rocky.tool_events.normalize_tool_result_event``) without updating
+    ``_payload_text``, this assertion fails because the legacy loop finds no
+    matching keys and ``str(event)`` returns the stringified dict (not the
+    literal ``"hello world"``).
+    """
+    from rocky.util.evidence import _payload_text
+
+    result = _payload_text({"raw_text": "hello world"})
+    assert result == "hello world"
+
+
+def test_payload_text_legacy_branch_joins_populated_fields() -> None:
+    """A3 follow-up: direct witness of the legacy branch (evidence.py:53-59).
+
+    Schema-drift guard: if the join separator changes from newline, or the
+    populated-field list changes, this assertion fires.
+    """
+    from rocky.util.evidence import _payload_text
+
+    result = _payload_text({"stdout": "out", "stderr": "err"})
+    assert result == "out\nerr"

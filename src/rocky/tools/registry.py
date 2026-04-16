@@ -8,15 +8,10 @@ from rocky.tools.base import Tool, ToolContext, ToolResult
 
 # Hand-curated route overrides — each entry is a conscious choice where the
 # "most natural" route for a tool differs from what a strict first-appearance
-# derivation would produce. New entries should be rare; the default path
-# (derive from TASK_TOOL_PRIORITY, see below) handles most tools correctly.
-_TOOL_ROUTE_OVERRIDES: dict[str, str] = {
-    # read_file and fetch_url surface many signatures; pick the
-    # characteristic route for integrator-facing reroute hints.
-    "read_file": "repo/shell_execution",
-    "fetch_url": "research/live_compare/general",
-    "agent_browser": "research/live_compare/general",
-}
+# derivation would produce. The dict is intentionally kept as an extension
+# point; entries should be rare and added only when derivation demonstrably
+# routes a tool to the wrong integrator-facing signature.
+_TOOL_ROUTE_OVERRIDES: dict[str, str] = {}
 
 
 def _derive_tool_route_hints() -> dict[str, str]:

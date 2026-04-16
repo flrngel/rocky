@@ -50,6 +50,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=lambda s: [f.strip() for f in s.split(",") if f.strip()],
         help="Comma-separated extra tool families to compose on top of the route's default profile (e.g. filesystem). Default unchanged when omitted.",
     )
+    # Subcommand-scoped flags — registered here so argparse does not reject
+    # them before the subcommand dispatcher runs. Kept hidden from the main
+    # --help output; meaning is subcommand-specific.
+    parser.add_argument("--no-dry-run", dest="no_dry_run", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--quarantine", dest="quarantine", action="store_true", help=argparse.SUPPRESS)
+    # `rocky stats` filter flags (O15, originally shipped under a dead
+    # token-scan that argparse rejected before dispatch could read).
+    parser.add_argument("--since", dest="stats_since", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--last", dest="stats_last", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--tool", dest="stats_tool", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--per-day", dest="stats_per_day", action="store_true", help=argparse.SUPPRESS)
     return parser
 def _task_text(args) -> str | None:
     if args.task:
@@ -97,44 +109,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"rocky {__version__}")
         return 0
 
-    # stats subcommand — read-only aggregation; dispatch before any provider init
+    # stats subcommand — read-only aggregation; dispatch before any provider init.
+    # O15 filter flags (--since, --last, --tool, --per-day) arrive on ``args``
+    # because they are registered in build_parser; argparse's int parsing of
+    # --last already enforces the type contract without a manual while-loop.
     requested_text = " ".join(args.task).strip() if args.task else None
     if requested_text == "stats" or (args.task and args.task[0] == "stats"):
-        # O15: parse optional filter flags from the tail of args.task. Use
-        # argparse-style pairs so the CLI does not need a full subparser.
-        stats_since: str | None = None
-        stats_last: int | None = None
-        stats_tool: str | None = None
-        stats_per_day: bool = False
-        tail = args.task[1:] if args.task else []
-        i = 0
-        while i < len(tail):
-            token = tail[i]
-            if token == "--since" and i + 1 < len(tail):
-                stats_since = tail[i + 1]
-                i += 2
-            elif token == "--last" and i + 1 < len(tail):
-                try:
-                    stats_last = int(tail[i + 1])
-                except ValueError:
-                    parser.error(f"--last expects an integer, got {tail[i + 1]!r}")
-                i += 2
-            elif token == "--tool" and i + 1 < len(tail):
-                stats_tool = tail[i + 1]
-                i += 2
-            elif token == "--per-day":
-                stats_per_day = True
-                i += 1
-            else:
-                i += 1
         from rocky.commands.stats import rocky_stats
         return rocky_stats(
             cwd=cwd,
             output_json=args.json,
-            since=stats_since,
-            last=stats_last,
-            tool=stats_tool,
-            per_day=stats_per_day,
+            since=args.stats_since,
+            last=args.stats_last,
+            tool=args.stats_tool,
+            per_day=args.stats_per_day,
         )
 
     # O5: `rocky retros {list|pin|discard}` — read-only-ish subcommand; dispatch
@@ -145,21 +133,20 @@ def main(argv: list[str] | None = None) -> int:
 
     # O8: `rocky migrate-retros` — one-shot non-destructive migrator. Dry-run
     # is the default; `--no-dry-run` is required to modify files in-place.
+    # Flags arrive on ``args`` because they are registered in build_parser;
+    # ``--no-dry-run`` wins over ``--dry-run`` when both are passed so the
+    # opt-in live mode stays explicit.
     if args.task and args.task[0] == "migrate-retros":
         from rocky.commands.migrate_retros import cmd_migrate_retros
         dry_run = True
-        quarantine = False
-        for token in args.task[1:]:
-            if token == "--no-dry-run":
-                dry_run = False
-            elif token == "--dry-run":
-                dry_run = True
-            elif token == "--quarantine":
-                quarantine = True
+        if args.dry_run:
+            dry_run = True
+        if args.no_dry_run:
+            dry_run = False
         return cmd_migrate_retros(
             cwd=cwd,
             dry_run=dry_run,
-            quarantine=quarantine,
+            quarantine=args.quarantine,
             output_json=args.json,
         )
 

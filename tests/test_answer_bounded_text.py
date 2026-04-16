@@ -99,3 +99,21 @@ def test_agent_response_default_bounded_text_is_empty_string() -> None:
         verification={"status": "pass"},
     )
     assert response.answer_bounded_text == ""
+
+
+def test_strip_markers_importable_from_rocky_root() -> None:
+    """A2 follow-up: integrators can import `strip_markers` and the marker
+    constants from the `rocky` root without knowing the internal
+    `rocky.core.agent` path. The README names `strip_markers` explicitly as
+    the public helper; this test locks that surface."""
+    from rocky import ANSWER_CLOSE_MARKER as ROOT_CLOSE
+    from rocky import ANSWER_OPEN_MARKER as ROOT_OPEN
+    from rocky import strip_markers as root_strip
+
+    assert callable(root_strip)
+    assert ROOT_OPEN == "<<<ANSWER>>>"
+    assert ROOT_CLOSE == "<<<END>>>"
+
+    # Identity: the root re-export is the same function object, not a shim.
+    from rocky.core.agent import strip_markers as internal_strip
+    assert root_strip is internal_strip

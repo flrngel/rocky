@@ -22,7 +22,7 @@ from rocky.core.agent import (
     _LOOP_GUARD_THRESHOLD,
     _args_hash,
     _maybe_cached_tool_call,
-)
+)  # noqa: F401 — AgentCore used by A4 source-inspection tests below
 from rocky.core.messages import Message
 
 
@@ -388,3 +388,69 @@ def test_loop_guard_counter_zero_when_no_repeats() -> None:
             loop_guard_counter=counter,
         )
     assert counter[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# A4 follow-up — Repair-path loop-guard counter invariants (review S1 fix).
+# Three tests locking:
+#   (1) AgentCore.__init__ initializes _last_repair_loop_guard_hits to 0.
+#   (2) _maybe_cached_tool_call increments the loop_guard_counter after the
+#       threshold — this is exactly the mechanism the repair path relies on.
+#   (3) AgentCore.run resets _last_repair_loop_guard_hits at entry so a prior
+#       turn's count does not leak into this turn's trace.
+# ---------------------------------------------------------------------------
+
+
+def test_last_repair_loop_guard_hits_initializes_to_zero() -> None:
+    """AgentCore must carry ``_last_repair_loop_guard_hits`` as an int-field
+    initialized to 0. Without the init line, the repair-path carry-field is
+    undefined until ``run()`` is entered, breaking the S1 aggregation
+    contract that rolls the repair-path counter into ``trace["loop_guard_hits"]``.
+    """
+    src = inspect.getsource(AgentCore.__init__)
+    assert "self._last_repair_loop_guard_hits" in src and "= 0" in src, (
+        "AgentCore.__init__ must initialize _last_repair_loop_guard_hits = 0."
+    )
+
+
+def test_cached_tool_call_accumulates_loop_guard_counter() -> None:
+    """The repair path's ``loop_guard_counter`` is exactly the mechanism that
+    ``_maybe_cached_tool_call`` increments past ``_LOOP_GUARD_THRESHOLD``.
+    Directly witness that the counter kwarg is honored on identical repeated
+    calls — this is what the repair path depends on for S1 aggregation."""
+    cache, hits, guard_emitted, messages = _make_state()
+    dispatch = _constant_dispatch("ok")
+    counter = [0]
+
+    # _LOOP_GUARD_THRESHOLD is 3, so call 4× with the same (name, args)
+    # to guarantee the guard fires.
+    for _ in range(4):
+        _maybe_cached_tool_call(
+            tool_call_cache=cache,
+            tool_call_hits=hits,
+            loop_guard_emitted=guard_emitted,
+            messages=messages,
+            name="read_file",
+            arguments={"path": "a.txt"},
+            dispatch_fn=dispatch,
+            loop_guard_counter=counter,
+        )
+
+    assert counter[0] >= 1, (
+        "loop_guard_counter must be incremented at least once after "
+        f"_LOOP_GUARD_THRESHOLD ({_LOOP_GUARD_THRESHOLD}) identical calls."
+    )
+
+
+def test_agent_core_run_resets_repair_loop_guard_hits_at_entry() -> None:
+    """Review S1 requires ``run()`` to zero ``_last_repair_loop_guard_hits``
+    at entry so a prior turn's count does not leak into this turn's trace.
+    Lint-level source witness per durable lesson L1 (invariants as tests);
+    avoids the construction cost of a full ``run()`` invocation just to
+    prove that a single reset line lives in the right method."""
+    src = inspect.getsource(AgentCore.run)
+    assert "self._last_repair_loop_guard_hits = 0" in src, (
+        "AgentCore.run must reset self._last_repair_loop_guard_hits to 0 at "
+        "entry — the line must live in run(), not __init__ alone, or a "
+        "prior turn's count leaks into this turn's trace."
+    )

@@ -164,6 +164,58 @@ def test_cli_stats_subprocess(tmp_path: Path) -> None:
     assert data["total_runs"] >= 1
 
 
+@pytest.mark.skipif(not _ROCKY_BIN.exists(), reason="rocky CLI not installed in venv")
+def test_cli_stats_subprocess_filter_flags_reach_command(tmp_path: Path) -> None:
+    """O15 filter flags (--since, --last, --tool, --per-day) must be accepted
+    by argparse so the stats dispatch can read them. Before the fix that
+    accompanied the migrate-retros CLI repair, argparse rejected these
+    flags with 'unrecognized arguments' and the documented stats filtering
+    never reached the command."""
+    # Two traces: one matches --tool search_web, one does not.
+    _make_trace(
+        tmp_path,
+        "run-match.json",
+        task_signature="research/live_compare/general",
+        tool_events=[{"tool": "search_web"}],
+        verification_status="pass",
+    )
+    _make_trace(
+        tmp_path,
+        "run-nomatch.json",
+        task_signature="repo/shell_execution",
+        tool_events=[{"tool": "run_shell_command"}],
+        verification_status="pass",
+    )
+
+    proc = subprocess.run(
+        [
+            str(_ROCKY_BIN),
+            "stats",
+            "--cwd",
+            str(tmp_path),
+            "--tool",
+            "search_web",
+            "--last",
+            "10",
+            "--per-day",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, f"stderr: {proc.stderr}"
+    data = json.loads(proc.stdout)
+    # Filter wired through: only the run with search_web is counted.
+    assert data["total_runs"] == 1, (
+        "--tool search_web must narrow the aggregate to the single matching "
+        f"trace; got total_runs={data.get('total_runs')}. If this fires, the "
+        "argparse registration of --tool is missing or the dispatch no longer "
+        "passes args.stats_tool to rocky_stats()."
+    )
+    assert data["tool_counts"].get("search_web", 0) >= 1
+
+
 # ---------------------------------------------------------------------------
 # 6. Real trace filename pattern — guard against directory/format drift
 # ---------------------------------------------------------------------------

@@ -165,13 +165,47 @@ def test_tool_route_hints_derived_from_task_tool_priority() -> None:
     )
 
 
-def test_tool_route_hints_preserve_hand_curated_overrides() -> None:
-    """Explicit overrides in _TOOL_ROUTE_OVERRIDES must win over first-appearance
-    derivation so operator-facing reroute hints remain predictable."""
-    from rocky.tools.registry import _TOOL_ROUTE_OVERRIDES, _suggest_route_for_tool
+def test_tool_route_hints_preserve_hand_curated_overrides(monkeypatch) -> None:
+    """A synthetic divergent override in ``_TOOL_ROUTE_OVERRIDES`` must win
+    over first-appearance derivation so operator-facing reroute hints remain
+    predictable. The dict is currently empty (A1 cleanup); the test injects
+    a synthetic entry that genuinely diverges from what derivation would
+    produce so the override layer's bite is witnessed on a real tool.
 
-    for tool_name, expected_route in _TOOL_ROUTE_OVERRIDES.items():
-        assert _suggest_route_for_tool(tool_name) == expected_route
+    The synthetic override maps ``read_file`` to ``site/understanding/general``.
+    First-appearance derivation routes ``read_file`` to ``repo/shell_execution``
+    (its first signature in ``TASK_TOOL_PRIORITY``). The two differ, so if the
+    override layer ever stops winning over derivation, the first assertion
+    fires immediately.
+    """
+    from rocky.tools import registry as tr
+
+    derived_default = tr._derive_tool_route_hints()
+    # Precondition: derivation produces a concrete (non-override) route for
+    # the chosen tool. If this ever changes, the test's divergence claim
+    # must be re-anchored.
+    assert derived_default["read_file"] == "repo/shell_execution", (
+        "Test precondition: first-appearance derivation must route read_file "
+        "to repo/shell_execution. Rebaseline the synthetic divergent override "
+        "if TASK_TOOL_PRIORITY ordering changes."
+    )
+
+    synthetic = {"read_file": "site/understanding/general"}
+    monkeypatch.setattr(tr, "_TOOL_ROUTE_OVERRIDES", synthetic)
+    monkeypatch.setattr(tr, "_TOOL_ROUTE_HINTS", tr._derive_tool_route_hints())
+    assert tr._suggest_route_for_tool("read_file") == "site/understanding/general", (
+        "Override must win over first-appearance derivation. If this fires, "
+        "_derive_tool_route_hints is merging overrides in the wrong order "
+        "(derivation silently clobbers operator-facing overrides)."
+    )
+
+    # Sensitivity: clearing the override makes derivation take over.
+    monkeypatch.setattr(tr, "_TOOL_ROUTE_OVERRIDES", {})
+    monkeypatch.setattr(tr, "_TOOL_ROUTE_HINTS", tr._derive_tool_route_hints())
+    assert tr._suggest_route_for_tool("read_file") == "repo/shell_execution", (
+        "Without an override, derivation routes read_file to its "
+        "first-appearance signature (repo/shell_execution)."
+    )
 
 
 def test_error_shapes_use_consistent_reason_key() -> None:

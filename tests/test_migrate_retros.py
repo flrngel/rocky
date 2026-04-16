@@ -188,3 +188,115 @@ def test_missing_retros_dir_returns_nonzero(tmp_path: Path) -> None:
     # No workspace setup.
     code = cmd_migrate_retros(tmp_path, dry_run=True)
     assert code == 1
+
+
+# --------------------------------------------------------------------------
+# 7. A5 follow-up — CLI subprocess coverage for the argparse token-scan
+#     path in src/rocky/cli.py:146-164. Existing unit tests call
+#     cmd_migrate_retros(cwd=...) directly and do not exercise the CLI
+#     dispatch that walks args.task[1:] for --no-dry-run / --quarantine.
+# --------------------------------------------------------------------------
+
+import subprocess
+
+import pytest
+
+_ROCKY_BIN = Path(__file__).parent.parent / ".venv" / "bin" / "rocky"
+
+
+@pytest.mark.skipif(not _ROCKY_BIN.exists(), reason="rocky CLI not installed in venv")
+def test_cli_migrate_retros_dry_run_json(tmp_path: Path) -> None:
+    """CLI dispatch with no flags must reach cmd_migrate_retros(dry_run=True)
+    via the default branch in the token-scan. --json yields parseable JSON
+    and on-disk state is unchanged."""
+    _setup_workspace(tmp_path)
+    retros = tmp_path / ".rocky" / "student" / "retrospectives"
+    _write_retro(
+        retros,
+        "retro-ungrounded",
+        evidence=["Completely unrelated widget claim."],
+    )
+    mtimes_before = {p.name: p.stat().st_mtime_ns for p in retros.glob("*.md")}
+
+    proc = subprocess.run(
+        [str(_ROCKY_BIN), "migrate-retros", "--cwd", str(tmp_path), "--json"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, f"stderr: {proc.stderr}"
+    # Stdout must parse as JSON — the dry-run path emits a plan object.
+    json.loads(proc.stdout)
+
+    mtimes_after = {p.name: p.stat().st_mtime_ns for p in retros.glob("*.md")}
+    assert mtimes_after == mtimes_before, "dry-run must not modify files"
+
+
+@pytest.mark.skipif(not _ROCKY_BIN.exists(), reason="rocky CLI not installed in venv")
+def test_cli_migrate_retros_no_dry_run_flags_on_disk(tmp_path: Path) -> None:
+    """--no-dry-run token must reach cmd_migrate_retros(dry_run=False);
+    frontmatter is edited in-place. False-success trap: if the token-scan
+    silently fails-open to dry-run, neither flag appears on disk and the
+    assertion fires."""
+    _setup_workspace(tmp_path)
+    retros = tmp_path / ".rocky" / "student" / "retrospectives"
+    _write_retro(
+        retros,
+        "retro-ungrounded",
+        evidence=["Completely unrelated widget claim."],
+    )
+
+    proc = subprocess.run(
+        [
+            str(_ROCKY_BIN),
+            "migrate-retros",
+            "--cwd",
+            str(tmp_path),
+            "--no-dry-run",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, f"stderr: {proc.stderr}"
+
+    text = (retros / "retro-ungrounded.md").read_text(encoding="utf-8")
+    lower = text.lower()
+    assert "unverified: true" in lower or "grounded: true" in lower, (
+        "Live mode must have flagged the retro's frontmatter. If neither "
+        "flag appears, the CLI token-scan silently failed-open to dry-run."
+    )
+
+
+@pytest.mark.skipif(not _ROCKY_BIN.exists(), reason="rocky CLI not installed in venv")
+def test_cli_migrate_retros_quarantine_moves_file(tmp_path: Path) -> None:
+    """--quarantine token must reach cmd_migrate_retros(quarantine=True);
+    ungrounded retros move to the quarantine dir."""
+    _setup_workspace(tmp_path)
+    retros = tmp_path / ".rocky" / "student" / "retrospectives"
+    original = _write_retro(
+        retros,
+        "retro-ungrounded",
+        evidence=["Completely unrelated widget claim."],
+    )
+
+    proc = subprocess.run(
+        [
+            str(_ROCKY_BIN),
+            "migrate-retros",
+            "--cwd",
+            str(tmp_path),
+            "--no-dry-run",
+            "--quarantine",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, f"stderr: {proc.stderr}"
+
+    quarantined = retros / "quarantine" / "retro-ungrounded.md"
+    assert quarantined.exists(), "quarantine mode must move the ungrounded retro"
+    assert not original.exists(), "original must be moved out of the main dir"
