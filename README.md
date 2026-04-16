@@ -188,6 +188,6 @@ docs/xlfg/          # current state, hyperlearning backlog, run evidence
 
 ## Status
 
-Active development. v1.0.4. Phase 1 of Hyperlearning v2 shipped. Phases 2–4 (unified retrieval, bounded meta-learning archive, transfer evaluation) on the backlog.
+Active development. v1.0.5. Phase 1 of Hyperlearning v2 shipped. Phases 2–4 (unified retrieval, bounded meta-learning archive, transfer evaluation) on the backlog.
 
 License: MIT.
