@@ -7,6 +7,7 @@ import subprocess
 from typing import Any
 
 from rocky.tools.base import Tool, ToolContext, ToolResult
+from rocky.util.redaction import redact_env_output
 from rocky.util.text import truncate
 
 
@@ -235,15 +236,15 @@ def agent_browser(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                 "command": command,
                 "cwd": str(cwd.relative_to(ctx.workspace_root)),
                 "timeout_s": timeout_s,
-                "stdout": truncate(exc.stdout or "", ctx.config.tools.max_tool_output_chars),
-                "stderr": truncate(exc.stderr or "", ctx.config.tools.max_tool_output_chars),
+                "stdout": redact_env_output(truncate(exc.stdout or "", ctx.config.tools.max_tool_output_chars)),
+                "stderr": redact_env_output(truncate(exc.stderr or "", ctx.config.tools.max_tool_output_chars)),
             },
             f"agent-browser timed out after {timeout_s}s",
             metadata,
         )
 
-    stdout = truncate(proc.stdout, ctx.config.tools.max_tool_output_chars)
-    stderr = truncate(proc.stderr, ctx.config.tools.max_tool_output_chars)
+    stdout = redact_env_output(truncate(proc.stdout, ctx.config.tools.max_tool_output_chars))
+    stderr = redact_env_output(truncate(proc.stderr, ctx.config.tools.max_tool_output_chars))
     observations, json_success = _extract_browser_observations(command, proc.stdout)
     failure_text = _extract_agent_browser_failure_text(proc.stdout, proc.stderr)
     runtime_unavailable = proc.returncode != 0 and _is_browser_runtime_unavailable(proc.stdout, proc.stderr)

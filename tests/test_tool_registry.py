@@ -143,3 +143,64 @@ def test_openai_tool_schema_defaults_to_closed_object_properties() -> None:
     assert schema["additionalProperties"] is False
     assert schema["properties"]["options"]["type"] == "object"
     assert schema["properties"]["options"]["additionalProperties"] is False
+
+
+# ---------------------------------------------------------------------------
+# O7 — Tool-registry auto-derivation + error-shape consistency
+# ---------------------------------------------------------------------------
+
+
+def test_tool_route_hints_derived_from_task_tool_priority() -> None:
+    """Every tool that appears in TASK_TOOL_PRIORITY must have a route hint,
+    so adding a new tool to TASK_TOOL_PRIORITY cannot drift silently."""
+    from rocky.tools.registry import TASK_TOOL_PRIORITY, _TOOL_ROUTE_HINTS
+
+    tools_from_priority: set[str] = set()
+    for tools_for_sig in TASK_TOOL_PRIORITY.values():
+        tools_from_priority.update(tools_for_sig)
+    missing = tools_from_priority - _TOOL_ROUTE_HINTS.keys()
+    assert missing == set(), (
+        f"_TOOL_ROUTE_HINTS is missing derived entries for: {sorted(missing)}. "
+        "The derivation should cover every tool listed in TASK_TOOL_PRIORITY."
+    )
+
+
+def test_tool_route_hints_preserve_hand_curated_overrides() -> None:
+    """Explicit overrides in _TOOL_ROUTE_OVERRIDES must win over first-appearance
+    derivation so operator-facing reroute hints remain predictable."""
+    from rocky.tools.registry import _TOOL_ROUTE_OVERRIDES, _suggest_route_for_tool
+
+    for tool_name, expected_route in _TOOL_ROUTE_OVERRIDES.items():
+        assert _suggest_route_for_tool(tool_name) == expected_route
+
+
+def test_error_shapes_use_consistent_reason_key() -> None:
+    """All three tool-error dicts (tool_not_exposed, blocked_verification_command,
+    tool_name_in_shell) must carry a ``reason`` key. ``message`` is not an
+    accepted alternate; consistency is the contract."""
+    # Import inline to avoid circulars in test collection.
+    from pathlib import Path as _Path
+    src = _Path(__file__).resolve().parent.parent / "src" / "rocky" / "tools"
+    shell_src = (src / "shell.py").read_text(encoding="utf-8")
+    reg_src = (src / "registry.py").read_text(encoding="utf-8")
+
+    # tool_not_exposed lives in registry.py: it must carry "reason"
+    assert '"error": "tool_not_exposed"' in reg_src
+    assert '"reason"' in reg_src
+
+    # Both shell-side error shapes must carry "reason".
+    assert '"error": "blocked_verification_command"' in shell_src
+    assert '"error": "tool_name_in_shell"' in shell_src
+    # Ensure neither shape still uses the old "message" key on a same-dict line.
+    for block_label in ("blocked_verification_command", "tool_name_in_shell"):
+        # Walk forward from the label and confirm "reason" appears before the
+        # next closing brace (a rough structural check).
+        start = shell_src.index(block_label)
+        slice_until_brace = shell_src[start:start + 1200]
+        closing_brace = slice_until_brace.find("},")
+        assert closing_brace > 0
+        error_block = slice_until_brace[:closing_brace]
+        assert '"reason"' in error_block, (
+            f"{block_label} error dict must carry 'reason' key; "
+            f"saw: {error_block}"
+        )

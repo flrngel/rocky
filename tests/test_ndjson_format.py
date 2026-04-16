@@ -126,8 +126,12 @@ class TestCliParserWiring:
         assert args.format == "ndjson"
 
     def test_format_choices_enforced(self):
-        """Only the listed choices should be accepted."""
-        for bad in ["plain", "jsonl", "xml"]:
+        """Only the listed choices should be accepted.
+
+        O6: ``jsonl`` is now an accepted alias for ``ndjson`` and was removed
+        from the negative list. New bad choices exercise that truly unknown
+        values still reject."""
+        for bad in ["plain", "xml", "yaml"]:
             with pytest.raises(SystemExit) as exc_info:
                 build_parser().parse_args(["--format", bad, "task"])
             assert exc_info.value.code != 0

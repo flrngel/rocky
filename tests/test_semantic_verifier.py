@@ -299,3 +299,101 @@ def test_config_gate_disabled_skips_semantic() -> None:
     assert result.name != "semantic_research_v1", (
         f"semantic_research_v1 must not activate when disabled, got name={result.name!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# O12: per-claim confidence field on VerificationResult
+# ---------------------------------------------------------------------------
+
+
+def test_claim_confidences_populated_for_research_route() -> None:
+    """After semantic_research_v1 runs, claim_confidences must be populated,
+    scores must be in [0.0, 1.0], and a fully-matched claim must score 1.0."""
+    verifier = VerifierRegistry()
+    route = _research_route()
+    tool_events = [_fetch_event(
+        "GitHub Trending highlights microsoft/typescript as a trending repository. "
+        "TypeScript is a language for application-scale JavaScript."
+    )]
+
+    result = verifier.verify(
+        prompt="what is trending on github right now?",
+        route=route,
+        task_class=route.task_class,
+        output=_with_citation(
+            "GitHub Trending currently highlights microsoft/typescript. "
+            "Widget Ltd is unrelated."
+        ),
+        tool_events=tool_events,
+        config=_make_config(),
+    )
+
+    assert isinstance(result.claim_confidences, dict)
+    assert all(0.0 <= v <= 1.0 for v in result.claim_confidences.values()), (
+        f"Scores out of range: {result.claim_confidences}"
+    )
+    # "GitHub Trending" is directly present in the payload: tokens
+    # {"github","trending"} fully overlap -> score 1.0.
+    assert "GitHub Trending" in result.claim_confidences
+    assert result.claim_confidences["GitHub Trending"] == 1.0, (
+        f"Expected fully-matched claim to score 1.0; got {result.claim_confidences}"
+    )
+
+
+def test_claim_confidences_include_unsupported_with_low_score() -> None:
+    """An unsupported claim (no payload overlap) should score 0.0 in the
+    confidences map, not be silently dropped."""
+    verifier = VerifierRegistry()
+    route = _research_route()
+    tool_events = [_fetch_event("Acme Corp provides cloud services.")]
+
+    result = verifier.verify(
+        prompt="who leads quantum networking?",
+        route=route,
+        task_class=route.task_class,
+        output=_with_citation("Widget Ltd leads the quantum networking market."),
+        tool_events=tool_events,
+        config=_make_config(),
+    )
+
+    assert "Widget Ltd" in result.claim_confidences
+    assert result.claim_confidences["Widget Ltd"] == 0.0
+
+
+def test_claim_confidences_default_empty_when_disabled() -> None:
+    """When the semantic verifier is disabled, VerificationResult still has a
+    ``claim_confidences`` attribute (CF-4) but it is an empty dict."""
+    verifier = VerifierRegistry()
+    route = _research_route()
+
+    result = verifier.verify(
+        prompt="whatever",
+        route=route,
+        task_class=route.task_class,
+        output=_with_citation("The capital of France is Paris."),
+        tool_events=[_fetch_event("Paris is the capital of France.")],
+        config=_make_config(semantic_enabled=False),
+    )
+
+    assert hasattr(result, "claim_confidences")
+    assert result.claim_confidences == {}
+
+
+def test_claim_confidences_roundtrip_through_as_record() -> None:
+    """as_record() must include claim_confidences so trace/serialization
+    callers see the field."""
+    verifier = VerifierRegistry()
+    route = _research_route()
+    tool_events = [_fetch_event("GitHub Trending lists TypeScript.")]
+
+    result = verifier.verify(
+        prompt="whats trending?",
+        route=route,
+        task_class=route.task_class,
+        output=_with_citation("GitHub Trending currently lists TypeScript."),
+        tool_events=tool_events,
+        config=_make_config(),
+    )
+    record = result.as_record()
+    assert "claim_confidences" in record
+    assert record["claim_confidences"] == result.claim_confidences

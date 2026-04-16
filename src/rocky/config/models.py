@@ -64,6 +64,23 @@ class VerifierConfig:
 
 
 @dataclass(slots=True)
+class TracingConfig:
+    """Retention policy for persisted trace JSON files (O16).
+
+    ``.rocky/traces/`` can otherwise grow unboundedly. Both limits default to
+    ``None`` (unlimited) to preserve bit-identical behavior for callers who
+    have not opted in.
+
+    Eviction rule: oldest-first. When either ``max_age_days`` or
+    ``max_trace_count`` is exceeded, the oldest traces are deleted until both
+    constraints are satisfied.
+    """
+
+    max_age_days: int | None = None
+    max_trace_count: int | None = None
+
+
+@dataclass(slots=True)
 class RetrievalConfig:
     """Tunable knobs for `LedgerRetriever` ranking.
 
@@ -136,6 +153,7 @@ class AppConfig:
     tools: ToolConfig = field(default_factory=ToolConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
     verifier: VerifierConfig = field(default_factory=VerifierConfig)
+    tracing: TracingConfig = field(default_factory=TracingConfig)
 
     def provider(self, name: str | None = None) -> ProviderConfig:
         selected = name or self.active_provider

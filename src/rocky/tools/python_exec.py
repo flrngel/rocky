@@ -6,6 +6,7 @@ import uuid
 from typing import Any
 
 from rocky.tools.base import Tool, ToolContext, ToolResult
+from rocky.util.redaction import redact_env_output
 from rocky.util.text import truncate
 
 
@@ -37,16 +38,16 @@ def run_python(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             'script_path': str(script_path),
             'cwd': str(cwd.relative_to(ctx.workspace_root)),
             'returncode': proc.returncode,
-            'stdout': truncate(proc.stdout, ctx.config.tools.max_tool_output_chars),
-            'stderr': truncate(proc.stderr, ctx.config.tools.max_tool_output_chars),
+            'stdout': redact_env_output(truncate(proc.stdout, ctx.config.tools.max_tool_output_chars)),
+            'stderr': redact_env_output(truncate(proc.stderr, ctx.config.tools.max_tool_output_chars)),
         }
         return ToolResult(proc.returncode == 0, data, f'Python exited with {proc.returncode}', metadata)
     except subprocess.TimeoutExpired as exc:
         return ToolResult(False, {
             'script_path': str(script_path),
             'timeout_s': timeout_s,
-            'stdout': truncate(exc.stdout or '', ctx.config.tools.max_tool_output_chars),
-            'stderr': truncate(exc.stderr or '', ctx.config.tools.max_tool_output_chars),
+            'stdout': redact_env_output(truncate(exc.stdout or '', ctx.config.tools.max_tool_output_chars)),
+            'stderr': redact_env_output(truncate(exc.stderr or '', ctx.config.tools.max_tool_output_chars)),
         }, f'Python timed out after {timeout_s}s', metadata)
 
 

@@ -285,3 +285,106 @@ def test_args_hash_different_values_produce_different_hash():
     h1 = _args_hash({"cmd": "ls"})
     h2 = _args_hash({"cmd": "pwd"})
     assert h1 != h2
+
+
+# ---------------------------------------------------------------------------
+# O18 — loop-guard counter telemetry
+# ---------------------------------------------------------------------------
+
+
+def test_loop_guard_counter_increments_on_injection() -> None:
+    """When the loop-guard fires, the provided counter list[0] should increment.
+    Each distinct (name, args) key only injects once per turn, so the counter
+    equals the number of distinct keys that crossed the threshold."""
+    cache, hits, emitted, messages = _make_state()
+    counter: list[int] = [0]
+    dispatch = _constant_dispatch("same")
+
+    # First 3 calls: one real + two cached hits -> guard fires exactly once
+    # (the third call crosses the threshold).
+    for _ in range(_LOOP_GUARD_THRESHOLD):
+        _maybe_cached_tool_call(
+            tool_call_cache=cache,
+            tool_call_hits=hits,
+            loop_guard_emitted=emitted,
+            messages=messages,
+            name="list_files",
+            arguments={"path": "."},
+            dispatch_fn=dispatch,
+            loop_guard_counter=counter,
+        )
+
+    assert counter[0] == 1, (
+        f"Expected counter to be 1 after threshold crossing; got {counter[0]}"
+    )
+    assert any(
+        isinstance(m.content, str) and _LOOP_GUARD_SENTINEL in m.content
+        for m in messages
+    )
+
+
+def test_loop_guard_counter_does_not_double_count_same_key() -> None:
+    """Subsequent identical calls after the guard has fired must NOT increment
+    the counter a second time — the guard is once-per-key per turn."""
+    cache, hits, emitted, messages = _make_state()
+    counter: list[int] = [0]
+    dispatch = _constant_dispatch("same")
+
+    for _ in range(_LOOP_GUARD_THRESHOLD + 3):  # cross threshold, then keep calling
+        _maybe_cached_tool_call(
+            tool_call_cache=cache,
+            tool_call_hits=hits,
+            loop_guard_emitted=emitted,
+            messages=messages,
+            name="list_files",
+            arguments={"path": "."},
+            dispatch_fn=dispatch,
+            loop_guard_counter=counter,
+        )
+
+    assert counter[0] == 1, (
+        f"Expected counter to stay at 1 for a single recurring key; got {counter[0]}"
+    )
+
+
+def test_loop_guard_counter_is_optional() -> None:
+    """CF-4: callers that don't pass a counter must still get guard injection
+    without error (counter kwarg is default None)."""
+    cache, hits, emitted, messages = _make_state()
+    dispatch = _constant_dispatch("same")
+
+    for _ in range(_LOOP_GUARD_THRESHOLD):
+        _maybe_cached_tool_call(
+            tool_call_cache=cache,
+            tool_call_hits=hits,
+            loop_guard_emitted=emitted,
+            messages=messages,
+            name="list_files",
+            arguments={"path": "."},
+            dispatch_fn=dispatch,
+        )
+    # Guard must still fire even without a counter argument.
+    assert any(
+        isinstance(m.content, str) and _LOOP_GUARD_SENTINEL in m.content
+        for m in messages
+    )
+
+
+def test_loop_guard_counter_zero_when_no_repeats() -> None:
+    """No repeated calls -> counter stays 0 (CF-4)."""
+    cache, hits, emitted, messages = _make_state()
+    counter: list[int] = [0]
+    dispatch = _constant_dispatch("unique")
+
+    for i in range(5):
+        _maybe_cached_tool_call(
+            tool_call_cache=cache,
+            tool_call_hits=hits,
+            loop_guard_emitted=emitted,
+            messages=messages,
+            name="list_files",
+            arguments={"path": f"/unique/{i}"},
+            dispatch_fn=dispatch,
+            loop_guard_counter=counter,
+        )
+    assert counter[0] == 0

@@ -29,37 +29,39 @@ def _tokens(text: str) -> set[str]:
 def _payload_text(event: Any) -> str:
     """Normalize a tool event into a single string of its payload.
 
-    Uses rocky.tool_events.tool_event_payload if available; falls back to a
-    best-effort extraction that never raises.
+    O2: This function used to lazy-import
+    ``rocky.tool_events.tool_event_payload`` from within the function body to
+    avoid a module-load-time import cycle (``util/`` → ``tool_events`` →
+    ``tools/base``). The lazy import was invisible to static analysis and
+    would fail at runtime if ``util/`` were ever extracted to its own package.
+    We now cover both the modern tool-event shape (``raw_text`` field produced
+    by :func:`rocky.tool_events.normalize_tool_result_event`) and the legacy
+    shape (``stdout``/``stderr``/``output``/``content``/``text``/``body``
+    dict keys) directly, without any import of ``rocky.tool_events``.
+
+    Never raises; always returns a string (possibly empty).
     """
-    try:
-        from rocky.tool_events import tool_event_payload
-    except Exception:  # pragma: no cover - defensive
-        tool_event_payload = None  # type: ignore[assignment]
-    if tool_event_payload is not None:
-        try:
-            payload = tool_event_payload(event)
-            if isinstance(payload, str):
-                return payload
-            if payload is None:
-                return ""
-            # Fall through to generic serialization
-        except Exception:
-            payload = None
-    # Generic fallback: stringify event fields that are likely to contain text
     if isinstance(event, dict):
+        # Modern shape: payloads normalized via normalize_tool_result_event
+        # expose the canonical serialized payload under ``raw_text``. If it is
+        # JSON, return the structured string so downstream tokenization picks
+        # up field names as well as values.
+        raw_text = event.get("raw_text")
+        if isinstance(raw_text, str) and raw_text:
+            return raw_text
+        # Legacy shape: capture every string-valued text channel we know about.
         parts: list[str] = []
-        for key in ("stdout", "stderr", "output", "content", "text", "body"):
+        for key in ("stdout", "stderr", "output", "content", "text", "body", "model_text", "summary_text"):
             value = event.get(key)
-            if isinstance(value, str):
+            if isinstance(value, str) and value:
                 parts.append(value)
-        if not parts:
-            # Last resort: full repr without raising
-            try:
-                parts.append(str(event))
-            except Exception:
-                pass
-        return "\n".join(parts)
+        if parts:
+            return "\n".join(parts)
+        # Last resort: safely serialize the whole dict.
+        try:
+            return str(event)
+        except Exception:
+            return ""
     if isinstance(event, str):
         return event
     try:

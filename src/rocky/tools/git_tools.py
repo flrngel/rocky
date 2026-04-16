@@ -4,6 +4,7 @@ import subprocess
 from typing import Any
 
 from rocky.tools.base import Tool, ToolContext, ToolResult
+from rocky.util.redaction import redact_env_output
 from rocky.util.text import truncate
 
 
@@ -18,8 +19,8 @@ def _git(ctx: ToolContext, args: list[str], cwd: str | None = None) -> ToolResul
     return ToolResult(proc.returncode == 0, {
         'cwd': str(path.relative_to(ctx.workspace_root)),
         'returncode': proc.returncode,
-        'stdout': truncate(proc.stdout, ctx.config.tools.max_tool_output_chars),
-        'stderr': truncate(proc.stderr, ctx.config.tools.max_tool_output_chars),
+        'stdout': redact_env_output(truncate(proc.stdout, ctx.config.tools.max_tool_output_chars)),
+        'stderr': redact_env_output(truncate(proc.stderr, ctx.config.tools.max_tool_output_chars)),
     }, f'git {' '.join(args)} -> {proc.returncode}', metadata)
 
 

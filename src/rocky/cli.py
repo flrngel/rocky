@@ -31,7 +31,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--continue-session", dest="continue_session", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--freeze", action="store_true", help="Read existing Rocky state but do not persist new Rocky state")
     parser.add_argument("--verbose", action="store_true", help="Show full tool call and tool result logs")
-    parser.add_argument("--format", choices=["ndjson"], default=None, dest="format", help="Output format for one-shot tasks (ndjson = one JSON object per line)")
+    parser.add_argument(
+        "--format",
+        choices=["ndjson", "jsonl"],
+        default=None,
+        dest="format",
+        help="Output format for one-shot tasks (ndjson = one JSON object per line; jsonl = alias)",
+    )
     parser.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--json", action="store_true", help="Print machine-readable output for one-shot tasks")
     parser.add_argument("-V", "--version", action="store_true", help="Print Rocky version and exit")
@@ -94,8 +100,68 @@ def main(argv: list[str] | None = None) -> int:
     # stats subcommand — read-only aggregation; dispatch before any provider init
     requested_text = " ".join(args.task).strip() if args.task else None
     if requested_text == "stats" or (args.task and args.task[0] == "stats"):
+        # O15: parse optional filter flags from the tail of args.task. Use
+        # argparse-style pairs so the CLI does not need a full subparser.
+        stats_since: str | None = None
+        stats_last: int | None = None
+        stats_tool: str | None = None
+        stats_per_day: bool = False
+        tail = args.task[1:] if args.task else []
+        i = 0
+        while i < len(tail):
+            token = tail[i]
+            if token == "--since" and i + 1 < len(tail):
+                stats_since = tail[i + 1]
+                i += 2
+            elif token == "--last" and i + 1 < len(tail):
+                try:
+                    stats_last = int(tail[i + 1])
+                except ValueError:
+                    parser.error(f"--last expects an integer, got {tail[i + 1]!r}")
+                i += 2
+            elif token == "--tool" and i + 1 < len(tail):
+                stats_tool = tail[i + 1]
+                i += 2
+            elif token == "--per-day":
+                stats_per_day = True
+                i += 1
+            else:
+                i += 1
         from rocky.commands.stats import rocky_stats
-        return rocky_stats(cwd=cwd, output_json=args.json)
+        return rocky_stats(
+            cwd=cwd,
+            output_json=args.json,
+            since=stats_since,
+            last=stats_last,
+            tool=stats_tool,
+            per_day=stats_per_day,
+        )
+
+    # O5: `rocky retros {list|pin|discard}` — read-only-ish subcommand; dispatch
+    # before provider init so it works in frozen/offline environments.
+    if args.task and args.task[0] == "retros":
+        from rocky.commands.retros import cmd_retros
+        return cmd_retros(cwd=cwd, args=list(args.task[1:]), output_json=args.json)
+
+    # O8: `rocky migrate-retros` — one-shot non-destructive migrator. Dry-run
+    # is the default; `--no-dry-run` is required to modify files in-place.
+    if args.task and args.task[0] == "migrate-retros":
+        from rocky.commands.migrate_retros import cmd_migrate_retros
+        dry_run = True
+        quarantine = False
+        for token in args.task[1:]:
+            if token == "--no-dry-run":
+                dry_run = False
+            elif token == "--dry-run":
+                dry_run = True
+            elif token == "--quarantine":
+                quarantine = True
+        return cmd_migrate_retros(
+            cwd=cwd,
+            dry_run=dry_run,
+            quarantine=quarantine,
+            output_json=args.json,
+        )
 
     requested_text = requested_text  # already set above
     configure_requested = requested_text in {"configure", "/configure"}
@@ -148,15 +214,21 @@ def main(argv: list[str] | None = None) -> int:
                 render_console_text(console, result.text)
             return 0
 
-        if args.verbose and getattr(args, "format", None) == "ndjson":
+        # O6: `jsonl` is an alias for `ndjson`; canonicalize so downstream
+        # logic only inspects one name.
+        _fmt = getattr(args, "format", None)
+        if _fmt == "jsonl":
+            _fmt = "ndjson"
+            args.format = "ndjson"
+        if args.verbose and _fmt == "ndjson":
             parser.error("--verbose and --format ndjson are mutually exclusive")
-        if getattr(args, "format", None) == "ndjson":
+        if _fmt == "ndjson":
             printer = NdjsonEventPrinter()
         elif args.json:
             printer = None
         else:
             printer = EventPrinter(make_live_console(console), verbose=args.verbose)
-        _use_ndjson = getattr(args, "format", None) == "ndjson"
+        _use_ndjson = _fmt == "ndjson"
         response = runtime.run_prompt(
             text,
             stream=not args.json,

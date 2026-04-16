@@ -135,6 +135,36 @@ _LOOP_GUARD_SENTINEL = "[rocky-loop-guard]"
 _LOOP_GUARD_THRESHOLD = 3
 
 
+# O4: public helpers for integrators parsing ``AgentResponse.answer_bounded_text``.
+ANSWER_OPEN_MARKER = "<<<ANSWER>>>"
+ANSWER_CLOSE_MARKER = "<<<END>>>"
+
+
+def strip_markers(bounded_text: str) -> str:
+    """Return the answer body with the ``<<<ANSWER>>>`` / ``<<<END>>>``
+    marker pair stripped and surrounding whitespace trimmed.
+
+    This is the canonical inverse of the marker-wrapping performed at
+    ``AgentCore._finalize``. Integrators that parse
+    :attr:`AgentResponse.answer_bounded_text` should call this helper rather
+    than string-slicing, so the round-trip invariant holds:
+    ``response.text == strip_markers(response.answer_bounded_text)``.
+    """
+    if not bounded_text:
+        return ""
+    text = bounded_text
+    # Strip the outermost marker pair if present.
+    if text.startswith(ANSWER_OPEN_MARKER):
+        text = text[len(ANSWER_OPEN_MARKER):]
+        if text.startswith("\n"):
+            text = text[1:]
+    if text.endswith(ANSWER_CLOSE_MARKER):
+        text = text[: -len(ANSWER_CLOSE_MARKER)]
+        if text.endswith("\n"):
+            text = text[:-1]
+    return text
+
+
 def _args_hash(arguments: dict[str, Any]) -> str:
     """Return a stable SHA-256 hex digest of *arguments* for dedup keying."""
     canonical = json.dumps(arguments, sort_keys=True, default=str)
@@ -150,6 +180,8 @@ def _maybe_cached_tool_call(
     name: str,
     arguments: dict[str, Any],
     dispatch_fn: Callable[[str, dict[str, Any]], str],
+    trace: dict[str, Any] | None = None,
+    loop_guard_counter: list[int] | None = None,
 ) -> str:
     """Wrap *dispatch_fn* with a per-turn dedup cache.
 
@@ -172,6 +204,9 @@ def _maybe_cached_tool_call(
         arguments: tool arguments dict.
         dispatch_fn: the real ``execute_tool(name, arguments) -> str``
             implementation.
+        trace: optional trace dict; when provided, each guard injection
+            increments ``trace["loop_guard_hits"]`` (O18 telemetry). Absent
+            trace: no counter update, same as prior behavior (CF-4).
 
     Returns:
         The (possibly cached) string result for this tool call.
@@ -189,6 +224,14 @@ def _maybe_cached_tool_call(
             )
             from rocky.core.messages import Message as _Message  # local to avoid circular at module level
             messages.append(_Message(role="user", content=guard_text))
+            # O18: telemetry. Each guard injection increments the trace
+            # counter (when a trace dict is provided) and/or a single-element
+            # integer counter list (when provided). Either path is safe to
+            # omit for callers that don't need telemetry (CF-4).
+            if trace is not None:
+                trace["loop_guard_hits"] = int(trace.get("loop_guard_hits", 0)) + 1
+            if loop_guard_counter is not None:
+                loop_guard_counter[0] = int(loop_guard_counter[0]) + 1
         return tool_call_cache[key]
     result = dispatch_fn(name, arguments)
     tool_call_cache[key] = result
@@ -321,6 +364,11 @@ class AgentCore:
         self.last_context: dict[str, Any] | None = None
         self.answer_contract_builder = AnswerContractBuilder()
         self.evidence_accumulator = EvidenceAccumulator()
+        # O18 aggregation (review S1 fix): per-run carry-field for the repair
+        # path's loop-guard hits. Reset at run() entry; read at trace build
+        # time and rolled into trace["loop_guard_hits"]. 0 when no repair
+        # path fired.
+        self._last_repair_loop_guard_hits: int = 0
 
     def _looks_like_backchannel_prompt(self, prompt: str) -> bool:
         words = re.findall(r"[a-z0-9_.+-]+", prompt.lower())
@@ -535,7 +583,36 @@ class AgentCore:
         payload["trace_path"] = str(trace_path)
         trace_path.write_text(redact_env_output(safe_json(payload)) + "\n", encoding="utf-8")
         trace["trace_path"] = str(trace_path)
+        # O16: enforce retention policy on write. Both limits default to
+        # ``None`` (unlimited) so callers who have not opted in see no
+        # deletion. Eviction is silent; ``rocky stats`` surfaces the status.
+        self._enforce_trace_retention()
         return str(trace_path)
+
+    def _enforce_trace_retention(self) -> None:
+        """Apply configured trace retention policy (O16).
+
+        Safe to call every write; a no-op when both limits are ``None``.
+        Import is local to avoid a module-load dependency on util.*.
+        """
+        tracing_cfg = getattr(
+            getattr(self.tool_registry.context, "config", None),
+            "tracing",
+            None,
+        )
+        if tracing_cfg is None:
+            return
+        max_age = getattr(tracing_cfg, "max_age_days", None)
+        max_count = getattr(tracing_cfg, "max_trace_count", None)
+        if max_age is None and max_count is None:
+            return
+        from rocky.util.trace_retention import evict_traces_if_needed
+
+        evict_traces_if_needed(
+            self.traces_dir,
+            max_age_days=max_age,
+            max_trace_count=max_count,
+        )
 
     def _tool_event_storage_dir(self) -> Path:
         return self.traces_dir / "tool-results"
@@ -2167,6 +2244,8 @@ class AgentCore:
         _repair_tool_cache: dict[tuple[str, str], str] = {}
         _repair_tool_hits: dict[tuple[str, str], int] = {}
         _repair_loop_guard_emitted: set[tuple[str, str]] = set()
+        # O18 telemetry — single-element counter accumulator for this path.
+        _repair_loop_guard_counter: list[int] = [0]
         # Mutable list reference so the guard can inject into retry_messages
         # after it is constructed below.
         _repair_messages_ref: list[Any] = []
@@ -2261,6 +2340,7 @@ class AgentCore:
                 name=name,
                 arguments=arguments,
                 dispatch_fn=_repair_dispatch,
+                loop_guard_counter=_repair_loop_guard_counter,
             )
 
         repair_prompt = self._verification_repair_prompt(
@@ -2291,14 +2371,23 @@ class AgentCore:
         # injection appends to _repair_messages_ref (which is what execute_tool
         # sees) but provider receives the original retry_messages for integrity.
         _repair_messages_ref.extend(retry_messages)
-        return provider.run_with_tools(
-            system_prompt=system_prompt,
-            messages=retry_messages,
-            tools=[tool.openai_schema() for tool in selected_tool_objects],
-            execute_tool=execute_tool,
-            max_rounds=self._tool_loop_rounds(route),
-            event_handler=event_handler if stream else None,
-        )
+        try:
+            return provider.run_with_tools(
+                system_prompt=system_prompt,
+                messages=retry_messages,
+                tools=[tool.openai_schema() for tool in selected_tool_objects],
+                execute_tool=execute_tool,
+                max_rounds=self._tool_loop_rounds(route),
+                event_handler=event_handler if stream else None,
+            )
+        finally:
+            # O18 aggregation (review S1 fix): expose the repair path's
+            # loop-guard count to the outer run() so trace["loop_guard_hits"]
+            # reflects every guard injection across flow + simple + repair
+            # paths. Without this, degenerate repair loops (exactly the case
+            # that matters for debugging) were silently excluded from the
+            # `rocky stats` aggregate.
+            self._last_repair_loop_guard_hits = int(_repair_loop_guard_counter[0])
 
     def _sync_thread_from_evidence(self, thread, evidence_graph) -> None:
         thread.artifact_refs = [str(item.get("ref")) for item in evidence_graph.artifacts[:16] if item.get("ref")]
@@ -2374,6 +2463,8 @@ class AgentCore:
         _flow_tool_cache: dict[tuple[str, str], str] = {}
         _flow_tool_hits: dict[tuple[str, str], int] = {}
         _flow_loop_guard_emitted: set[tuple[str, str]] = set()
+        # O18 telemetry — counter for the flow-controlled burst loop path.
+        _flow_loop_guard_counter: list[int] = [0]
 
         for _burst_index in range(max_bursts):
             current_task = run_flow.run.active_task()
@@ -2498,6 +2589,7 @@ class AgentCore:
                     name=name,
                     arguments=arguments,
                     dispatch_fn=_flow_dispatch,
+                    loop_guard_counter=_flow_loop_guard_counter,
                 )
 
             prefetch_url = run_flow.suggested_fetch_url()
@@ -2929,6 +3021,10 @@ class AgentCore:
         return aggregate_response, aggregate_response.text, answer_contract, verification_result, {
             **run_flow.run_summary,
             "provider": provider_name,
+            # O18: per-loop loop-guard injection count for this flow run. The
+            # outer run() aggregates across the flow + simple-provider paths
+            # into trace["loop_guard_hits"] before the trace is written.
+            "loop_guard_hits_flow": _flow_loop_guard_counter[0],
         }
 
     def run(
@@ -2947,6 +3043,10 @@ class AgentCore:
             freeze=freeze,
             session_seed=session_seed,
         )
+        # O18 aggregation (review S1 fix): zero the repair-path carry-field at
+        # the start of every run so a prior turn's count does not leak into
+        # this turn's trace.
+        self._last_repair_loop_guard_hits = 0
         session = self._session_for_run(prompt, options)
         thread_registry = ThreadRegistry(session)
         workspace_root = str(self.tool_registry.context.workspace_root)
@@ -3142,6 +3242,13 @@ class AgentCore:
                 "answer_contract": answer_contract.as_record(),
                 "supported_claims": self._supported_claim_records(evidence_graph, answer_contract),
                 "run_state": flow_state,
+                # O18: aggregate across flow-controlled burst + repair paths
+                # for this execution. The simple-provider loop path builds
+                # its own trace below with its own aggregation.
+                "loop_guard_hits": (
+                    int(flow_state.get("loop_guard_hits_flow", 0))
+                    + int(self._last_repair_loop_guard_hits)
+                ),
             }
             current_thread = trace.get("thread", {}).get("current_thread") or {}
             if current_thread:
@@ -3192,6 +3299,8 @@ class AgentCore:
         _run_tool_cache: dict[tuple[str, str], str] = {}
         _run_tool_hits: dict[tuple[str, str], int] = {}
         _run_loop_guard_emitted: set[tuple[str, str]] = set()
+        # O18 telemetry — counter for the simple-provider run loop path.
+        _run_loop_guard_counter: list[int] = [0]
         for attempt in range(attempts):
             successful_tool_names: list[str] = []
             successful_live_targets: set[tuple[str, str]] = set()
@@ -3298,6 +3407,7 @@ class AgentCore:
                     name=name,
                     arguments=arguments,
                     dispatch_fn=_dispatch,
+                    loop_guard_counter=_run_loop_guard_counter,
                 )
 
             try:
@@ -3697,6 +3807,10 @@ class AgentCore:
             "thread": thread_registry.snapshot(active_thread.thread_id),
             "answer_contract": answer_contract.as_record(),
             "supported_claims": self._supported_claim_records(evidence_graph, answer_contract),
+            # O18: simple-provider loop path + repair path aggregate.
+            "loop_guard_hits": (
+                _run_loop_guard_counter[0] + int(self._last_repair_loop_guard_hits)
+            ),
         }
         current_thread = trace.get("thread", {}).get("current_thread") or {}
         if current_thread:

@@ -218,6 +218,11 @@ class Router:
         'command', 'commands', 'alias', 'aliases', 'cli',
     }
     SHELL_FENCE_RE = re.compile(r"```(?:bash|sh|zsh|shell)?\s*\n(?P<body>.*?)```", re.I | re.S)
+    # Heredoc opener: `<<WORD`, `<< WORD`, `<<'WORD'`, `<<"WORD"`, `<<-WORD`.
+    # Matches the opening operator only — the presence of any heredoc is
+    # sufficient evidence of a shell construct. Narrow enough not to fire on
+    # prose (requires the literal `<<` and an identifier word).
+    HEREDOC_RE = re.compile(r"<<-?\s*['\"]?\w+['\"]?")
     # SHELL_TOKEN_RE matches unambiguous shell operators (&&, ||, ;, >, >>)
     # but does NOT match bare | — prose data-separators use | without commands.
     # Bare pipe is handled separately in _pipe_has_shell_command_context().
@@ -247,11 +252,18 @@ class Router:
     _PIPE_RIGHT_RE = re.compile(r"(?<!\|)\|\s*(\w+)", re.I)
     INLINE_COMMAND_RE = re.compile(r"`(?P<body>[^`\n]+)`")
     SCRIPT_PATH_RE = re.compile(r"(?<![\w/])(?:\./)?[a-z0-9_.-]+\.(?:sh|py|rb|js|ts|tsx|pl|php)(?![\w/])", re.I)
-    PATH_HINTS = ('.py', '.ts', '.tsx', '.js', '.jsx', '.rb', '.go', '.rs', '.java', '.json', '.yaml', '.yml', '.toml', '.md')
+    # O14: include Kotlin (.kt) and Swift (.swift) alongside existing languages
+    # so non-Python/Markdown ecosystems (JVM/Android, Apple) are recognized as
+    # repo tasks. The filename-token requirement (word char before `.`) is
+    # preserved by the existing regex structure.
+    PATH_HINTS = (
+        '.py', '.ts', '.tsx', '.js', '.jsx', '.rb', '.go', '.rs', '.java',
+        '.kt', '.swift', '.json', '.yaml', '.yml', '.toml', '.md',
+    )
     # Filename-looking token: at least one word char + optional path separator, then extension.
     # Requires a real filename (e.g. README.md, foo/bar.py) not a bare ".md" standalone token.
     PATH_HINTS_RE = re.compile(
-        r"(?:[\w./\-]+/)?\w[\w.\-]*\.(?:py|ts|tsx|js|jsx|rb|go|rs|java|json|yaml|yml|toml|md)\b",
+        r"(?:[\w./\-]+/)?\w[\w.\-]*\.(?:py|ts|tsx|js|jsx|rb|go|rs|java|kt|swift|json|yaml|yml|toml|md)\b",
         re.I,
     )
     # Descriptive sentence openers — if found near a filename, treat as prose not repo-op
@@ -406,6 +418,10 @@ class Router:
 
     def _looks_like_shell_task(self, text: str, lowered: str) -> bool:
         has_fenced_shell = bool(self.SHELL_FENCE_RE.search(text))
+        # O13: heredoc is always a shell construct (SHELL_TOKEN_RE's `<(?!<)`
+        # lookahead explicitly excludes `<<` to avoid false-positives on plain
+        # redirection, so heredoc detection lives on its own dedicated signal).
+        has_heredoc = bool(self.HEREDOC_RE.search(text))
         # SHELL_TOKEN_RE now only matches unambiguous operators (&&, ||, ;, >, >>).
         # Bare pipe is checked separately with command-context awareness.
         has_shell_tokens = bool(self.SHELL_TOKEN_RE.search(text))
@@ -429,7 +445,15 @@ class Router:
         starts_with_verb = lowered.startswith(self.COMMAND_VERBS)
         if mentions_run_verb and (has_inline_command or mentions_existing_script):
             return True
-        return has_fenced_shell or has_shell_tokens or has_pipe_with_command or asks_to_run or starts_with_verb or (mentions_run_verb and has_inline_command)
+        return (
+            has_fenced_shell
+            or has_heredoc
+            or has_shell_tokens
+            or has_pipe_with_command
+            or asks_to_run
+            or starts_with_verb
+            or (mentions_run_verb and has_inline_command)
+        )
 
     def _looks_like_inline_command_reference(self, text: str) -> bool:
         for match in self.INLINE_COMMAND_RE.finditer(text):

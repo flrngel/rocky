@@ -220,3 +220,48 @@ def test_router_prefers_automation_for_empty_workspace_csv_project() -> None:
 
     assert route.task_class == TaskClass.AUTOMATION
     assert route.task_signature == 'automation/general'
+
+
+# --------------------------------------------------------------------------
+# O13 — Heredoc / multi-line shell router robustness.
+# --------------------------------------------------------------------------
+
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        # Lexically distinct from the follow-ups §6.1 example (which used <<EOF).
+        "cat <<'BOUNDARY'\nThe deployment pipeline stages artifacts through\nthe build cache before promotion.\nBOUNDARY",
+        "ssh deploy@host <<-MARKER\n  pushd /opt/app\n  ./rollout.sh\n  popd\nMARKER",
+        "mysql -u admin <<\"QUERY\"\nSELECT id FROM customers WHERE region='EU';\nQUERY",
+    ],
+)
+def test_router_classifies_heredoc_as_shell(prompt: str) -> None:
+    router = Router()
+    route = router.route(prompt)
+    assert route.task_class == TaskClass.REPO
+    assert 'shell' in route.tool_families
+
+
+# --------------------------------------------------------------------------
+# O14 — Non-Python/Markdown file extensions (.rs, .go, .kt, .swift).
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        # New extensions (previously unrecognized).
+        "Refactor the coroutine dispatcher in src/main/kotlin/App.kt",
+        "Fix the memory leak in Sources/Modules/Auth.swift",
+        # Regression guards for existing extensions (confirm we did not break them).
+        "Add error handling to src/bin/server.rs",
+        "Optimize the goroutine pool in pkg/worker/pool.go",
+    ],
+)
+def test_router_repo_task_recognises_language_file_extensions(prompt: str) -> None:
+    router = Router()
+    assert router._looks_like_repo_task(prompt.lower()) is True

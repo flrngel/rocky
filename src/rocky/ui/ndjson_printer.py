@@ -1,9 +1,26 @@
-"""Stable machine-readable event stream format (NDJSON / JSON Lines)."""
+"""Stable machine-readable event stream format (NDJSON / JSON Lines).
+
+O6 extras: every emitted event carries three envelope fields so downstream
+parsers have ordering, timing, and versioning without guessing:
+
+- ``seq`` — monotonic per-printer counter starting at 1 (resets each run).
+- ``ts`` — ISO-8601 UTC timestamp of when the event was serialized.
+- ``schema_version`` — top-level envelope contract version string.
+
+The fields are added as a shallow copy (original event dict is not mutated),
+so existing consumers that ignore unknown fields are unaffected.
+"""
 from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timezone
 from typing import Any
+
+
+# Envelope contract version. Bump when a breaking change is introduced (fields
+# removed, semantics changed). Additive fields do not require a bump.
+NDJSON_SCHEMA_VERSION = "1.0"
 
 
 class NdjsonEventPrinter:
@@ -18,6 +35,20 @@ class NdjsonEventPrinter:
     def __init__(self, stream: Any = None) -> None:
         self._stream = stream if stream is not None else sys.stdout
         self.streamed_text: bool = False
+        # O6: monotonic sequence counter scoped to this printer instance.
+        # Starts at 1 (first emitted event has seq=1). Determinism within a
+        # run; logs of multiple runs are distinguished by run id, not seq.
+        self._seq: int = 0
+
+    def _envelope(self, event: dict) -> dict:
+        """Return a shallow copy of *event* with ``seq``/``ts``/``schema_version``
+        injected. Does not mutate the caller's dict."""
+        self._seq += 1
+        enveloped = dict(event)
+        enveloped["seq"] = self._seq
+        enveloped["ts"] = datetime.now(timezone.utc).isoformat()
+        enveloped["schema_version"] = NDJSON_SCHEMA_VERSION
+        return enveloped
 
     def __call__(self, event: Any) -> None:
         """Serialize *event* as a single JSON line."""
@@ -26,18 +57,24 @@ class NdjsonEventPrinter:
                 kind = event.get("type", "")
                 if kind == "assistant_chunk":
                     self.streamed_text = True
-                line = json.dumps(event, default=str, ensure_ascii=False)
+                enveloped = self._envelope(event)
+                line = json.dumps(enveloped, default=str, ensure_ascii=False)
             else:
                 try:
                     payload: Any = event.__dict__ if hasattr(event, "__dict__") else str(event)
                     if isinstance(payload, dict):
-                        line = json.dumps(payload, default=str, ensure_ascii=False)
+                        enveloped = self._envelope(payload)
+                        line = json.dumps(enveloped, default=str, ensure_ascii=False)
                     else:
-                        line = json.dumps({"type": "raw", "value": str(payload)}, default=str, ensure_ascii=False)
+                        enveloped = self._envelope({"type": "raw", "value": str(payload)})
+                        line = json.dumps(enveloped, default=str, ensure_ascii=False)
                 except Exception:
-                    line = json.dumps({"type": "raw", "value": str(event)}, default=str, ensure_ascii=False)
+                    enveloped = self._envelope({"type": "raw", "value": str(event)})
+                    line = json.dumps(enveloped, default=str, ensure_ascii=False)
         except Exception as exc:
-            line = json.dumps({"type": "error", "message": f"ndjson serialize failed: {exc}"}, ensure_ascii=False)
+            # Error path also carries envelope so stream monotonicity holds.
+            fallback = self._envelope({"type": "error", "message": f"ndjson serialize failed: {exc}"})
+            line = json.dumps(fallback, ensure_ascii=False)
         self._stream.write(line + "\n")
         self._stream.flush()
 

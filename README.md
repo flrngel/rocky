@@ -52,6 +52,32 @@ Permission modes: `plan`, `supervised`, `accept-edits`, `auto`, `bypass`.
 
 ---
 
+## Advanced CLI flags
+
+Rocky is additive — default behavior is unchanged when a flag is absent.
+
+- **`--route <signature>`** — override lexical route classification with a known task signature (e.g. `research/live_compare/general`). Use when Rocky misreads intent. Applies once per invocation; the teach-upgrade guard is preserved.
+- **`--tools <families>`** — opt-in tool composition for the selected route, e.g. `--tools web,browser,filesystem` on a research route enables research-and-persist in one call. Without the flag, each route's default tool allowlist applies.
+- **`--state-dir <path>`** — where `.rocky/` lives, independent of `--cwd`. `--cwd` stays the shell tool's working directory. Use to share state across multiple workspaces or place state on a separate volume.
+- **`--format ndjson`** (alias `--format jsonl`) — stream events as one JSON object per line. Each line carries `seq` (monotonic, starts at 1), `ts` (ISO-8601 UTC), and `schema_version`. Prefer this over parsing `--verbose` output.
+- **`--freeze`** — do not persist new Rocky state. Implicitly also ignores retrospectives (`--freeze` implies `--ignore-retros`) so a poisoned retro cannot reproduce wrong behavior on a frozen replay.
+- **`rocky stats`** — aggregates `.rocky/traces/` (and the learning ledger). Flags: `--since <YYYY-MM-DD>`, `--last <N>`, `--tool <name>`, `--per-day`. Combine with `--json` for machine-readable output.
+- **`rocky retros list | pin <id> | discard <id>`** — operator curation for student retrospectives. `pin` writes `pinned: true` into the retro's frontmatter (retention-exempt). `discard` removes the retro file.
+- **`rocky migrate-retros [--no-dry-run] [--quarantine]`** — one-shot non-destructive migrator that re-grounds each retrospective against available traces and flags frontmatter (`grounded: true` / `unverified: true`). Dry-run is the default; originals are never deleted in-place.
+
+### Config knobs (`~/.config/rocky/config.yaml`)
+
+- **`tools.tool_output_limits: {run_shell_command: 4000, read_file: 30000}`** — per-tool character caps. Absent a per-tool entry, `tools.max_tool_output_chars` (default 12000) applies.
+- **`verifier.semantic_enabled: true`** — run the additive `semantic_research_v1` claim-grounding check on research routes. Disabling falls back to `default_v1` only.
+- **`verifier.semantic_threshold: 0.5`** — unsupported-claim fraction above which status escalates to `needs_review`.
+- **`tracing.max_age_days`** / **`tracing.max_trace_count`** — optional retention limits for `.rocky/traces/`. Both default to `None` (unlimited). Eviction is oldest-first.
+
+### Integration
+
+Integrators parsing the answer stream should prefer **`response.answer_bounded_text`** over `response.text`. That field is wrapped in `<<<ANSWER>>>` / `<<<END>>>` markers so the answer region is unambiguous even in multi-block outputs. Use `rocky.core.agent.strip_markers` (or the simple string slice) to recover the body. The invariant `response.text == strip_markers(response.answer_bounded_text)` is guarded by a unit test.
+
+---
+
 ## How it works
 
 A turn flows through four subsystems:

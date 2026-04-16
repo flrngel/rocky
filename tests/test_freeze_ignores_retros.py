@@ -206,6 +206,71 @@ def test_runtime_no_freeze_leaves_ignore_retros_false(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 5b. O1 follow-up: refresh_knowledge() must thread freeze_enabled into the
+# rebuilt ContextBuilder. The load_from path already sets it; this guards the
+# direct-caller path where _auto_self_reflect writes a memory, freezes out, and
+# later code paths re-enter refresh_knowledge outside the gate.
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_knowledge_preserves_ignore_retros_under_freeze(tmp_path: Path) -> None:
+    """After refresh_knowledge, the ContextBuilder must still ignore retros
+    when the runtime was created with freeze=True. Without the fix, the new
+    ContextBuilder would silently default ignore_retros=False."""
+    from rocky.app import RockyRuntime
+
+    runtime = RockyRuntime.load_from(cwd=tmp_path, freeze=True)
+    assert runtime.context_builder.ignore_retros is True
+
+    retro_path = runtime.student_store.retrospectives_dir / "poisoned-retro.md"
+    retro_path.parent.mkdir(parents=True, exist_ok=True)
+    retro_path.write_text(
+        "---\n"
+        "id: retro_refresh_001\n"
+        "kind: retrospective\n"
+        "title: refresh-scoped retro\n"
+        "created_at: '2026-01-01T00:00:00Z'\n"
+        "updated_at: '2026-01-01T00:00:00Z'\n"
+        "task_signature: general/task\n"
+        "tags:\n"
+        "  - general\n"
+        "origin: self_reflection\n"
+        "---\n"
+        f"{SENTINEL}\n",
+        encoding="utf-8",
+    )
+
+    runtime.refresh_knowledge()
+
+    assert runtime.context_builder.ignore_retros is True, (
+        "After refresh_knowledge on a frozen runtime, the new ContextBuilder "
+        "must still ignore retros. Without the fix this would be False."
+    )
+
+    pkg = runtime.context_builder.build(
+        prompt="general task",
+        task_signature="general/task",
+        tool_families=[],
+    )
+    note_texts = " ".join(n.get("text", "") + n.get("title", "") for n in pkg.student_notes)
+    assert SENTINEL not in note_texts, (
+        "Retro sentinel leaked into context after refresh_knowledge on a frozen runtime."
+    )
+
+
+def test_refresh_knowledge_no_freeze_leaves_retros_loadable(tmp_path: Path) -> None:
+    """CF-4: on a non-frozen runtime, refresh_knowledge must keep
+    ignore_retros=False so retros continue to load normally."""
+    from rocky.app import RockyRuntime
+
+    runtime = RockyRuntime.load_from(cwd=tmp_path, freeze=False)
+    assert runtime.context_builder.ignore_retros is False
+
+    runtime.refresh_knowledge()
+    assert runtime.context_builder.ignore_retros is False
+
+
+# ---------------------------------------------------------------------------
 # 6. End-to-end: workspace with sentinel retro + freeze=True => not in context
 # ---------------------------------------------------------------------------
 

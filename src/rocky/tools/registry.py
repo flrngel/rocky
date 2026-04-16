@@ -6,24 +6,54 @@ from rocky.tools import browser, filesystem, shell, web
 from rocky.tools.base import Tool, ToolContext, ToolResult
 
 
-# Maps tool name -> canonical route signature hint for reroute suggestions.
-# Used by blocked-tool error reporting and by O12 argv[0] detection.
-_TOOL_ROUTE_HINTS: dict[str, str] = {
-    "search_web": "research/live_compare/general",
+# Hand-curated route overrides — each entry is a conscious choice where the
+# "most natural" route for a tool differs from what a strict first-appearance
+# derivation would produce. New entries should be rare; the default path
+# (derive from TASK_TOOL_PRIORITY, see below) handles most tools correctly.
+_TOOL_ROUTE_OVERRIDES: dict[str, str] = {
+    # read_file and fetch_url surface many signatures; pick the
+    # characteristic route for integrator-facing reroute hints.
+    "read_file": "repo/shell_execution",
     "fetch_url": "research/live_compare/general",
     "agent_browser": "research/live_compare/general",
-    "run_shell_command": "repo/shell_execution",
-    "read_file": "repo/shell_execution",
-    "write_file": "automation/general",
 }
+
+
+def _derive_tool_route_hints() -> dict[str, str]:
+    """Build tool_name -> canonical route signature by inverting
+    :data:`TASK_TOOL_PRIORITY`.
+
+    Rule: for each tool name, the canonical route is the *first* task
+    signature in ``TASK_TOOL_PRIORITY`` whose tool list contains that name.
+    Hand-curated overrides in :data:`_TOOL_ROUTE_OVERRIDES` win when present.
+
+    Auto-derivation protects against drift: a new tool added to
+    ``TASK_TOOL_PRIORITY`` is automatically rerouteable without requiring a
+    parallel edit to a separate dict.
+    """
+    derived: dict[str, str] = {}
+    # First, iterate signatures in order and claim each tool by its first
+    # appearance. Later appearances are ignored (the earliest route wins).
+    for signature, tools_for_sig in TASK_TOOL_PRIORITY.items():
+        for tool_name in tools_for_sig:
+            derived.setdefault(tool_name, signature)
+    # Overrides take precedence to preserve pre-existing hand-tuned choices.
+    derived.update(_TOOL_ROUTE_OVERRIDES)
+    return derived
+
+
+# Read-only structure — derived at import time from TASK_TOOL_PRIORITY +
+# _TOOL_ROUTE_OVERRIDES. Do not mutate at runtime; callers should go through
+# _suggest_route_for_tool().
+_TOOL_ROUTE_HINTS: dict[str, str]  # populated after TASK_TOOL_PRIORITY is defined
 
 
 def _suggest_route_for_tool(name: str) -> str | None:
     """Return the canonical route signature for ``name``, or None if unknown.
 
     Used to populate ``reroute_to`` in blocked-tool ToolResult payloads and
-    by the O12 argv[0] guard. Mapping is intentionally minimal and hand-curated
-    to avoid false precision; update ``_TOOL_ROUTE_HINTS`` as new tools land.
+    by the O12 argv[0] guard. Derived from :data:`TASK_TOOL_PRIORITY` with
+    explicit overrides in :data:`_TOOL_ROUTE_OVERRIDES`.
     """
     return _TOOL_ROUTE_HINTS.get(name)
 
@@ -101,6 +131,10 @@ ALL_TOOL_NAMES: frozenset[str] = frozenset({
     "search_web",
     "agent_browser",
 })
+
+
+# Now that TASK_TOOL_PRIORITY is defined, populate the derived map.
+_TOOL_ROUTE_HINTS = _derive_tool_route_hints()
 
 _URL_RE = re.compile(r"https?://\S+", re.I)
 

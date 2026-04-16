@@ -187,7 +187,9 @@ def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             {
                 "error": "blocked_verification_command",
                 "command": argv0,
-                "message": (
+                # O7: normalize error-shape key to "reason" (was "message") so
+                # all three tool error payloads share a consistent schema.
+                "reason": (
                     f"`{argv0}` is blocked to prevent leaking sensitive environment variables. "
                     "Use specific env-var lookups instead."
                 ),
@@ -208,7 +210,8 @@ def run_shell_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                 {
                     "error": "tool_name_in_shell",
                     "tool": argv0,
-                    "message": (
+                    # O7: canonical key name is "reason" across all tool error shapes.
+                    "reason": (
                         f"`{argv0}` is a rocky tool, not a CLI command. "
                         f"Invoke it via a structured tool call. "
                         f"It is currently {route_hint}."

@@ -38,6 +38,11 @@ class VerificationResult:
     memory_promotion_allowed: bool = False
     learning_promotion_allowed: bool = False
     details: dict[str, Any] = field(default_factory=dict)
+    # O12: per-claim confidence score, in [0.0, 1.0], keyed by claim string.
+    # Score = min(1.0, |overlap_tokens| / |claim_tokens|). Empty dict when the
+    # semantic verifier is disabled or did not run — existing consumers that
+    # ignore this field remain unaffected (CF-4 additive).
+    claim_confidences: dict[str, float] = field(default_factory=dict)
 
     def as_record(self) -> dict[str, Any]:
         return {
@@ -51,6 +56,7 @@ class VerificationResult:
             "memory_promotion_allowed": self.memory_promotion_allowed,
             "learning_promotion_allowed": self.learning_promotion_allowed,
             "details": self.details,
+            "claim_confidences": self.claim_confidences,
         }
 
 
@@ -1108,17 +1114,40 @@ class VerifierRegistry:
         r'|'
         r'\b[A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*)+\b',  # multi-word proper nouns
     )
+    # O11: relational-claim catalog — narrow verb whitelist (not every English
+    # "X verb Y" is a factual claim). Matches "Subject <verb> Object" where
+    # both subject and object are entity-like tokens (letters/digits/hyphen).
+    # The captured span is preserved verbatim as the claim string so the
+    # existing token-overlap check can score it.
+    _RELATIONAL_CLAIM_RE = re.compile(
+        r"\b(?P<subj>[A-Za-z][A-Za-z0-9_\-]*)"
+        r"\s+"
+        r"(?:depends\s+on|relies\s+on|requires|causes|leads\s+to|"
+        r"results\s+in|is\s+built\s+on|is\s+based\s+on)"
+        r"\s+"
+        r"(?P<obj>[A-Za-z][A-Za-z0-9_\-]*)\b",
+        re.I,
+    )
 
     def _extract_claims(self, text: str) -> list[str]:
         """Return a deduplicated list of candidate factual claims from *text*.
 
-        A "claim" here is either a quoted string (≥3 chars) or a run of two+
-        consecutive capitalised tokens (proper noun / named entity heuristic).
+        A "claim" here is either a quoted string (≥3 chars), a run of two+
+        consecutive capitalised tokens (proper noun / named entity heuristic),
+        or a relational claim matched by :data:`_RELATIONAL_CLAIM_RE` (narrow
+        verb whitelist). Relational-claim coverage is O11 follow-up; FP risk
+        is bounded by the whitelist and FN risk is acceptable — operators who
+        observe misses can extend the catalog.
         """
         seen: set[str] = set()
         claims: list[str] = []
         for m in self._PROPER_NOUN_RE.finditer(text):
             claim = m.group(0).strip().strip('"')
+            if claim and claim not in seen:
+                seen.add(claim)
+                claims.append(claim)
+        for m in self._RELATIONAL_CLAIM_RE.finditer(text):
+            claim = m.group(0).strip()
             if claim and claim not in seen:
                 seen.add(claim)
                 claims.append(claim)
@@ -1171,6 +1200,12 @@ class VerifierRegistry:
         unsupported = [c for c in all_claims if c not in supported_set]
         fraction = len(unsupported) / max(1, len(all_claims)) if all_claims else 0.0
 
+        # O12: per-claim confidence. Compute via a second pass over the same
+        # payloads (no new tool-event I/O). Keep the supported-set from
+        # ground_evidence_citations as the source of truth for whether a
+        # claim grounds; the confidence scalar is additional information.
+        claim_confidences = self._compute_claim_confidences(all_claims, tool_events)
+
         status = default_result.status
         message = default_result.message
         if fraction > threshold:
@@ -1193,8 +1228,54 @@ class VerifierRegistry:
             memory_promotion_allowed=default_result.memory_promotion_allowed and status == "pass",
             learning_promotion_allowed=default_result.learning_promotion_allowed,
             details={**default_result.details, "default_v1": default_result.as_record()},
+            claim_confidences=claim_confidences,
         )
         return merged
+
+    @staticmethod
+    def _compute_claim_confidences(
+        claims: list[str],
+        tool_events: list[dict],
+    ) -> dict[str, float]:
+        """Return a ``claim -> score`` map where score is the best overlap
+        ratio across any non-empty tool event payload. Score range [0.0, 1.0].
+
+        Empty ``claims`` returns an empty dict. A claim whose token set is
+        empty (all punctuation) scores 0.0. Callers may read this field to
+        filter or flag claims; it is additive and has no side effect on the
+        verifier's pass/needs_review decision (that remains driven by the
+        supported-set from :func:`ground_evidence_citations`).
+        """
+        from rocky.util.evidence import _payload_text, _tokens
+
+        if not claims:
+            return {}
+        payload_token_sets: list[set[str]] = []
+        if tool_events:
+            for event in tool_events:
+                text = _payload_text(event)
+                if not text.strip():
+                    continue
+                toks = _tokens(text)
+                if toks:
+                    payload_token_sets.append(toks)
+
+        result: dict[str, float] = {}
+        for claim in claims:
+            claim_tokens = _tokens(claim) if isinstance(claim, str) else set()
+            if not claim_tokens:
+                result[claim] = 0.0
+                continue
+            best = 0.0
+            for payload_tokens in payload_token_sets:
+                overlap = len(claim_tokens & payload_tokens)
+                if overlap == 0:
+                    continue
+                score = min(1.0, overlap / len(claim_tokens))
+                if score > best:
+                    best = score
+            result[claim] = round(best, 4)
+        return result
 
     def _expected_tool_use(
         self,

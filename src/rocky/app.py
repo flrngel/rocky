@@ -266,6 +266,7 @@ class RockyRuntime:
             self.sessions,
             self.student_store,
             ledger=self.ledger,
+            ignore_retros=self.freeze_enabled,
         )
         self.agent.context_builder = self.context_builder
 

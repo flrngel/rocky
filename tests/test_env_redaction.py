@@ -134,9 +134,12 @@ class TestEnvCommandBlocklist:
 
         assert result.success is False
         assert result.data.get("error") == "blocked_verification_command"
-        # Real env vars must NOT appear in the output data
+        # Real env vars must NOT appear in the output data. O7 renamed the
+        # carry-field from "message" to "reason" for consistency with other
+        # tool error shapes; check both to keep the invariant loud.
         home_val = Path.home()
         assert str(home_val) not in str(result.data.get("message", ""))
+        assert str(home_val) not in str(result.data.get("reason", ""))
 
     def test_env_command_with_pipe_is_blocked(self, tmp_path: Path):
         from rocky.app import RockyRuntime

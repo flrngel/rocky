@@ -478,8 +478,11 @@ class _GitHubResearchRetryProvider:
             )
         return ProviderResponse(
             text=(
-                "Current GitHub trending repositories include microsoft/typescript, rust-lang/rust, and "
-                "vercel/next.js.\n\n"
+                # Answer echoes tokens from the fetched payloads so each extracted
+                # proper-noun claim is grounded (min_overlap=2) — O3 retighten.
+                "GitHub Trending lists microsoft/typescript, rust-lang/rust, and vercel/next.js "
+                "as trending repositories right now. TypeScript is a language for application-scale "
+                "JavaScript, per the Microsoft TypeScript repository page.\n\n"
                 "Sources:\n"
                 "https://github.com/trending\n"
                 "https://github.com/microsoft/TypeScript"
@@ -500,7 +503,7 @@ class _GitHubResearchRetryProvider:
                                     "snippet": "Trending repositories on GitHub right now.",
                                 },
                                 {
-                                    "title": "TypeScript - GitHub",
+                                    "title": "Microsoft TypeScript",
                                     "url": "https://github.com/microsoft/TypeScript",
                                     "snippet": "TypeScript is a language for application-scale JavaScript.",
                                 },
@@ -1602,9 +1605,11 @@ Use web search tools for live queries.
     response = runtime.run_prompt("github repos right now", continue_session=False)
 
     assert response.route.task_signature == "research/live_compare/general"
-    # O6 semantic verifier may mark an unsourced research answer as needs_review;
-    # this test's load-bearing invariant is the route upgrade, not the verification status.
-    assert response.verification["status"] in {"pass", "needs_review"}
+    # O3 retighten: the fake provider's answer now echoes tokens from the
+    # fetched payloads so every extracted proper-noun claim grounds via
+    # semantic_research_v1 (min_overlap=2). The verifier must return pass —
+    # the previous ``{"pass","needs_review"}`` widening is no longer honest.
+    assert response.verification["status"] == "pass"
     assert provider.tool_calls
     assert "search_web" in response.trace["selected_tools"]
     assert any(event["name"] == "search_web" for event in response.trace["tool_events"])
