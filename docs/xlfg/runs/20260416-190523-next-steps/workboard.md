@@ -15,7 +15,7 @@ Loopbacks: 0/2
 | implement | DONE |
 | verify | DONE |
 | review | DONE |
-| compound | IN_PROGRESS |
+| compound | DONE |
 
 <!-- END: rendered-phase-status -->
 

@@ -4,29 +4,49 @@ description: Durable-lesson promotion for run-20260416-190523-next-steps.
 status: DONE
 ---
 
-# Compound summary — next-steps (F1 close + prior-run rollup)
+# Compound summary — next-steps (migration validated; F1 rejected)
 
 ## Run outcome
 
-GREEN. APPROVE-WITH-NOTES-FIXED. All objectives shipped; last OPEN follow-up (F1) closed.
+GREEN for migration, REJECTED-BY-LIVE-EVIDENCE for F1.
 
-Deterministic suite: **733 passed + 14 skipped + 0 failed** (baseline was also 733+14; F1's 3 new tests were committed in 05fa5ec by an earlier session so they were already included in baseline).
+Deterministic suite (final): **730 passed + 14 skipped + 0 failed** after F1 revert.
+(Interim state: 733+14 with F1 applied; revert removed the 3 F1 tests.)
 
-Three commits landed on `feat/agent-testing`:
-- `06c5066` — T1 rollup of prior run-20260416-161631's approved work (carry-field fix from run-205534 + F4/R2/F2 tests + run-dir)
-- `05fa5ec` — T4 F1 fix (domain allowlist in `policies.py`) + 3 deterministic tests + run-dir artifacts
-- `034e13a` — review-fix: added 6-line inline comment on `_DOMAIN_ALLOWED_WEAK_TOKENS` per APPROVE-WITH-NOTES-FIXED; captured review-summary + architecture review + verification evidence
+Live-LLM A/B triple-live on gemma4:26b via `tests/agent/test_self_learn_live.py` + `/agent-testing` `run_eval.py` — detailed in `evidence/live/summary.md`:
+- **With F1**: 47/48 across 4 runs — 2× flakes on `test_sl_undo_behavioral_correction_fully_gone` (the documented Phase-2 derived-autonomous leak).
+- **Without F1** (pre-fix baseline): 36/36 clean.
+- **Post-revert confirmation**: 36/36 clean (12+12+12 in 193s/207s/236s).
+
+Causal hypothesis (not conclusively proven, but consistent with n=3+3+3 evidence): F1's more aggressive repo-family retrieval makes `capture_project_memory` more consistently write turn-lineage memories during the teach-reuse turn, which then surface post-undo as the Phase-2 leak. F1 amplifies an existing failure mode without delivering a live-LLM benefit, because its motivating scenario is already covered by the `AgentCore._route_upgrade_driving_policy` carry-field fix.
+
+Commits landed on `feat/agent-testing`:
+- `06c5066` — T1 rollup of prior run-20260416-161631's approved work (carry-field fix from run-205534 + F4/R2/F2 tests + run-dir). **Kept.**
+- `05fa5ec` — T4 F1 fix (domain allowlist in `policies.py`) + 3 deterministic tests + run-dir artifacts. **Code REVERTED in forward-fix commit; run-dir docs preserved as historical record.**
+- `034e13a` — review-fix comment + review artifacts. **Comment REVERTED; review artifacts preserved.**
+- `767519d` — compound summary + lessons. **Kept (updated in follow-up commit with the L20 post-mortem lesson).**
+- (forward-fix commit) — removes F1 code + test from source tree; preserves `evidence/live/summary.md` and this compound as historical record.
 
 ## Objectives
 
 - **O1** — commit prior runs' uncommitted work. DONE via 06c5066.
-- **O2** — F1 (`WEAK_MATCH_TOKENS` principled review). DONE via 05fa5ec + inline doc-fix in 034e13a. Mechanism: `_DOMAIN_ALLOWED_WEAK_TOKENS = {"repo": frozenset({"command"})}`; in `LearnedPolicyRetriever.retrieve()`, `effective_weak = WEAK_MATCH_TOKENS - _DOMAIN_ALLOWED_WEAK_TOKENS.get(policy_task_family, frozenset())`. Defense-in-depth with the `AgentCore._route_upgrade_driving_policy` carry-field fix: carry-field rescues only upgrade-driving policies; F1 fix rescues the broader class of same-family relevant policies whose only query overlap is a domain-specific weak token.
+- **O2** — F1 (`WEAK_MATCH_TOKENS` principled review). **CLOSED as REJECTED-BY-LIVE-EVIDENCE**. Mechanism understood; deterministic tests proved the scoring behavior; live A/B on gemma4:26b showed the change is neutral-to-regressive. Decision: keep the carry-field fix (which is already committed and proven at 36/36 triple-live) as the single layer of defense; do not layer F1 on top. Filed as rejected in current-state.md with the evidence pointer.
 
 ## Durable lessons to promote
 
-### L17 — F1 closes a defense-in-depth gap, not a duplicate fix
+### L17 — F1 theoretically covers a gap the carry-field doesn't (MECHANISM-ONLY)
 
-The `AgentCore._route_upgrade_driving_policy` carry-field (set at `agent.py:538`, injected at `agent.py:3188`) rescues only the policy that DROVE a route upgrade. The F1 allowlist rescues a broader class: any policy whose `task_family` matches a domain where a weak token is actually discriminative (e.g., `command` for repo-family shell-execution policies). The two fixes are complementary, not redundant. `policy_retriever.retrieve` is called at TWO sites (`agent.py:455` upgrade-drive, `context.py:318` context-build); the carry-field covers the former's drop when the policy does drive an upgrade, F1 covers the latter's drop for same-family relevant policies. Document this separation when adding new retrieval-scoring fixes — otherwise the next person adds a third redundant layer.
+This lesson describes the MECHANISM that motivated F1: `AgentCore._route_upgrade_driving_policy` (set `agent.py:538`, inject `agent.py:3188`) rescues ONLY the policy that DROVE a route upgrade. A per-task-family weak-token allowlist would rescue a broader class: policies whose `task_family` matches a domain where a weak token is actually discriminative. `policy_retriever.retrieve` is called at TWO sites (`agent.py:455` upgrade-drive, `context.py:318` context-build); the carry-field covers the former's drop for drivers, a family-allowlist would cover the latter's drop for same-family relevant policies.
+
+**BUT** — see L20. The theoretical gap is not empirically load-bearing. `capture_project_memory`-based memory + brief + retrospective paths already preserve learning across turns independently of the retrieval-scoring allowlist. Shipping F1 amplified the documented Phase-2 derived-autonomous leak without producing a measurable behavioral win. Treat this lesson as a mechanism-understanding artifact, not as a recommendation to ship F1.
+
+### L20 — Deterministic mechanism proof ≠ behavioral live proof; require live A/B before shipping retrieval-scoring changes
+
+F1 had a clean deterministic proof (SC-1/SC-2/SC-3 + sensitivity witness) that the scoring mechanism worked. I shipped it based on that proof. A follow-up live-LLM A/B (3× with F1 vs 3× without F1 vs 3× post-revert, all on gemma4:26b) showed F1 was neutral-to-regressive: **47/48 with F1 vs 36/36 without F1 vs 36/36 post-revert**. The regression was NOT on the F1-targeted test surface — it was on `test_sl_undo_behavioral_correction_fully_gone`, the documented Phase-2 derived-autonomous leak. F1's more aggressive repo-family retrieval plausibly made turn-lineage memory capture more reliable during the teach-reuse turn, which then surfaces post-undo.
+
+**Rule**: any change to `LearnedPolicyRetriever.retrieve` / `ContextBuilder._build_policies` / `AgentCore._maybe_upgrade_route_from_project_context` scoring paths MUST carry a live-LLM A/B (triple-live with and without the change) before shipping. Deterministic mechanism tests prove the code does what you wrote; they do not prove the behavior does what you want in interaction with the model's stochasticity + the downstream memory/brief/retrospective paths. This extends CF-feedback/claim-scope-honesty to the retrieval-scoring layer specifically.
+
+**Artifact of this lesson**: `docs/xlfg/runs/20260416-190523-next-steps/evidence/live/summary.md` with the 7-run A/B table and per-run logs under `evidence/live/run{1,2,3}.log`, `baseline-no-f1-run{1,2,3}.log`, `postrevert-run{1,2,3}.log`.
 
 ### L18 — Intent-phase refiner must cross-reference working-tree + prior compound, not just named docs
 

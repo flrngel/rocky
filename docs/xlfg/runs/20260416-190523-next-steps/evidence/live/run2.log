@@ -1,0 +1,39 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.2, pytest-9.0.3, pluggy-1.6.0
+rootdir: /Users/flrngel/project/personal/rocky
+configfile: pyproject.toml
+plugins: cov-7.1.0, anyio-4.13.0
+collected 12 items
+
+tests/agent/test_self_learn_live.py ...........F                         [100%]
+
+=================================== FAILURES ===================================
+________________ test_sl_undo_behavioral_correction_fully_gone _________________
+
+undo_result = _UndoResult(baseline={'text': "I cannot determine how to install a new dependency because I don't see any dependency m...orkspace=PosixPath('/private/var/folders/sf/yhwnhf6n28vf9lsx4nv1k5mr0000gp/T/pytest-of-flrngel/pytest-1068/sl_undo_0'))
+
+    def test_sl_undo_behavioral_correction_fully_gone(undo_result: _UndoResult) -> None:
+        """SL-UNDO behavioral (XFAIL Phase 1): correction PREFERENCE fully gone post-/undo.
+    
+        Structural rollback works (covered by test_sl_undo_structural_lineage_aware_rollback
+        as a regular PASS). Behavioral fully-gone requires also clearing the derived-autonomous
+        artifacts written to memories/ during the correction's reuse — that's Phase 2 scope.
+        Kept as strict xfail so a future fix surfaces as XPASS and forces this test to convert
+        back to a regular PASS.
+        """
+        post = undo_result.reuse_after_undo
+        post_text = str(post.get("text") or "")
+        pnpm_in_post = bool(PNPM_CMD_RE.search(post_text))
+        npm_install_in_post = bool(NPM_INSTALL_RE.search(post_text))
+        preference_gone = (not pnpm_in_post) or npm_install_in_post
+>       assert preference_gone, (
+            f"SL-UNDO BEHAVIORAL: post-undo answer still prefers pnpm. "
+            f"text={post_text!r}. Derived-autonomous leak expected here pre-Phase-2."
+        )
+E       AssertionError: SL-UNDO BEHAVIORAL: post-undo answer still prefers pnpm. text='Based on the learned policy for this project, you should use:\n\n```bash\npnpm add axios\n```'. Derived-autonomous leak expected here pre-Phase-2.
+E       assert False
+
+tests/agent/test_self_learn_live.py:702: AssertionError
+=========================== short test summary info ============================
+FAILED tests/agent/test_self_learn_live.py::test_sl_undo_behavioral_correction_fully_gone
+=================== 1 failed, 11 passed in 248.57s (0:04:08) ===================

@@ -12,15 +12,6 @@ from rocky.util.yamlx import split_frontmatter
 
 
 WEAK_MATCH_TOKENS = {"command", "find", "help", "information", "task", "user"}
-# Per-domain weak-token allowlist (F1 fix).
-# Tokens in WEAK_MATCH_TOKENS that are demoted from the strong-match gate for a
-# specific task_family. Add new families here when a weak token is legitimately
-# discriminative in that domain (e.g. "command" is meaningful in repo workflows).
-# LedgerRetriever (ledger_retriever.py) has a parallel scoring path that does NOT
-# yet apply this allowlist; reconcile during Phase 2.4 T3 collapse.
-_DOMAIN_ALLOWED_WEAK_TOKENS: dict[str, frozenset[str]] = {
-    "repo": frozenset({"command"}),
-}
 PROMOTION_WEIGHT = {"promoted": 3, "candidate": 1, "rejected": -2, "stale": -1}
 
 
@@ -209,9 +200,7 @@ class LearnedPolicyRetriever:
                 | (query_words & keyword_tokens)
                 | (thread_words & keyword_tokens)
             )
-            policy_task_family = str(policy.metadata.get("task_family") or "")
-            effective_weak = WEAK_MATCH_TOKENS - _DOMAIN_ALLOWED_WEAK_TOKENS.get(policy_task_family, frozenset())
-            strong_token_matches = token_matches - effective_weak
+            strong_token_matches = token_matches - WEAK_MATCH_TOKENS
             token_overlap = (
                 len(query_words & name_tokens) * 3
                 + len(query_words & description_tokens)
