@@ -12,6 +12,12 @@ from rocky.util.yamlx import split_frontmatter
 
 
 WEAK_MATCH_TOKENS = {"command", "find", "help", "information", "task", "user"}
+# Per-domain weak-token allowlist (F1 fix).
+# Tokens in WEAK_MATCH_TOKENS that are demoted from the strong-match gate for a
+# specific task_family. Add new families here when a weak token is legitimately
+# discriminative in that domain (e.g. "command" is meaningful in repo workflows).
+# LedgerRetriever (ledger_retriever.py) has a parallel scoring path that does NOT
+# yet apply this allowlist; reconcile during Phase 2.4 T3 collapse.
 _DOMAIN_ALLOWED_WEAK_TOKENS: dict[str, frozenset[str]] = {
     "repo": frozenset({"command"}),
 }

@@ -11,10 +11,10 @@ Loopbacks: 0/2
 | recall | DONE |
 | intent | DONE |
 | context | DONE |
-| plan | IN_PROGRESS |
-| implement | pending |
-| verify | pending |
-| review | pending |
+| plan | DONE |
+| implement | DONE |
+| verify | DONE |
+| review | IN_PROGRESS |
 | compound | pending |
 
 <!-- END: rendered-phase-status -->

@@ -1,6 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 task_id: T1
+commit_sha: 06c50665894ffb06c56e860c46e7bd84eb2d18b3
 PRIMARY_ARTIFACT: /Users/flrngel/project/personal/rocky/docs/xlfg/runs/20260416-190523-next-steps/evidence/T1-commit-sha.txt
 FILE_SCOPE: |
   WRITE: docs/xlfg/runs/20260416-190523-next-steps/evidence/T1-commit-sha.txt

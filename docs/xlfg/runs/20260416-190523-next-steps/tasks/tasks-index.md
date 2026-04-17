@@ -19,10 +19,10 @@ T1 → T2 → T3 → T4 (strict sequential, no parallelism)
 
 | ID | Owner | Mission | Depends on | Primary artifact | Status |
 |----|-------|---------|------------|-----------------|--------|
-| T1 | xlfg-task-implementer | Commit prior runs' uncommitted work (O1 release discipline) | — | `evidence/T1-commit-sha.txt` | IN_PROGRESS |
-| T2 | xlfg-task-implementer | Apply Option A domain-allowlist fix to `policies.py` (O2/F1 code change) | T1 | `src/rocky/learning/policies.py` (edit in-place) | IN_PROGRESS |
-| T3 | xlfg-task-implementer | Create `tests/test_policy_domain_allowlist.py` with SC-1/SC-2/SC-3 (O2/F1 tests) | T2 | `tests/test_policy_domain_allowlist.py` (new file) | IN_PROGRESS |
-| T4 | xlfg-task-implementer | Commit F1 change + tests + run-dir artifacts (O2 release discipline) | T3 | `evidence/T4-commit-sha.txt` | IN_PROGRESS |
+| T1 | xlfg-task-implementer | Commit prior runs' uncommitted work (O1 release discipline) | — | `evidence/T1-commit-sha.txt` | DONE (06c5066) |
+| T2 | xlfg-task-implementer | Apply Option A domain-allowlist fix to `policies.py` (O2/F1 code change) | T1 | `src/rocky/learning/policies.py` (edit in-place) | DONE (in 05fa5ec) |
+| T3 | xlfg-task-implementer | Create `tests/test_policy_domain_allowlist.py` with SC-1/SC-2/SC-3 (O2/F1 tests) | T2 | `tests/test_policy_domain_allowlist.py` (new file) | DONE (in 05fa5ec; 3 passed) |
+| T4 | xlfg-task-implementer | Commit F1 change + tests + run-dir artifacts (O2 release discipline) | T3 | `evidence/T4-commit-sha.txt` | DONE (05fa5ec) |
 
 ## Scope notes
 

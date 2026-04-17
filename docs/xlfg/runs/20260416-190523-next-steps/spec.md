@@ -117,16 +117,39 @@ See `context.md`. For O2, minimal viable fix is Option A (per-task-family weak-t
 
 ## Chosen solution
 
-TBD (plan phase).
+**Option A — per-task-family weak-token allowlist** in `src/rocky/learning/policies.py`. Add module-level `_DOMAIN_ALLOWED_WEAK_TOKENS: dict[str, frozenset[str]] = {"repo": frozenset({"command"})}` after L14. Replace L203 `strong_token_matches = token_matches - WEAK_MATCH_TOKENS` with a task-family-aware effective_weak computation. Plus `tests/test_policy_domain_allowlist.py` with SC-1/SC-2/SC-3. Full detail in `solution-decision.md`; test contract in `test-contract.md`; readiness verdict READY in `test-readiness.md`.
+
+Rejected shortcuts:
+- Option C (global removal of `command` from `WEAK_MATCH_TOKENS`): killed by SC-2.
+- Option B (task-family match as fourth gate clause): too broad; degrades precision.
+- Option D (half-weight weak tokens): no empirical data justifies the complexity.
+- Option E (defer F1 with findings-only): unnecessary — mechanism is clear and fix is 3 lines.
 
 ## Task map
 
-TBD (plan phase).
+| Task | Objective | Scenarios | Scope | Primary artifact | Done check |
+|------|-----------|-----------|-------|------------------|------------|
+| T1 | O1 | SC-4 (full-suite gate) | Commit prior uncommitted work (enumerated file set); explicit `git add` paths only | `evidence/T1-commit-sha.txt` | `git show --stat HEAD` shows in-scope files; excluded absent; `pytest -q` green |
+| T2 | O2/F1 | SC-1, SC-2 (via T3) | 2 targeted edits in `src/rocky/learning/policies.py` (constant + L203 replacement) | `src/rocky/learning/policies.py` | `python -c "from rocky.learning.policies import _DOMAIN_ALLOWED_WEAK_TOKENS; assert 'repo' in _DOMAIN_ALLOWED_WEAK_TOKENS"` exits 0 |
+| T3 | O2/F1 | SC-1, SC-2, SC-3 | Create `tests/test_policy_domain_allowlist.py` (3 deterministic tests) | `tests/test_policy_domain_allowlist.py` | `pytest tests/test_policy_domain_allowlist.py -q` reports 3 passed |
+| T4 | O2 | SC-4 | Commit F1 change (policies.py + test + run-dir) | `evidence/T4-commit-sha.txt` | `git show --stat HEAD` includes policies.py + test + run-dir; `pytest -q` green |
+
+Ordering: T1 → T2 → T3 → T4 (strict sequential per `tasks-index.md`).
 
 ## Proof status
 
-TBD (verify phase).
+- Fast checks (per test-contract.md):
+  - `pytest tests/test_policy_domain_allowlist.py -q` — 3 passed
+  - Sensitivity: revert `effective_weak` lines → SC-1 fails; restore → SC-1 passes
+- Ship checks:
+  - `pytest tests/test_route_upgrade_driving_policy.py tests/test_route_intersection.py -q` — green
+  - `pytest -q` — full baseline green (730+14+0 pre-T3 → 733+14+0 post-T3)
+- Readiness gate: **READY** (see `test-readiness.md`)
 
 ## Release notes
 
-TBD.
+- PM: closes the last OPEN follow-up from `/tmp/205534-follow-ups.md` (F1 — `WEAK_MATCH_TOKENS` review). Prior run-20260416-161631's shipped-but-uncommitted work is now committed. No feature-level user-visible change; this is retrieval-scoring hardening.
+- UX: none (backend-only).
+- Engineering: minimal 3-line change to `policies.py` plus 3 new deterministic tests. Defense-in-depth for the retrieval drop that prior run's carry-field fix covered at the route-upgrade site; F1 extends coverage to the non-driver case.
+- QA: sensitivity witness required; no live-LLM needed for this run.
+- Release: two commits (O1 prior-run rollup; O2 F1 change). Conventional Commits style. No version bump (scoring-path fix is neither feature nor breaking).

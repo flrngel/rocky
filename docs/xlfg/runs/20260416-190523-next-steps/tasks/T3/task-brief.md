@@ -1,6 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 task_id: T3
+committed_in: 05fa5ec2b31079cc4926820c63e149076262323d
 PRIMARY_ARTIFACT: /Users/flrngel/project/personal/rocky/tests/test_policy_domain_allowlist.py
 FILE_SCOPE: |
   CREATE: tests/test_policy_domain_allowlist.py (new file; no YAML frontmatter)

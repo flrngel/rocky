@@ -1,6 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 task_id: T2
+committed_in: 05fa5ec2b31079cc4926820c63e149076262323d
 PRIMARY_ARTIFACT: /Users/flrngel/project/personal/rocky/src/rocky/learning/policies.py
 FILE_SCOPE: |
   EDIT: src/rocky/learning/policies.py (two targeted edits only — see Mission)
