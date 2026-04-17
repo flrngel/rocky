@@ -16,12 +16,13 @@ uv pip install -e ".[dev]"
 rocky "your task here"
 rocky --provider <name> --model <model> "task"
 
-# Tests
-pytest                              # all tests (quiet mode, per pyproject.toml)
-pytest tests/test_cli.py            # single file
-pytest tests/test_cli.py::test_name # single test
-pytest -v                           # verbose
-pytest --cov                        # with coverage
+# Deterministic suite (baseline: 730 passed + 14 skipped)
+pytest -q
+pytest tests/test_cli.py::test_name   # single test
+pytest --cov                          # with coverage
+
+# Live-LLM suite (real Ollama — see AGENTS.md for the L20 trigger rule)
+ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_self_learn_live.py -v
 ```
 
 No separate lint or build step — setuptools builds from `src/` layout.
@@ -60,14 +61,9 @@ No separate lint or build step — setuptools builds from `src/` layout.
 
 `core/runtime_state.py` — `ThreadRegistry` manages `ActiveTaskThread` instances. `EvidenceGraph` tracks claims with provenance. `AnswerContract` specifies what the answer must contain.
 
-## Testing philosophy (from AGENTS.md)
+## Testing
 
-- Test through the installed `rocky` CLI, not only direct Python calls.
-- Use the current Ollama setup; don't mock providers for agentic behavior tests.
-- Grade route selection, real tool use from traces, answer quality, and file artifacts.
-- Prefer generated workspaces over hard-coded fixtures.
-- Skills (curated workflow files) and learned policies (`.rocky/policies/learned/`) are different systems.
-- Learning scenarios: run baseline → `/learn` → retry in fresh process → verify policy loaded.
+See `AGENTS.md` for the full testing discipline: deterministic baseline, live-LLM triggers (**L20**), triple-live rule, sensitivity witnesses, and the decision-rule table for when live-LLM A/B is required before shipping.
 
 ## Conventions
 
