@@ -369,6 +369,21 @@ class AgentCore:
         # time and rolled into trace["loop_guard_hits"]. 0 when no repair
         # path fired.
         self._last_repair_loop_guard_hits: int = 0
+        # Carry-field for the policy (if any) that drove
+        # `_maybe_upgrade_route_from_project_context` to upgrade a
+        # conversation/general route. ContextBuilder retrieves learned_policies
+        # against the UPGRADED task_signature, which can drop the very policy
+        # that triggered the upgrade (e.g. a teach policy declared only on
+        # conversation/general upgrades the route to repo/general; the
+        # retriever then scores task_signature=0 for the policy and filters it
+        # out). The run loop merges this policy back into
+        # context.learned_policies after build so the policy reaches the
+        # system prompt, record_query, and selected_policies truthfully.
+        # Set in `_maybe_upgrade_route_from_project_context`; cleared at
+        # `run_prompt` entry. AgentCore is single-caller-per-instance — do not
+        # share one instance across concurrent coroutines; a concurrent reset
+        # would silently drop the injection (see run-20260416-205534 review).
+        self._route_upgrade_driving_policy: Any = None
 
     def _looks_like_backchannel_prompt(self, prompt: str) -> bool:
         words = re.findall(r"[a-z0-9_.+-]+", prompt.lower())
@@ -439,7 +454,7 @@ class AgentCore:
             *self.context_builder.skill_retriever.retrieve(prompt, route.task_signature, limit=6),
             *self.context_builder.policy_retriever.retrieve(prompt, route.task_signature, limit=6),
         ]
-        best_candidate: tuple[int, str, str, str] | None = None
+        best_candidate: tuple[int, str, str, str, Any] | None = None
 
         for guidance in retrieved_guidance:
             guidance_kind = "policy" if getattr(guidance, "kind", "") == "learned_policy" else "skill"
@@ -498,7 +513,7 @@ class AgentCore:
                 if signature == "repo/shell_execution" and not shellish_guidance:
                     signature_score -= 2
                 if best_candidate is None or signature_score > best_candidate[0]:
-                    best_candidate = (signature_score, signature, guidance.name, guidance_kind)
+                    best_candidate = (signature_score, signature, guidance.name, guidance_kind, guidance)
 
         if best_candidate is not None and best_candidate[0] >= 9:
             upgraded = self.router.decision_for_task_signature(
@@ -510,6 +525,17 @@ class AgentCore:
             if upgraded is not None:
                 upgraded.continuation_decision = route.continuation_decision
                 upgraded.continued_thread_id = route.continued_thread_id
+                # Carry-forward: when a POLICY drives the upgrade, the
+                # upgraded signature may differ from the policy's declared
+                # scope (e.g. conversation/general policy → repo/general
+                # route). ContextBuilder retrieves learned_policies against
+                # the upgraded signature and would drop the policy, so we
+                # stash the driving policy here and the run loop injects it
+                # into context.learned_policies after build. Skills drive
+                # upgrades too but skills ride a separate ContextPackage
+                # lane, so only policies need this rescue.
+                if best_candidate[3] == "policy":
+                    self._route_upgrade_driving_policy = best_candidate[4]
                 return upgraded
 
         if instruction_shell_bias >= 6:
@@ -3047,6 +3073,9 @@ class AgentCore:
         # the start of every run so a prior turn's count does not leak into
         # this turn's trace.
         self._last_repair_loop_guard_hits = 0
+        # Zero the route-upgrade driver so a prior turn's upgrade doesn't
+        # leak into this turn's ContextPackage.
+        self._route_upgrade_driving_policy = None
         session = self._session_for_run(prompt, options)
         thread_registry = ThreadRegistry(session)
         workspace_root = str(self.tool_registry.context.workspace_root)
@@ -3140,6 +3169,41 @@ class AgentCore:
             evidence_graph=evidence_graph,
             answer_contract=pre_answer_contract,
         )
+        # When a policy drove the route upgrade but its declared task_signature
+        # no longer matches the upgraded route, the retriever drops it. Inject
+        # it back so selected_policies, the system-prompt learned-pack, and
+        # record_query see the same policy that justified the upgrade. This
+        # keeps the route-upgrade and context-retrieval lanes consistent.
+        # IMPORTANT: respect rollback state — the route-upgrade retrieve path
+        # doesn't filter on rolled-back lineage; if we inject a rolled-back
+        # policy we re-seed a corrected preference past /undo.
+        driver = self._route_upgrade_driving_policy
+        if driver is not None and self.context_builder._is_artifact_rolled_back(getattr(driver, "path", None)):
+            driver = None
+            self._route_upgrade_driving_policy = None
+        if driver is not None:
+            driver_name = getattr(driver, "name", None)
+            existing_names = {item.get("name") for item in context.learned_policies}
+            if driver_name and driver_name not in existing_names:
+                context.learned_policies.insert(0, {
+                    "name": driver.name,
+                    "scope": driver.scope,
+                    "origin": driver.origin,
+                    "generation": driver.generation,
+                    "path": str(driver.path),
+                    "description": driver.description,
+                    "text": driver.body[:6000],
+                    "promotion_state": driver.metadata.get("promotion_state", "promoted"),
+                    "failure_class": driver.metadata.get("failure_class"),
+                    "task_family": driver.metadata.get("task_family"),
+                    "required_behavior": list(driver.metadata.get("required_behavior") or []),
+                    "prohibited_behavior": list(driver.metadata.get("prohibited_behavior") or []),
+                    "evidence_requirements": list(driver.metadata.get("evidence_requirements") or []),
+                    "feedback_excerpt": driver.metadata.get("feedback_excerpt"),
+                    "reflection_source": driver.metadata.get("reflection_source"),
+                    "reflection_confidence": driver.metadata.get("reflection_confidence"),
+                    "storage_format": driver.storage_format,
+                })
         context_summary = context.summary()
         self.last_context = context_summary
         system_prompt = build_system_prompt(
