@@ -11,3 +11,5 @@
 {"run":"20260416-190523-next-steps","phase":"verify","event":"start","ts":"2026-04-17T02:41:45Z"}
 {"run":"20260416-190523-next-steps","phase":"verify","event":"end","ts":"2026-04-17T02:46:13Z"}
 {"run":"20260416-190523-next-steps","phase":"review","event":"start","ts":"2026-04-17T02:46:13Z"}
+{"run":"20260416-190523-next-steps","phase":"review","event":"end","ts":"2026-04-17T02:49:43Z"}
+{"run":"20260416-190523-next-steps","phase":"compound","event":"start","ts":"2026-04-17T02:49:43Z"}
