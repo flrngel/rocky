@@ -12,6 +12,9 @@ from rocky.util.yamlx import split_frontmatter
 
 
 WEAK_MATCH_TOKENS = {"command", "find", "help", "information", "task", "user"}
+_DOMAIN_ALLOWED_WEAK_TOKENS: dict[str, frozenset[str]] = {
+    "repo": frozenset({"command"}),
+}
 PROMOTION_WEIGHT = {"promoted": 3, "candidate": 1, "rejected": -2, "stale": -1}
 
 
@@ -200,7 +203,9 @@ class LearnedPolicyRetriever:
                 | (query_words & keyword_tokens)
                 | (thread_words & keyword_tokens)
             )
-            strong_token_matches = token_matches - WEAK_MATCH_TOKENS
+            policy_task_family = str(policy.metadata.get("task_family") or "")
+            effective_weak = WEAK_MATCH_TOKENS - _DOMAIN_ALLOWED_WEAK_TOKENS.get(policy_task_family, frozenset())
+            strong_token_matches = token_matches - effective_weak
             token_overlap = (
                 len(query_words & name_tokens) * 3
                 + len(query_words & description_tokens)

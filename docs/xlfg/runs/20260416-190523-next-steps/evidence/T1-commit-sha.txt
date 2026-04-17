@@ -1,0 +1,2 @@
+06c50665894ffb06c56e860c46e7bd84eb2d18b3
+feat(agent): commit prior-run approved work (carry-field fix, F4/R2/F2 tests, run-dir)
