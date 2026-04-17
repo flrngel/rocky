@@ -1,0 +1,59 @@
+{
+  "run_id": "20260416-190523-next-steps",
+  "timestamp": "20260416-190523",
+  "verdict": "GREEN",
+  "scenarios": [
+    {
+      "id": "SC-1",
+      "name": "repo_command_policy_retrieved",
+      "status": "pass",
+      "evidence_path": "fast-check.log"
+    },
+    {
+      "id": "SC-2",
+      "name": "conversation_command_policy_not_retrieved",
+      "status": "pass",
+      "evidence_path": "fast-check.log"
+    },
+    {
+      "id": "SC-3",
+      "name": "repo_command_policy_generalization",
+      "status": "pass",
+      "evidence_path": "fast-check.log"
+    }
+  ],
+  "baseline": {
+    "full_suite_expected": "733 passed + 14 skipped",
+    "full_suite_actual": "733 passed + 14 skipped"
+  },
+  "sensitivity_bit": true,
+  "sensitivity_evidence_path": "sensitivity-witness.txt",
+  "commits_under_test": [
+    "06c5066",
+    "05fa5ec"
+  ],
+  "test_results": {
+    "fast_check": {
+      "phase": "smoke",
+      "name": "test_policy_domain_allowlist",
+      "exit_code": 0,
+      "log_path": "fast-check.log",
+      "summary": "3 passed"
+    },
+    "ship_check": {
+      "phase": "smoke",
+      "name": "route_upgrade_and_intersection",
+      "exit_code": 0,
+      "log_path": "ship-check.log",
+      "summary": "10 passed"
+    },
+    "full_suite": {
+      "phase": "full",
+      "name": "all_tests",
+      "exit_code": 0,
+      "log_path": "full-suite.log",
+      "summary": "733 passed, 14 skipped in 15.41s"
+    }
+  },
+  "notes": "All test harnesses passed. Sensitivity witness cycle confirmed: reverting Option A form to pre-fix breaks SC-1; restoring fixes it. Working tree clean after restore (git diff shows no changes)."
+}

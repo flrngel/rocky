@@ -1,0 +1,13 @@
+---
+status: DONE
+---
+05fa5ec2b31079cc4926820c63e149076262323d
+fix(learning): add per-domain weak-token allowlist for repo/command retrieval (F1)
+
+T1 SHA: 06c50665894ffb06c56e860c46e7bd84eb2d18b3
+T1 subject: feat(agent): commit prior-run approved work (carry-field fix, F4/R2/F2 tests, run-dir)
+
+T4 SHA: 05fa5ec2b31079cc4926820c63e149076262323d
+T4 subject: fix(learning): add per-domain weak-token allowlist for repo/command retrieval (F1)
+
+Full suite: 733 passed, 14 skipped (python3.13 venv, no LLM provider required)
