@@ -72,6 +72,19 @@ Rocky is additive — default behavior is unchanged when a flag is absent.
 - **`verifier.semantic_threshold: 0.5`** — unsupported-claim fraction above which status escalates to `needs_review`.
 - **`tracing.max_age_days`** / **`tracing.max_trace_count`** — optional retention limits for `.rocky/traces/`. Both default to `None` (unlimited). Eviction is oldest-first.
 
+### Tool proxy
+
+All HTTP-based tools (`search_web`, `fetch_url`, `extract_links`, `agent_browser`) honor a single env var:
+
+```bash
+ROCKY_TOOL_PROXY=http://user:pass@proxy.example:8080 rocky ...
+ROCKY_TOOL_PROXY=socks5://proxy.example:1080 rocky ...
+```
+
+The HTTP tools build `httpx.Client` with `trust_env=False`, so the conventional `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` variables are intentionally **ignored** — tool-level network routing stays independent of the operator's shell environment. Set `ROCKY_TOOL_PROXY` explicitly if you need a proxy.
+
+`socks5://` URLs are supported out of the box via the `httpx[socks]` extra (pulled in as a runtime dependency).
+
 ### Integration
 
 Integrators parsing the answer stream should prefer **`response.answer_bounded_text`** over `response.text`. That field is wrapped in `<<<ANSWER>>>` / `<<<END>>>` markers so the answer region is unambiguous even in multi-block outputs. Use `rocky.core.agent.strip_markers` (or the simple string slice) to recover the body. The invariant `response.text == strip_markers(response.answer_bounded_text)` is guarded by a unit test.

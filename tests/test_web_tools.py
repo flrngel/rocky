@@ -1006,3 +1006,37 @@ def test_search_web_respects_total_timeout_budget(tmp_path: Path, monkeypatch) -
     assert request_count["n"] <= 2, (
         f"budget must stop fan-out after the first engine; got {request_count['n']} requests, steps={steps!r}"
     )
+
+
+def test_readme_documents_rocky_tool_proxy() -> None:
+    """README.md must name ROCKY_TOOL_PROXY and the deliberate trust_env=False stance.
+
+    Commit 0ca0dbe removed the old `tools.env` proxy block without documenting
+    the ROCKY_TOOL_PROXY replacement, leaving users to discover the env var by
+    reading source. This drift guard fails if future edits drop any of the
+    load-bearing facts a user needs to configure a proxy correctly.
+    """
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    assert "ROCKY_TOOL_PROXY" in readme, "README.md must name the proxy env var"
+    assert "socks5://" in readme, "README.md must show a socks5:// example URL"
+    assert "trust_env=False" in readme, (
+        "README.md must note that standard *_PROXY env vars are ignored "
+        "(httpx is constructed with trust_env=False)"
+    )
+
+
+def test_socks5_proxy_url_does_not_raise_import_error(monkeypatch) -> None:
+    """ROCKY_TOOL_PROXY=socks5://... is a declared supported URL scheme.
+
+    httpx refuses to construct a Client with a socks5:// proxy unless `socksio`
+    is installed (raises ImportError at Client.__init__). Rocky declares
+    httpx[socks] in pyproject.toml precisely so this works out of the box —
+    without the extra, users hit an undiagnosable ImportError on the first
+    search_web / fetch_url call.
+    """
+    monkeypatch.setenv(TOOL_PROXY_ENV_VAR, "socks5://127.0.0.1:1080")
+
+    client = web._client(timeout_s=5)
+
+    assert client is not None
+    client.close()
