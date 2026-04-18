@@ -182,13 +182,20 @@ def _looks_like_bot_challenge(response: httpx.Response) -> bool:
     content_type = response.headers.get("content-type", "").lower()
     if "html" not in content_type:
         return False
-    html = response.text.lower()
-    if any(marker in html for marker in BOT_CHALLENGE_HARD_MARKERS):
-        return True
+    raw_html_lower = response.text.lower()
     soup = BeautifulSoup(response.text, "html.parser")
+    # Strip inert-infrastructure tags before HARD-marker check so CF/Turnstile script
+    # URLs in <script src> / <link> / <meta> don't false-flag clean 200 responses
+    # (O4b-β). soup.decode() preserves attributes on surviving elements (e.g.
+    # data-sitekey on a visible <div class="cf-turnstile">) so the positive case
+    # at test line 538 still triggers correctly.
+    for tag in soup.find_all(["script", "link", "noscript", "meta"]):
+        tag.decompose()
+    stripped_html = soup.decode().lower()
+    if any(marker in stripped_html for marker in BOT_CHALLENGE_HARD_MARKERS):
+        return True
     title = soup.title.string.strip().lower() if soup.title and soup.title.string else ""
-    phrase_matches = sum(1 for marker in BOT_CHALLENGE_MARKERS if marker in html)
-    title_matches = sum(1 for marker in BOT_CHALLENGE_TITLE_MARKERS if marker in title)
+    phrase_matches = sum(1 for marker in BOT_CHALLENGE_MARKERS if marker in raw_html_lower)
     if phrase_matches >= 2:
         return True
     if response.status_code in {202, 403, 429, 503} and phrase_matches >= 1:

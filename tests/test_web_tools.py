@@ -572,6 +572,28 @@ def test_bot_detection_single_phrase_with_challenge_status_triggers() -> None:
     assert web._looks_like_bot_challenge(response) is True
 
 
+def test_bot_detection_inert_cf_infrastructure_does_not_flag() -> None:
+    """CF infrastructure strings appearing only in <script src>, <link>, and <meta>
+    attributes must NOT trigger the bot-challenge guard on a clean HTTP 200 response.
+    Regression for O4b-β: the HARD marker check now runs against the stripped
+    serialization (script/link/noscript/meta removed) rather than raw HTML."""
+    response = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://soundguys.com/best-earbuds"),
+        headers={"content-type": "text/html; charset=UTF-8"},
+        text="""<!DOCTYPE html><html><head>
+  <script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>
+  <link rel="preconnect" href="https://challenges.cloudflare.com/" data-sitekey="infra-ref">
+  <meta name="description" content="best earbuds review">
+</head><body>
+  <h1>The best wireless earbuds under $200</h1>
+  <p>Normal article content about Sony, Bose, Anker...</p>
+</body></html>""",
+    )
+
+    assert web._looks_like_bot_challenge(response) is False
+
+
 def test_fetch_url_bot_challenge_sets_browser_fallback_hint(tmp_path: Path, monkeypatch) -> None:
     ctx = _tool_context(tmp_path)
 
