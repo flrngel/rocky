@@ -7,9 +7,12 @@ from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from rocky.tools.base import Tool, ToolContext, ToolResult
+from rocky.tools.base import Tool, ToolContext, ToolResult, _tool_cap
 from rocky.tools.proxy_support import tool_proxy_url
 from rocky.util.text import truncate
+
+
+CHALLENGE_EXCERPT_CHARS = 2000
 
 
 USER_AGENT = (
@@ -317,7 +320,7 @@ def _challenge_result(response: httpx.Response, *, requested_url: str, attempts:
         url=str(response.url),
         status_code=response.status_code,
         error="anti-bot challenge",
-        details={"text_excerpt": _response_text_excerpt(response)},
+        details={"text_excerpt": _response_text_excerpt(response, CHALLENGE_EXCERPT_CHARS)},
         metadata={
             "attempts": attempts,
             "blocked_by_challenge": True,
@@ -482,7 +485,7 @@ def _extract_search_results(html: str, base_url: str, max_results: int) -> list[
     return _extract_duckduckgo_results(html, base_url, max_results)
 
 
-def _response_text_excerpt(response: httpx.Response) -> str:
+def _response_text_excerpt(response: httpx.Response, limit: int) -> str:
     content_type = response.headers.get("content-type", "").lower()
     if "html" in content_type:
         soup = BeautifulSoup(response.text, "html.parser")
@@ -496,11 +499,11 @@ def _response_text_excerpt(response: httpx.Response) -> str:
         if candidate is not None:
             text = " ".join(candidate.get_text(" ", strip=True).split())
             if len(text) >= 200:
-                return truncate(text, 4000)
+                return truncate(text, limit)
         body = soup.find("body") or soup
         text = " ".join(body.get_text(" ", strip=True).split())
-        return truncate(text, 4000)
-    return truncate(response.text.strip(), 4000)
+        return truncate(text, limit)
+    return truncate(response.text.strip(), limit)
 
 
 def fetch_url(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -520,7 +523,7 @@ def fetch_url(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             "url": str(response.url),
             "status_code": response.status_code,
             "title": title,
-            "text_excerpt": _response_text_excerpt(response),
+            "text_excerpt": _response_text_excerpt(response, _tool_cap(ctx.config.tools, "fetch_url")),
             "link_items": link_items,
             "links": links,
             "content_type": response.headers.get("content-type", ""),

@@ -849,3 +849,97 @@ def test_search_web_broadening_stops_after_max_rounds(tmp_path: Path, monkeypatc
     steps = result.metadata["steps"]
     broadening_steps = [s for s in steps if s.get("stage") == "broadening"]
     assert len(broadening_steps) <= web.MAX_BROADENING_ROUNDS
+
+
+def _long_article_html(marker: str, filler_words: int = 2500) -> str:
+    filler = ("lorem " * filler_words).strip()
+    return f"""
+    <html>
+      <head><title>Long article</title></head>
+      <body>
+        <article>{filler} {marker}</article>
+      </body>
+    </html>
+    """
+
+
+def test_fetch_url_excerpt_respects_configured_output_cap(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+    ctx.config.tools.max_tool_output_chars = 20000
+    sentinel = "SENTINEL_LATE_MARKER_Z9Q"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text=_long_article_html(sentinel),
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://example.com/long"})
+
+    assert result.success is True
+    excerpt = result.data["text_excerpt"]
+    assert sentinel in excerpt, "late sentinel beyond the old 4000-char cap must survive the new configured cap"
+    assert len(excerpt) > 4000, "excerpt must grow past the old hard-coded 4000-char ceiling"
+
+
+def test_fetch_url_excerpt_respects_per_tool_override(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+    ctx.config.tools.max_tool_output_chars = 8000
+    ctx.config.tools.tool_output_limits = {"fetch_url": 16000}
+    sentinel = "SENTINEL_PER_TOOL_OVERRIDE"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text=_long_article_html(sentinel),
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://example.com/override"})
+
+    assert result.success is True
+    excerpt = result.data["text_excerpt"]
+    assert sentinel in excerpt, "per-tool override must lift fetch_url above the global cap"
+    assert len(excerpt) > 8000, "excerpt must exceed the global cap when the per-tool override is larger"
+
+
+def test_challenge_result_excerpt_stays_bounded(tmp_path: Path, monkeypatch) -> None:
+    ctx = _tool_context(tmp_path)
+    ctx.config.tools.max_tool_output_chars = 50000
+    padding = ("blocked content filler " * 2000).strip()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            202,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text=f"""
+            <html>
+              <head><title>Challenge</title></head>
+              <body>
+                <p>Please complete the following challenge.</p>
+                <p>Verify you are human.</p>
+                <p>{padding}</p>
+              </body>
+            </html>
+            """,
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://example.com/challenge-big"})
+
+    assert result.success is False
+    assert result.metadata["blocked_by_challenge"] is True
+    excerpt = result.data["text_excerpt"]
+    assert len(excerpt) <= web.CHALLENGE_EXCERPT_CHARS + 64, (
+        "challenge preview is a diagnosis surface, not primary content — "
+        "must stay bounded independent of fetch_url cap"
+    )
