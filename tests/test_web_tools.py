@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -942,4 +943,66 @@ def test_challenge_result_excerpt_stays_bounded(tmp_path: Path, monkeypatch) -> 
     assert len(excerpt) <= web.CHALLENGE_EXCERPT_CHARS + 64, (
         "challenge preview is a diagnosis surface, not primary content — "
         "must stay bounded independent of fetch_url cap"
+    )
+
+
+def test_search_web_respects_total_timeout_budget(tmp_path: Path, monkeypatch) -> None:
+    """Wall-clock budget bounds cross-engine fan-out.
+
+    Without this guard, a misconfigured proxy / throttled engine can keep
+    search_web iterating through all 4 engines × 2 retries × 3 query variants
+    for many minutes (observed: ~8min on real traffic). The budget short-circuits
+    the sweep and returns a bounded-time error-shaped ToolResult instead.
+    """
+    ctx = _tool_context(tmp_path)
+
+    request_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text="<html><body><p>no matches</p></body></html>",
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    # Virtual clock: first call returns t=0 (sets deadline), subsequent calls
+    # return t=100 so the deadline (0 + 5) is exceeded before engine #2.
+    calls = {"n": 0}
+    real_monotonic = time.monotonic
+
+    def fake_monotonic() -> float:
+        n = calls["n"]
+        calls["n"] += 1
+        if n == 0:
+            return 0.0
+        return 100.0
+
+    monkeypatch.setattr(web.time, "monotonic", fake_monotonic)
+
+    result = web.search_web(ctx, {"query": "coffee machines under 1000", "total_timeout_s": 5})
+
+    # restore monotonic in case other code reads it later in the assertions
+    monkeypatch.setattr(web.time, "monotonic", real_monotonic)
+
+    assert result.success is False, (
+        "exceeded-budget fan-out must surface an error-shaped ToolResult; "
+        f"got success with metadata={result.metadata!r}"
+    )
+    assert "budget" in result.summary.lower(), (
+        f"summary should name the budget; got {result.summary!r}"
+    )
+    assert result.data.get("error") == "budget_exceeded"
+    assert result.metadata["total_timeout_s"] == 5
+    steps = result.metadata["steps"]
+    budget_steps = [s for s in steps if s.get("outcome") == "budget_exceeded"]
+    assert budget_steps, f"at least one step should be budget_exceeded; got {steps!r}"
+    # The first engine runs (1 HTTP request), then the deadline blocks the rest.
+    # Without the budget check we'd see ≥4 engine hits for the original query
+    # alone, plus broadening — at least 8+ requests.
+    assert request_count["n"] <= 2, (
+        f"budget must stop fan-out after the first engine; got {request_count['n']} requests, steps={steps!r}"
     )

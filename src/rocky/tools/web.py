@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 
@@ -592,11 +593,15 @@ def _search_engines(
     max_results: int,
     timeout_s: int,
     steps: list[dict[str, Any]],
+    deadline: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     encoded_query = urlencode({"q": query})
     attempted_urls: list[str] = []
     errors: list[str] = []
     for engine, template in SEARCH_SOURCES:
+        if deadline is not None and time.monotonic() >= deadline:
+            steps.append({"engine": engine, "url": template, "outcome": "budget_exceeded", "result_count": 0})
+            break
         url = template.format(query=encoded_query)
         attempted_urls.append(url)
         response, error = _request(url, timeout_s=timeout_s, follow_redirects=True)
@@ -635,9 +640,13 @@ def search_web(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     max_results = int(args.get("max_results", 8))
     ctx.require("web", "search web", query, risky=True)
     timeout_s = int(args.get("timeout_s", 20))
+    total_timeout_s = int(args.get("total_timeout_s", 30))
+    deadline = time.monotonic() + max(1, total_timeout_s)
     steps: list[dict[str, Any]] = []
 
-    results, meta = _search_engines(query, max_results=max_results, timeout_s=timeout_s, steps=steps)
+    results, meta = _search_engines(
+        query, max_results=max_results, timeout_s=timeout_s, steps=steps, deadline=deadline,
+    )
     if results:
         assert meta is not None
         meta["steps"] = steps
@@ -648,9 +657,12 @@ def search_web(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
 
     variants = _broaden_query(query)
     for round_num, variant in enumerate(variants[:MAX_BROADENING_ROUNDS], 1):
+        if time.monotonic() >= deadline:
+            steps.append({"stage": "broadening", "round": round_num, "variant": variant, "outcome": "budget_exceeded"})
+            break
         steps.append({"stage": "broadening", "round": round_num, "variant": variant, "outcome": "attempting"})
         variant_results, variant_meta = _search_engines(
-            variant, max_results=max_results, timeout_s=timeout_s, steps=steps,
+            variant, max_results=max_results, timeout_s=timeout_s, steps=steps, deadline=deadline,
         )
         if variant_results:
             assert variant_meta is not None
@@ -662,11 +674,18 @@ def search_web(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                 True, variant_results, f"Search returned {len(variant_results)} result(s) (broadened query)", variant_meta,
             )
 
+    budget_exceeded = any(step.get("outcome") == "budget_exceeded" for step in steps)
+    if budget_exceeded:
+        summary = f"Search exceeded {total_timeout_s}s total budget"
+        error_tag = "budget_exceeded"
+    else:
+        summary = "Search failed or returned no parsable results"
+        error_tag = f"Tried {len(steps)} steps including broadened variants"
     return _error_result(
-        "Search failed or returned no parsable results",
+        summary,
         query=query,
-        error=f"Tried {len(steps)} steps including broadened variants",
-        metadata={"steps": steps},
+        error=error_tag,
+        metadata={"steps": steps, "total_timeout_s": total_timeout_s},
     )
 
 
@@ -682,7 +701,7 @@ def tools() -> list[Tool]:
         Tool(
             "search_web",
             "Search the web with a lightweight HTML fallback",
-            {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}, "timeout_s": {"type": "integer"}}, "required": ["query"]},
+            {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}, "timeout_s": {"type": "integer"}, "total_timeout_s": {"type": "integer"}}, "required": ["query"]},
             "web",
             search_web,
         ),
