@@ -1,11 +1,10 @@
 """
 O19 — Documentation + version bump.
 
-The v1.2.0 docs bundle (follow-up §10) must cover 8 user-facing topics in
+The v1.3.0 docs bundle (follow-up §10) must cover 8 user-facing topics in
 ``README.md`` plus reference ``answer_bounded_text`` for integrators. Version
 must be consistent across ``src/rocky/__init__.py`` and ``pyproject.toml`` at
-``1.2.0`` — current is ``1.1.0`` and this batch ships feature additions so a
-minor bump is required.
+``1.3.0``.
 """
 from __future__ import annotations
 
@@ -40,9 +39,9 @@ def test_readme_references_answer_bounded_text() -> None:
     )
 
 
-def test_version_bumped_to_one_two_zero() -> None:
-    assert rocky.__version__ == "1.2.0", (
-        f"Rocky version must be 1.2.0 for this batch; got {rocky.__version__!r}"
+def test_version_bumped_to_one_three_zero() -> None:
+    assert rocky.__version__ == "1.3.0", (
+        f"Rocky version must be 1.3.0 for this batch; got {rocky.__version__!r}"
     )
 
 
