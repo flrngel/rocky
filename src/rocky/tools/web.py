@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 
 import httpx
+import socksio.exceptions
 from bs4 import BeautifulSoup
 
 from rocky.tools.base import Tool, ToolContext, ToolResult, _tool_cap
@@ -373,6 +374,23 @@ def _get(
                     "attempts": attempt,
                     "transient": transient,
                     "tls_verification_failed": _is_tls_verification_error(exc),
+                },
+            )
+        except socksio.exceptions.SOCKSError as exc:
+            # httpcore's SOCKS transport reads the handshake reply with a single
+            # stream.read(); TCP fragmentation of the 2-byte auth/method reply
+            # surfaces here as socksio.ProtocolError("Malformed reply"), which
+            # httpcore does not wrap. Treat it as transient and retry.
+            if attempt < total_attempts:
+                continue
+            return None, _error_result(
+                f"SOCKS proxy handshake failed for {url}",
+                url=url,
+                error=f"{exc.__class__.__name__}: {exc}",
+                metadata={
+                    "attempts": attempt,
+                    "transient": True,
+                    "proxy_handshake_failed": True,
                 },
             )
         if _looks_like_bot_challenge(response):

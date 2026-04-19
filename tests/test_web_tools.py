@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import socksio.exceptions
 
 from rocky.app import RockyRuntime
 from rocky.tools.proxy_support import TOOL_PROXY_ENV_VAR
@@ -223,6 +224,56 @@ def test_fetch_url_retries_transient_request_errors(tmp_path: Path, monkeypatch)
     assert result.success is True
     assert result.data["title"] == "Recovered"
     assert calls == 2
+
+
+def test_fetch_url_retries_socks_handshake_protocol_error(tmp_path: Path, monkeypatch) -> None:
+    """A fragmented SOCKS5 auth reply surfaces as socksio.ProtocolError("Malformed reply")
+    from httpcore's single-read handshake. It must be treated as transient and retried,
+    not escape as a bare exception that crashes the tool.
+    """
+    ctx = _tool_context(tmp_path)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise socksio.exceptions.ProtocolError("Malformed reply")
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            text="<html><head><title>Recovered</title></head><body><a href='/ok'>ok</a></body></html>",
+        )
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://example.com/socks-retry"})
+
+    assert result.success is True
+    assert result.data["title"] == "Recovered"
+    assert calls == 2
+
+
+def test_fetch_url_surfaces_clean_error_after_repeated_socks_failures(tmp_path: Path, monkeypatch) -> None:
+    """When every attempt fails the SOCKS handshake, search_web/fetch_url must produce a
+    structured ToolResult (not crash the tool), so downstream agent logic can fall through
+    to other engines or surface a proxy-config hint.
+    """
+    ctx = _tool_context(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise socksio.exceptions.ProtocolError("Malformed reply")
+
+    _install_mock_client(monkeypatch, handler)
+
+    result = web.fetch_url(ctx, {"url": "https://example.com/socks-dead"})
+
+    assert result.success is False
+    assert result.metadata["proxy_handshake_failed"] is True
+    assert result.metadata["transient"] is True
+    assert "SOCKS proxy handshake failed" in result.summary
+    assert "Malformed reply" in result.data["error"]
 
 
 def test_fetch_url_rejects_bot_challenge_pages(tmp_path: Path, monkeypatch) -> None:
