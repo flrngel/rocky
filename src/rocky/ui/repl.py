@@ -533,14 +533,8 @@ class RockyRepl:
                 self.print_command_result(result)
                 continue
             printer = EventPrinter(self.live_console, verbose=getattr(self.runtime, "verbose_enabled", False))
-            try:
-                with patch_stdout():
-                    response = self.runtime.run_prompt(line, stream=True, event_handler=printer)
-            except KeyboardInterrupt:
-                if printer.streamed_text:
-                    printer.finish()
-                self.console.print("[dim]interrupted[/]")
-                continue
+            with patch_stdout():
+                response = self.runtime.run_prompt(line, stream=True, event_handler=printer)
             if printer.streamed_text:
                 printer.finish()
             else:

@@ -1,0 +1,1465 @@
+{
+  "version": "1.3.0",
+  "issues": [
+    {
+      "id": "P001",
+      "category": "release-packaging",
+      "problem": "No tracked LICENSE file shipped with the repo.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P002",
+      "category": "release-packaging",
+      "problem": "No changelog for release history.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P003",
+      "category": "release-packaging",
+      "problem": "No per-release note for the next bump.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P004",
+      "category": "release-packaging",
+      "problem": "Version literal duplicated outside a single source of truth.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P005",
+      "category": "release-packaging",
+      "problem": "Package metadata shipped AGENTS.md instead of user README.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P006",
+      "category": "release-packaging",
+      "problem": "PyPI metadata lacked keywords for discovery.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P007",
+      "category": "release-packaging",
+      "problem": "PyPI metadata lacked Trove classifiers.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P008",
+      "category": "release-packaging",
+      "problem": "No manifest guaranteed docs and tracked harness assets in sdists.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P009",
+      "category": "release-packaging",
+      "problem": "No contributor-facing release checklist.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P010",
+      "category": "release-packaging",
+      "problem": "No helper script for future version bumps.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P011",
+      "category": "release-packaging",
+      "problem": "README status line lagged behind package version.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P012",
+      "category": "release-packaging",
+      "problem": "No explicit note describing why this bump is minor, not patch.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P013",
+      "category": "release-packaging",
+      "problem": "No release artifact that summarized the upgrade.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P014",
+      "category": "release-packaging",
+      "problem": "No test guard for package metadata/readme drift.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P015",
+      "category": "release-packaging",
+      "problem": "No test guard for changelog presence.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P016",
+      "category": "release-packaging",
+      "problem": "No test guard for release-note presence.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P017",
+      "category": "release-packaging",
+      "problem": "No test guard for version-module consistency.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P018",
+      "category": "release-packaging",
+      "problem": "No single module exposing version metadata to internal callers.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P019",
+      "category": "release-packaging",
+      "problem": "Package metadata lacked an explicit machine-friendly capability artifact.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P020",
+      "category": "release-packaging",
+      "problem": "No machine-readable upgrade ledger for this release.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/version.py, pyproject.toml, CHANGELOG.md and related files.",
+      "fix_files": [
+        "src/rocky/version.py",
+        "pyproject.toml",
+        "CHANGELOG.md",
+        "docs/releases/v1.3.0.md",
+        "CONTRIBUTING.md",
+        "scripts/bump_version.py"
+      ]
+    },
+    {
+      "id": "P021",
+      "category": "repo-hygiene",
+      "problem": "Workspace-local `.rocky/` state was not ignored.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P022",
+      "category": "repo-hygiene",
+      "problem": "Agent-testing run manifests were not ignored.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P023",
+      "category": "repo-hygiene",
+      "problem": "Agent-testing evidence artifacts were not ignored.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P024",
+      "category": "repo-hygiene",
+      "problem": "No editorconfig for consistent text-file formatting.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P025",
+      "category": "repo-hygiene",
+      "problem": "No CI workflow to prove deterministic health on push/PR.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P026",
+      "category": "repo-hygiene",
+      "problem": "No tracked `.agent-testing/README.md` explaining what is committed.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P027",
+      "category": "repo-hygiene",
+      "problem": "No tracked `.agent-testing/repo-profile.json`.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P028",
+      "category": "repo-hygiene",
+      "problem": "Missing `sl-memory` live spec.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P029",
+      "category": "repo-hygiene",
+      "problem": "Missing `sl-retrospect` live spec.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P030",
+      "category": "repo-hygiene",
+      "problem": "Missing `sl-promote` live spec.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P031",
+      "category": "repo-hygiene",
+      "problem": "Missing `sl-brief` live spec.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P032",
+      "category": "repo-hygiene",
+      "problem": "Missing `sl-undo` live spec.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P033",
+      "category": "repo-hygiene",
+      "problem": "Missing `sl-all` umbrella live spec.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P034",
+      "category": "repo-hygiene",
+      "problem": "No companion note for the promotion scenario manifest.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P035",
+      "category": "repo-hygiene",
+      "problem": "No manifest exclusion for local `.rocky/` state.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P036",
+      "category": "repo-hygiene",
+      "problem": "No manifest exclusion for agent-testing `runs/`.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P037",
+      "category": "repo-hygiene",
+      "problem": "No manifest exclusion for agent-testing `evidence/`.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P038",
+      "category": "repo-hygiene",
+      "problem": "No manifest exclusion for Python bytecode.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P039",
+      "category": "repo-hygiene",
+      "problem": "No explicit root-level maintenance script directory.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P040",
+      "category": "repo-hygiene",
+      "problem": "No contributor doc spelling out local-state commit boundaries.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via .gitignore, .editorconfig, .github/workflows/ci.yml and related files.",
+      "fix_files": [
+        ".gitignore",
+        ".editorconfig",
+        ".github/workflows/ci.yml",
+        "MANIFEST.in",
+        ".agent-testing/README.md",
+        ".agent-testing/repo-profile.json",
+        ".agent-testing/specs/*.json"
+      ]
+    },
+    {
+      "id": "P041",
+      "category": "public-api-consistency",
+      "problem": "Importing `rocky` eagerly imported the heavy agent module.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P042",
+      "category": "public-api-consistency",
+      "problem": "Version-only consumers had no lightweight import path.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P043",
+      "category": "public-api-consistency",
+      "problem": "App runtime imported version via the root package instead of a dedicated module.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P044",
+      "category": "public-api-consistency",
+      "problem": "CLI imported version via the root package instead of a dedicated module.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P045",
+      "category": "public-api-consistency",
+      "problem": "No test proved lazy root import behavior.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P046",
+      "category": "public-api-consistency",
+      "problem": "No module exposed a machine-readable capability inventory.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P047",
+      "category": "public-api-consistency",
+      "problem": "No generated JSON capability inventory existed in docs.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P048",
+      "category": "public-api-consistency",
+      "problem": "No generated markdown scenario catalog existed in docs.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P049",
+      "category": "public-api-consistency",
+      "problem": "No script regenerated capability docs from code.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P050",
+      "category": "public-api-consistency",
+      "problem": "No test guarded capability JSON drift.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P051",
+      "category": "public-api-consistency",
+      "problem": "No test guarded scenario markdown drift.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P052",
+      "category": "public-api-consistency",
+      "problem": "No central export for release version and capability inventory together.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P053",
+      "category": "public-api-consistency",
+      "problem": "Route profiles were only implicit in source files.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P054",
+      "category": "public-api-consistency",
+      "problem": "Operator commands were only discoverable by reading code or REPL help.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P055",
+      "category": "public-api-consistency",
+      "problem": "Learning scenarios were only documented in live tests.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P056",
+      "category": "public-api-consistency",
+      "problem": "Harness scenario names were not summarized in one place.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P057",
+      "category": "public-api-consistency",
+      "problem": "No human-readable matrix tied task signatures to preferred tools.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P058",
+      "category": "public-api-consistency",
+      "problem": "No docs artifact enumerated read-only vs write-capable scenario types.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P059",
+      "category": "public-api-consistency",
+      "problem": "No test guaranteed the docs match current slash-command inventory.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P060",
+      "category": "public-api-consistency",
+      "problem": "No test guaranteed the docs match current task-signature inventory.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via src/rocky/__init__.py, src/rocky/version.py, src/rocky/capabilities.py and related files.",
+      "fix_files": [
+        "src/rocky/__init__.py",
+        "src/rocky/version.py",
+        "src/rocky/capabilities.py",
+        "scripts/export_capabilities.py",
+        "docs/capabilities.json",
+        "docs/scenarios.md"
+      ]
+    },
+    {
+      "id": "P061",
+      "category": "docs-operator-ux",
+      "problem": "README lacked a direct link to a scenario catalog.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P062",
+      "category": "docs-operator-ux",
+      "problem": "README lacked a link to machine-readable capabilities.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P063",
+      "category": "docs-operator-ux",
+      "problem": "README lacked a link to the current release note.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P064",
+      "category": "docs-operator-ux",
+      "problem": "AGENTS.md hard-coded an outdated deterministic baseline count.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P065",
+      "category": "docs-operator-ux",
+      "problem": "AGENTS.md implied all `.agent-testing/` content was local-only.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P066",
+      "category": "docs-operator-ux",
+      "problem": "No docs page listed every built-in task signature in one table.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P067",
+      "category": "docs-operator-ux",
+      "problem": "No docs page listed every slash command in one place.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P068",
+      "category": "docs-operator-ux",
+      "problem": "No docs page listed built-in tool names in one place.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P069",
+      "category": "docs-operator-ux",
+      "problem": "No docs page summarized learning scenarios in operator terms.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P070",
+      "category": "docs-operator-ux",
+      "problem": "No docs page summarized harness scenarios in operator terms.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P071",
+      "category": "docs-operator-ux",
+      "problem": "No docs page explained tracked vs ignored agent-testing assets.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P072",
+      "category": "docs-operator-ux",
+      "problem": "No docs page recorded the 1.3.0 rationale.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P073",
+      "category": "docs-operator-ux",
+      "problem": "No docs page linked capability inventory to release artifacts.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P074",
+      "category": "docs-operator-ux",
+      "problem": "No docs page served as an upgrade audit summary.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P075",
+      "category": "docs-operator-ux",
+      "problem": "No docs page stated that 1.3.0 is a hardening release.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P076",
+      "category": "docs-operator-ux",
+      "problem": "No docs page tied packaging fixes back to operator trust.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P077",
+      "category": "docs-operator-ux",
+      "problem": "No docs page exposed the next-version bump in plain language.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P078",
+      "category": "docs-operator-ux",
+      "problem": "No docs page described future bump workflow for maintainers.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P079",
+      "category": "docs-operator-ux",
+      "problem": "No docs page captured scenario coverage separately from architecture prose.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P080",
+      "category": "docs-operator-ux",
+      "problem": "No docs page provided a machine-readable twin for the scenario catalog.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via README.md, AGENTS.md, docs/scenarios.md and related files.",
+      "fix_files": [
+        "README.md",
+        "AGENTS.md",
+        "docs/scenarios.md",
+        "docs/releases/v1.3.0.md",
+        "docs/upgrade/rocky-v1.3.0-audit.md"
+      ]
+    },
+    {
+      "id": "P081",
+      "category": "tests-guardrails",
+      "problem": "Deterministic suite had a real failing test because spec fixtures were absent.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P082",
+      "category": "tests-guardrails",
+      "problem": "No release-contract test covered version/readme/license/changelog/release-note assets together.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P083",
+      "category": "tests-guardrails",
+      "problem": "No audit-contract test guaranteed exactly 100 documented fixes.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P084",
+      "category": "tests-guardrails",
+      "problem": "No agent-testing contract test guaranteed all expected spec filenames exist.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P085",
+      "category": "tests-guardrails",
+      "problem": "No agent-testing contract test guaranteed repo-profile presence.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P086",
+      "category": "tests-guardrails",
+      "problem": "No gitignore contract test covered local Rocky state.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P087",
+      "category": "tests-guardrails",
+      "problem": "No gitignore contract test covered agent-testing run outputs.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P088",
+      "category": "tests-guardrails",
+      "problem": "No gitignore contract test covered agent-testing evidence outputs.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P089",
+      "category": "tests-guardrails",
+      "problem": "No metadata contract test checked pyproject readme target.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P090",
+      "category": "tests-guardrails",
+      "problem": "No metadata contract test checked keywords/classifiers presence.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P091",
+      "category": "tests-guardrails",
+      "problem": "No manifest contract test checked shipping of license/changelog/docs/specs.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P092",
+      "category": "tests-guardrails",
+      "problem": "No capability contract test checked JSON/markdown regeneration output.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P093",
+      "category": "tests-guardrails",
+      "problem": "No capability contract test checked task-signature coverage.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P094",
+      "category": "tests-guardrails",
+      "problem": "No capability contract test checked slash-command coverage.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P095",
+      "category": "tests-guardrails",
+      "problem": "No release test checked root-package lazy import.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P096",
+      "category": "tests-guardrails",
+      "problem": "No release test checked version module parity with root package.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P097",
+      "category": "tests-guardrails",
+      "problem": "No release test checked README version parity.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P098",
+      "category": "tests-guardrails",
+      "problem": "No release test checked release note version parity.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P099",
+      "category": "tests-guardrails",
+      "problem": "No release test checked changelog version parity.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    },
+    {
+      "id": "P100",
+      "category": "tests-guardrails",
+      "problem": "No release test turned the 100-item upgrade ledger into a durable repo contract.",
+      "status": "fixed",
+      "fix_summary": "Closed in the 1.3.0 hardening batch via tests/test_release_contracts.py, tests/test_capability_inventory.py, tests/test_upgrade_audit.py and related files.",
+      "fix_files": [
+        "tests/test_release_contracts.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_upgrade_audit.py",
+        "tests/test_docs_bundle.py"
+      ]
+    }
+  ]
+}

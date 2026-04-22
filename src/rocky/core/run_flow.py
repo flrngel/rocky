@@ -260,33 +260,6 @@ def _urls_from_texts(items: list[str]) -> list[str]:
     return urls
 
 
-def _extract_candidate_pool(text: str) -> list[str]:
-    """Extract a candidate name list from free text.
-
-    Looks for a numbered or bulleted list with at least 10 entries that looks
-    like product / item names (not full sentences).  Returns the names in order,
-    or an empty list if no qualifying list is found.
-    """
-    lines = str(text or "").splitlines()
-    names: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        # Match "1. Name", "1) Name", "- Name", "* Name" patterns
-        m = re.match(r"^(?:\d+[.)]\s+|[-*]\s+)(.+)$", stripped)
-        if not m:
-            continue
-        name = m.group(1).strip()
-        # Skip long sentences — we want product/item names, not prose
-        if len(name) > 120 or len(name) < 3:
-            continue
-        if name.endswith((".", "?", "!")):
-            continue
-        names.append(name)
-    if len(names) >= 10:
-        return names
-    return []
-
-
 def _reflection_excerpt(text: str, *, limit: int = 180) -> str:
     candidates: list[str] = []
     for piece in re.split(r"[\n\r]+|(?<=[.!?])\s+", str(text or "")):
@@ -771,51 +744,6 @@ class RunFlowManager:
     def active_task_prompt_block(self) -> str:
         return self.run.active_task().capsule_text()
 
-    def _is_candidate_draft_burst(self) -> bool:
-        """Return True when this is the first burst of a research-flavored flow.
-
-        Burst-0 is identified by:
-        - the active task has kind == "discover" (research/* + site/* only)
-        - task_signature starts with "research/" or "site/"
-        - the active task has no ingested facts or artifacts yet (no tool events processed)
-        - no candidate_pool entry exists in global_facts (suppresses re-injection if state
-          persists across runs or the pool was already recorded)
-        """
-        task = self.run.active_task()
-        # Widened 2026-04-17 after T4 live-calibration found that gemma4:26b
-        # frequently routes recommendation tasks into `site/understanding/*`
-        # rather than `research/live_compare/*`, defeating a prefix-only gate.
-        # The honest invariant for a "research-flavored first burst" is
-        # task.kind == "discover" — that kind only fires for research/* + site/*
-        # flows per current-state.md's flow-loop-task-kinds table, and only the
-        # FIRST burst of those flows has it. Keep the no-facts/no-artifacts gate
-        # as belt-and-suspenders in case a future flow reuses the kind.
-        if task.kind != "discover":
-            return False
-        if not self.task_signature.startswith(("research/", "site/")):
-            return False
-        if task.facts or task.artifacts:
-            return False
-        if any(f.startswith("candidate_pool:") for f in self.run.global_facts):
-            return False
-        return True
-
-    def record_candidate_pool(self, names: list[str]) -> None:
-        """Persist a candidate name list as a global flow fact.
-
-        Stores a single ``candidate_pool: <comma-separated names>`` entry in
-        ``self.run.global_facts`` so that subsequent bursts can see it and T4's
-        trace assertion (``candidate_pool_present``) can find it.
-        """
-        if not names:
-            return
-        if any(f.startswith("candidate_pool:") for f in self.run.global_facts):
-            return
-        pool_text = "candidate_pool: " + ", ".join(names[:30])
-        _append_unique(self.run.global_facts, pool_text, limit=12)
-        self.run.updated_at = utc_iso()
-        self._write()
-
     def task_instruction(self) -> str:
         task = self.run.active_task()
         if task.kind == "finalize":
@@ -828,20 +756,10 @@ class RunFlowManager:
                 "Work only on the active task. Gather concrete item-level evidence, preserving names, URLs, and filter clues. "
                 "Do not draft the final answer yet unless the verifier can already support the requested output."
             )
-        base = (
+        return (
             "Work only on the active task. Do not try to complete the whole mission yet. "
             "Use tools to make progress on this local goal, then stop once the next move is clearer."
         )
-        if self._is_candidate_draft_burst():
-            candidate_block = (
-                "\n\nBefore making any tool call, enumerate 15 to 25 specific candidate "
-                "names from your own knowledge that are relevant to this request. "
-                "List each candidate on its own line (numbered list). "
-                "This candidate list will guide breadth-first exploration — "
-                "do not restrict yourself to fewer than 15 candidates."
-            )
-            return base + candidate_block
-        return base
 
     def user_prompt_for_burst(self) -> str:
         task = self.run.active_task()
@@ -908,22 +826,6 @@ class RunFlowManager:
         task = self._active_task_mut()
         if task.kind == "finalize":
             return
-        # For research-flavored discover-phase bursts, extract and persist a candidate pool
-        # from the model's free-text response before the pool-persistence guard advances.
-        # Gate mirrors `_is_candidate_draft_burst` exactly — same four-condition invariant —
-        # so a future burst ordering cannot silently diverge between inject-time and
-        # extract-time. (Widened 2026-04-17: research/* + site/* because gemma4:26b
-        # routes recommendation tasks into site/understanding/* as often as into
-        # research/live_compare/*.)
-        if (
-            task.kind == "discover"
-            and self.task_signature.startswith(("research/", "site/"))
-            and not (task.facts or task.artifacts)
-            and not any(f.startswith("candidate_pool:") for f in self.run.global_facts)
-        ):
-            pool_names = _extract_candidate_pool(text)
-            if pool_names:
-                self.record_candidate_pool(pool_names)
         excerpt = _reflection_excerpt(text, limit=180)
         if not excerpt:
             return

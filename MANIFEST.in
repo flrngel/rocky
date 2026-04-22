@@ -1,0 +1,16 @@
+include README.md
+include AGENTS.md
+include MANIFESTO.md
+include CHANGELOG.md
+include CONTRIBUTING.md
+include LICENSE
+recursive-include .agent-testing/specs *.json *.md
+include .agent-testing/README.md
+include .agent-testing/repo-profile.json
+recursive-include docs *.md *.json
+recursive-include src/rocky/data/bundled_skills *.md
+prune .agent-testing/runs
+prune .agent-testing/evidence
+prune .rocky
+global-exclude __pycache__
+global-exclude *.py[cod]

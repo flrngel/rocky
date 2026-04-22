@@ -276,16 +276,14 @@ def test_loop_guard_not_injected_below_threshold():
 # ---------------------------------------------------------------------------
 
 def test_args_hash_same_dict_produces_same_hash():
-    # Use a non-normalised tool name so _canonical_args is a no-op and the
-    # test exercises pure JSON-serialisation stability (key-order independence).
-    h1 = _args_hash("run_shell", {"a": 1, "b": 2})
-    h2 = _args_hash("run_shell", {"b": 2, "a": 1})  # different insertion order
+    h1 = _args_hash({"a": 1, "b": 2})
+    h2 = _args_hash({"b": 2, "a": 1})  # different insertion order
     assert h1 == h2
 
 
 def test_args_hash_different_values_produce_different_hash():
-    h1 = _args_hash("run_shell", {"cmd": "ls"})
-    h2 = _args_hash("run_shell", {"cmd": "pwd"})
+    h1 = _args_hash({"cmd": "ls"})
+    h2 = _args_hash({"cmd": "pwd"})
     assert h1 != h2
 
 

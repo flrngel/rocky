@@ -1,0 +1,9 @@
+{
+  "name": "sl-brief",
+  "style": "live-subprocess",
+  "target_path": "tests/agent/test_self_learn_live.py::test_sl_brief_phase_B_fresh_process_receives_project_brief",
+  "commands": [
+    "ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_self_learn_live.py -k sl_brief -v"
+  ],
+  "summary": "Project brief rebuilding and retrieval after autonomous memory capture."
+}

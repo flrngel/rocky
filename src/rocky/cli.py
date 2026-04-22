@@ -9,7 +9,7 @@ import sys
 from rich.console import Console
 from rich.text import Text
 
-from rocky import __version__
+from rocky.version import __version__
 from rocky.app import RockyRuntime
 from rocky.config.loader import ConfigLoader
 from rocky.config.wizard import run_config_wizard

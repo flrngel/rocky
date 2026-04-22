@@ -1,0 +1,13 @@
+{
+  "name": "rocky-agent",
+  "version": "1.3.0",
+  "entrypoint": "rocky",
+  "deterministic_test_command": "pytest -q",
+  "live_test_command": "ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_self_learn_live.py -v",
+  "state_dirs": [
+    ".rocky",
+    ".agent-testing/runs",
+    ".agent-testing/evidence"
+  ],
+  "primary_live_suite": "tests/agent/test_self_learn_live.py"
+}

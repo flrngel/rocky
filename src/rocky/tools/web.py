@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 import re
-import time
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 
 import httpx
-import socksio.exceptions
 from bs4 import BeautifulSoup
 
-from rocky.tools.base import Tool, ToolContext, ToolResult, _tool_cap
+from rocky.tools.base import Tool, ToolContext, ToolResult
 from rocky.tools.proxy_support import tool_proxy_url
 from rocky.util.text import truncate
-
-
-CHALLENGE_EXCERPT_CHARS = 2000
 
 
 USER_AGENT = (
@@ -187,20 +182,13 @@ def _looks_like_bot_challenge(response: httpx.Response) -> bool:
     content_type = response.headers.get("content-type", "").lower()
     if "html" not in content_type:
         return False
-    raw_html_lower = response.text.lower()
-    soup = BeautifulSoup(response.text, "html.parser")
-    # Strip inert-infrastructure tags before HARD-marker check so CF/Turnstile script
-    # URLs in <script src> / <link> / <meta> don't false-flag clean 200 responses
-    # (O4b-β). soup.decode() preserves attributes on surviving elements (e.g.
-    # data-sitekey on a visible <div class="cf-turnstile">) so the positive case
-    # at test line 538 still triggers correctly.
-    for tag in soup.find_all(["script", "link", "noscript", "meta"]):
-        tag.decompose()
-    stripped_html = soup.decode().lower()
-    if any(marker in stripped_html for marker in BOT_CHALLENGE_HARD_MARKERS):
+    html = response.text.lower()
+    if any(marker in html for marker in BOT_CHALLENGE_HARD_MARKERS):
         return True
+    soup = BeautifulSoup(response.text, "html.parser")
     title = soup.title.string.strip().lower() if soup.title and soup.title.string else ""
-    phrase_matches = sum(1 for marker in BOT_CHALLENGE_MARKERS if marker in raw_html_lower)
+    phrase_matches = sum(1 for marker in BOT_CHALLENGE_MARKERS if marker in html)
+    title_matches = sum(1 for marker in BOT_CHALLENGE_TITLE_MARKERS if marker in title)
     if phrase_matches >= 2:
         return True
     if response.status_code in {202, 403, 429, 503} and phrase_matches >= 1:
@@ -322,7 +310,7 @@ def _challenge_result(response: httpx.Response, *, requested_url: str, attempts:
         url=str(response.url),
         status_code=response.status_code,
         error="anti-bot challenge",
-        details={"text_excerpt": _response_text_excerpt(response, CHALLENGE_EXCERPT_CHARS)},
+        details={"text_excerpt": _response_text_excerpt(response)},
         metadata={
             "attempts": attempts,
             "blocked_by_challenge": True,
@@ -374,23 +362,6 @@ def _get(
                     "attempts": attempt,
                     "transient": transient,
                     "tls_verification_failed": _is_tls_verification_error(exc),
-                },
-            )
-        except socksio.exceptions.SOCKSError as exc:
-            # httpcore's SOCKS transport reads the handshake reply with a single
-            # stream.read(); TCP fragmentation of the 2-byte auth/method reply
-            # surfaces here as socksio.ProtocolError("Malformed reply"), which
-            # httpcore does not wrap. Treat it as transient and retry.
-            if attempt < total_attempts:
-                continue
-            return None, _error_result(
-                f"SOCKS proxy handshake failed for {url}",
-                url=url,
-                error=f"{exc.__class__.__name__}: {exc}",
-                metadata={
-                    "attempts": attempt,
-                    "transient": True,
-                    "proxy_handshake_failed": True,
                 },
             )
         if _looks_like_bot_challenge(response):
@@ -504,7 +475,7 @@ def _extract_search_results(html: str, base_url: str, max_results: int) -> list[
     return _extract_duckduckgo_results(html, base_url, max_results)
 
 
-def _response_text_excerpt(response: httpx.Response, limit: int) -> str:
+def _response_text_excerpt(response: httpx.Response) -> str:
     content_type = response.headers.get("content-type", "").lower()
     if "html" in content_type:
         soup = BeautifulSoup(response.text, "html.parser")
@@ -518,11 +489,11 @@ def _response_text_excerpt(response: httpx.Response, limit: int) -> str:
         if candidate is not None:
             text = " ".join(candidate.get_text(" ", strip=True).split())
             if len(text) >= 200:
-                return truncate(text, limit)
+                return truncate(text, 4000)
         body = soup.find("body") or soup
         text = " ".join(body.get_text(" ", strip=True).split())
-        return truncate(text, limit)
-    return truncate(response.text.strip(), limit)
+        return truncate(text, 4000)
+    return truncate(response.text.strip(), 4000)
 
 
 def fetch_url(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -542,7 +513,7 @@ def fetch_url(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             "url": str(response.url),
             "status_code": response.status_code,
             "title": title,
-            "text_excerpt": _response_text_excerpt(response, _tool_cap(ctx.config.tools, "fetch_url")),
+            "text_excerpt": _response_text_excerpt(response),
             "link_items": link_items,
             "links": links,
             "content_type": response.headers.get("content-type", ""),
@@ -611,15 +582,11 @@ def _search_engines(
     max_results: int,
     timeout_s: int,
     steps: list[dict[str, Any]],
-    deadline: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     encoded_query = urlencode({"q": query})
     attempted_urls: list[str] = []
     errors: list[str] = []
     for engine, template in SEARCH_SOURCES:
-        if deadline is not None and time.monotonic() >= deadline:
-            steps.append({"engine": engine, "url": template, "outcome": "budget_exceeded", "result_count": 0})
-            break
         url = template.format(query=encoded_query)
         attempted_urls.append(url)
         response, error = _request(url, timeout_s=timeout_s, follow_redirects=True)
@@ -658,13 +625,9 @@ def search_web(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     max_results = int(args.get("max_results", 8))
     ctx.require("web", "search web", query, risky=True)
     timeout_s = int(args.get("timeout_s", 20))
-    total_timeout_s = int(args.get("total_timeout_s", 30))
-    deadline = time.monotonic() + max(1, total_timeout_s)
     steps: list[dict[str, Any]] = []
 
-    results, meta = _search_engines(
-        query, max_results=max_results, timeout_s=timeout_s, steps=steps, deadline=deadline,
-    )
+    results, meta = _search_engines(query, max_results=max_results, timeout_s=timeout_s, steps=steps)
     if results:
         assert meta is not None
         meta["steps"] = steps
@@ -675,12 +638,9 @@ def search_web(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
 
     variants = _broaden_query(query)
     for round_num, variant in enumerate(variants[:MAX_BROADENING_ROUNDS], 1):
-        if time.monotonic() >= deadline:
-            steps.append({"stage": "broadening", "round": round_num, "variant": variant, "outcome": "budget_exceeded"})
-            break
         steps.append({"stage": "broadening", "round": round_num, "variant": variant, "outcome": "attempting"})
         variant_results, variant_meta = _search_engines(
-            variant, max_results=max_results, timeout_s=timeout_s, steps=steps, deadline=deadline,
+            variant, max_results=max_results, timeout_s=timeout_s, steps=steps,
         )
         if variant_results:
             assert variant_meta is not None
@@ -692,18 +652,11 @@ def search_web(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                 True, variant_results, f"Search returned {len(variant_results)} result(s) (broadened query)", variant_meta,
             )
 
-    budget_exceeded = any(step.get("outcome") == "budget_exceeded" for step in steps)
-    if budget_exceeded:
-        summary = f"Search exceeded {total_timeout_s}s total budget"
-        error_tag = "budget_exceeded"
-    else:
-        summary = "Search failed or returned no parsable results"
-        error_tag = f"Tried {len(steps)} steps including broadened variants"
     return _error_result(
-        summary,
+        "Search failed or returned no parsable results",
         query=query,
-        error=error_tag,
-        metadata={"steps": steps, "total_timeout_s": total_timeout_s},
+        error=f"Tried {len(steps)} steps including broadened variants",
+        metadata={"steps": steps},
     )
 
 
@@ -719,7 +672,7 @@ def tools() -> list[Tool]:
         Tool(
             "search_web",
             "Search the web with a lightweight HTML fallback",
-            {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}, "timeout_s": {"type": "integer"}, "total_timeout_s": {"type": "integer"}}, "required": ["query"]},
+            {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}, "timeout_s": {"type": "integer"}}, "required": ["query"]},
             "web",
             search_web,
         ),

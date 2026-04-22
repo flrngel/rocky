@@ -7,7 +7,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urldefrag, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
@@ -165,49 +165,9 @@ def strip_markers(bounded_text: str) -> str:
     return text
 
 
-def _canonical_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
-    """Return a canonicalized copy of *args* for hash-key stability.
-
-    Only normalises arguments that are semantically equivalent at the HTTP
-    boundary — i.e. changes that the server cannot distinguish:
-
-    - ``fetch_url``: strip the ``#fragment`` from ``url`` via
-      :func:`urllib.parse.urldefrag`.  Fragments are resolved client-side;
-      the server returns the same resource for
-      ``https://example.com/page#a`` and ``https://example.com/page#b``.
-    - ``search_web``: lowercase and sort whitespace-split tokens of ``query``
-      so that ``"best wireless earphones 2025"`` and
-      ``"earphones 2025 best wireless"`` produce the same cache key.
-
-    For all other tools the original *args* dict is returned unchanged
-    (identity return — no copy).  When a normalisation is applied, a
-    shallow copy is returned so the caller's dict is never mutated.
-    """
-    if name == "fetch_url":
-        raw = args.get("url")
-        if isinstance(raw, str):
-            defragged, _ = urldefrag(raw)
-            if defragged != raw:
-                args = dict(args)
-                args["url"] = defragged
-    elif name == "search_web":
-        raw = args.get("query")
-        if isinstance(raw, str):
-            normalized = " ".join(sorted(raw.lower().split()))
-            if normalized != raw:
-                args = dict(args)
-                args["query"] = normalized
-    return args
-
-
-def _args_hash(name: str, arguments: dict[str, Any]) -> str:
-    """Return a stable SHA-256 hex digest of *arguments* for dedup keying.
-
-    Calls :func:`_canonical_args` first so that semantically-equivalent
-    arguments (e.g. URL fragment variants, token-reordered search queries)
-    collapse to the same digest.
-    """
-    canonical = json.dumps(_canonical_args(name, arguments), sort_keys=True, default=str)
+def _args_hash(arguments: dict[str, Any]) -> str:
+    """Return a stable SHA-256 hex digest of *arguments* for dedup keying."""
+    canonical = json.dumps(arguments, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -251,7 +211,7 @@ def _maybe_cached_tool_call(
     Returns:
         The (possibly cached) string result for this tool call.
     """
-    key = (name, _args_hash(name, arguments))
+    key = (name, _args_hash(arguments))
     if key in tool_call_cache:
         hits = tool_call_hits.get(key, 1) + 1
         tool_call_hits[key] = hits

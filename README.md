@@ -72,19 +72,6 @@ Rocky is additive — default behavior is unchanged when a flag is absent.
 - **`verifier.semantic_threshold: 0.5`** — unsupported-claim fraction above which status escalates to `needs_review`.
 - **`tracing.max_age_days`** / **`tracing.max_trace_count`** — optional retention limits for `.rocky/traces/`. Both default to `None` (unlimited). Eviction is oldest-first.
 
-### Tool proxy
-
-All HTTP-based tools (`search_web`, `fetch_url`, `extract_links`, `agent_browser`) honor a single env var:
-
-```bash
-ROCKY_TOOL_PROXY=http://user:pass@proxy.example:8080 rocky ...
-ROCKY_TOOL_PROXY=socks5://proxy.example:1080 rocky ...
-```
-
-The HTTP tools build `httpx.Client` with `trust_env=False`, so the conventional `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` variables are intentionally **ignored** — tool-level network routing stays independent of the operator's shell environment. Set `ROCKY_TOOL_PROXY` explicitly if you need a proxy.
-
-`socks5://` URLs are supported out of the box via the `httpx[socks]` extra (pulled in as a runtime dependency).
-
 ### Integration
 
 Integrators parsing the answer stream should prefer **`response.answer_bounded_text`** over `response.text`. That field is wrapped in `<<<ANSWER>>>` / `<<<END>>>` markers so the answer region is unambiguous even in multi-block outputs. Use `rocky.core.agent.strip_markers` (or the simple string slice) to recover the body. The invariant `response.text == strip_markers(response.answer_bounded_text)` is guarded by a unit test.
@@ -112,6 +99,8 @@ Tool families are deliberately small and operator-grade:
 - `python_exec`
 
 Every tool returns structured `ToolResult`s; traces are saved to `.rocky/traces/` for inspection.
+
+Scenario catalog: `docs/scenarios.md` (human-readable) and `docs/capabilities.json` (machine-readable). Release notes: `docs/releases/v1.3.0.md`.
 
 ### Providers
 
@@ -227,6 +216,6 @@ docs/xlfg/          # current state, hyperlearning backlog, run evidence
 
 ## Status
 
-Active development. v1.1.0. Phase 1 of Hyperlearning v2 shipped. Phases 2–4 (unified retrieval, bounded meta-learning archive, transfer evaluation) on the backlog.
+Active development. v1.3.0. Phase 1 of Hyperlearning v2 shipped. This release hardens packaging, harness assets, scenario docs, and public API consistency; Phases 2–4 (unified retrieval, bounded meta-learning archive, transfer evaluation) remain on the backlog.
 
 License: MIT.

@@ -1,0 +1,9 @@
+{
+  "name": "sl-memory",
+  "style": "live-subprocess",
+  "target_path": "tests/agent/test_self_learn_live.py::test_sl_memory_phase_A_auto_promoted_memory_written",
+  "commands": [
+    "ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_self_learn_live.py -k sl_memory -v"
+  ],
+  "summary": "Autonomous memory capture and reuse across a fresh process."
+}
