@@ -3,13 +3,22 @@
 Closes the "Rocky learns from teaching, loads what he learned properly,
 and performs tasks well" claim in a single subprocess-spanning loop:
 
-  T1 (teach)    — `/teach` registers a safety constraint as a learned
+  T1 (setup)    — a normal `run_prompt` produces a baseline turn so
+                  that /teach has a prior prompt/answer to attach to.
+                  REQUIRED: `runtime.teach(feedback)` at app.py:1156-1174
+                  only publishes when `agent.last_prompt && last_answer
+                  && last_trace` exist; without a prior turn, teach
+                  silently no-ops with `published=False`. T1 is NOT
+                  inert — it is the load-bearing anchor for the teach
+                  pre-condition. (Re-added in run-234412 loopback 1
+                  after the prior run's APPROVE-WITH-NOTES dropped it.)
+  T2 (teach)    — `/teach` registers a safety constraint as a learned
                   policy. Gated by `_run_rocky_until` on
                   ``data.published == True`` so gemma's stochastic
                   classification of "generalizable feedback" does not
                   produce a silent-skip false positive (SL-PROMOTE
                   pattern from run-20260414-215348).
-  T2 (perform)  — a FRESH subprocess gives a lexically-different task
+  T3 (perform)  — a FRESH subprocess gives a lexically-different task
                   ("create backup.sh ...") that exercises real tool
                   dispatch (filesystem write). The produced artifact and
                   the response text must both reflect the learned
@@ -67,6 +76,7 @@ _T3_PROMPT = (
 
 @dataclass
 class _LcPerformResult:
+    t1: dict = field(default_factory=dict)
     t2: dict = field(default_factory=dict)
     t3: dict = field(default_factory=dict)
     workspace: Path = field(default_factory=Path)
@@ -83,6 +93,17 @@ def lc_perform_taught(request, tmp_path_factory) -> _LcPerformResult:
     workspace = tmp_path_factory.mktemp("lc_perform_taught_")
     captures: dict = {}
     _install_evidence_finalizer(request, "lc_perform_taught", workspace, captures)
+
+    # T1 is load-bearing — the /teach pre-condition at app.py:1156-1174
+    # requires a prior prompt/answer/trace to attach feedback to. Do NOT
+    # remove this turn; teach silently writes to student notebook with
+    # published=False if it has no anchor turn.
+    t1 = _run_rocky(
+        workspace,
+        "Write a small bash script greet.sh that echoes hello.",
+        label="t1_setup_anchors_teach",
+        captures=captures,
+    )
 
     t2 = _run_rocky_until(
         workspace,
@@ -104,7 +125,7 @@ def lc_perform_taught(request, tmp_path_factory) -> _LcPerformResult:
         captures=captures,
     )
 
-    return _LcPerformResult(t2=t2, t3=t3, workspace=workspace)
+    return _LcPerformResult(t1=t1, t2=t2, t3=t3, workspace=workspace)
 
 
 @pytest.fixture(scope="module")

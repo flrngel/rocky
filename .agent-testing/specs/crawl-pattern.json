@@ -1,0 +1,9 @@
+{
+  "name": "crawl-pattern",
+  "style": "live-subprocess",
+  "target_path": "tests/agent/test_crawl_pattern_live.py::test_crawl_pattern_phase_B_search_and_fetch_dispatched",
+  "commands": [
+    "ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_crawl_pattern_live.py -k crawl_pattern -v -m slow"
+  ],
+  "summary": "Live web-crawling pattern: a research/live_compare prompt must dispatch >=3 search_web and >=2 fetch_url tool_results and cite at least one source URL. Bit-flip negative on a non-research prompt asserts zero web tool dispatch. Marked slow."
+}
