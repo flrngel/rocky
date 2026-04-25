@@ -15,7 +15,7 @@ _FEEDBACK_STOPWORDS = frozenset({
     "instead", "rather", "should",
 })
 
-from rocky import __version__
+from rocky.version import __version__
 from rocky.commands.registry import CommandRegistry
 from rocky.config.loader import ConfigLoader
 from rocky.core.agent import AgentCore, AgentResponse

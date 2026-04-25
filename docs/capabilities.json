@@ -1,0 +1,330 @@
+{
+  "version": "1.3.0",
+  "lanes": [
+    "meta",
+    "direct",
+    "standard",
+    "deep"
+  ],
+  "task_classes": [
+    "conversation",
+    "meta",
+    "repo",
+    "extraction",
+    "site",
+    "data",
+    "live_compare",
+    "automation",
+    "research"
+  ],
+  "task_signatures": {
+    "automation/general": {
+      "lane": "standard",
+      "task_class": "automation",
+      "risk": "medium",
+      "tool_families": [
+        "filesystem",
+        "shell"
+      ],
+      "preferred_tools": [
+        "write_file",
+        "read_file",
+        "run_shell_command"
+      ],
+      "read_only": false
+    },
+    "conversation/general": {
+      "lane": "standard",
+      "task_class": "conversation",
+      "risk": "low",
+      "tool_families": [],
+      "preferred_tools": [],
+      "read_only": false
+    },
+    "data/spreadsheet/analysis": {
+      "lane": "standard",
+      "task_class": "data",
+      "risk": "medium",
+      "tool_families": [
+        "filesystem",
+        "shell"
+      ],
+      "preferred_tools": [
+        "run_shell_command",
+        "read_file"
+      ],
+      "read_only": true
+    },
+    "extract/general": {
+      "lane": "standard",
+      "task_class": "extraction",
+      "risk": "low",
+      "tool_families": [
+        "filesystem",
+        "shell"
+      ],
+      "preferred_tools": [
+        "read_file",
+        "run_shell_command"
+      ],
+      "read_only": true
+    },
+    "local/runtime_inspection": {
+      "lane": "standard",
+      "task_class": "repo",
+      "risk": "medium",
+      "tool_families": [
+        "shell"
+      ],
+      "preferred_tools": [
+        "run_shell_command",
+        "read_file"
+      ],
+      "read_only": true
+    },
+    "meta/runtime": {
+      "lane": "meta",
+      "task_class": "meta",
+      "risk": "low",
+      "tool_families": [],
+      "preferred_tools": [],
+      "read_only": false
+    },
+    "repo/general": {
+      "lane": "standard",
+      "task_class": "repo",
+      "risk": "medium",
+      "tool_families": [
+        "filesystem",
+        "shell"
+      ],
+      "preferred_tools": [
+        "run_shell_command",
+        "read_file"
+      ],
+      "read_only": true
+    },
+    "repo/shell_execution": {
+      "lane": "standard",
+      "task_class": "repo",
+      "risk": "medium",
+      "tool_families": [
+        "filesystem",
+        "shell"
+      ],
+      "preferred_tools": [
+        "run_shell_command",
+        "read_file",
+        "write_file"
+      ],
+      "read_only": false
+    },
+    "repo/shell_inspection": {
+      "lane": "standard",
+      "task_class": "repo",
+      "risk": "medium",
+      "tool_families": [
+        "shell",
+        "filesystem"
+      ],
+      "preferred_tools": [
+        "run_shell_command",
+        "read_file"
+      ],
+      "read_only": true
+    },
+    "research/live_compare/general": {
+      "lane": "standard",
+      "task_class": "research",
+      "risk": "medium",
+      "tool_families": [
+        "web",
+        "browser"
+      ],
+      "preferred_tools": [
+        "search_web",
+        "fetch_url",
+        "agent_browser"
+      ],
+      "read_only": true
+    },
+    "site/understanding/general": {
+      "lane": "standard",
+      "task_class": "site",
+      "risk": "medium",
+      "tool_families": [
+        "web",
+        "browser",
+        "filesystem"
+      ],
+      "preferred_tools": [
+        "fetch_url",
+        "search_web",
+        "agent_browser"
+      ],
+      "read_only": true
+    }
+  },
+  "slash_commands": [
+    "help",
+    "tools",
+    "skills",
+    "harness",
+    "memory",
+    "student",
+    "threads",
+    "teach",
+    "learned",
+    "permissions",
+    "context",
+    "status",
+    "sessions",
+    "resume",
+    "new",
+    "config",
+    "doctor",
+    "why",
+    "compact",
+    "freeze",
+    "plan",
+    "learn",
+    "undo",
+    "init",
+    "trace",
+    "configure",
+    "setup",
+    "set-up",
+    "meta"
+  ],
+  "command_aliases": {
+    "setup": "init",
+    "set-up": "init"
+  },
+  "tool_names": [
+    "agent_browser",
+    "fetch_url",
+    "read_file",
+    "run_shell_command",
+    "search_web",
+    "write_file"
+  ],
+  "read_only_tools": [
+    "agent_browser",
+    "fetch_url",
+    "read_file",
+    "run_shell_command",
+    "search_web"
+  ],
+  "learning_scenarios": [
+    {
+      "name": "SL-MEMORY",
+      "description": "Autonomous capture and reuse of project memory from normal prompts."
+    },
+    {
+      "name": "SL-RETROSPECT",
+      "description": "Autonomous self-reflection persisted across processes."
+    },
+    {
+      "name": "SL-PROMOTE",
+      "description": "Candidate learned policy promotion after verified reuse."
+    },
+    {
+      "name": "SL-BRIEF",
+      "description": "Automatic project-brief rebuilding from promoted memories."
+    },
+    {
+      "name": "UNDO",
+      "description": "Atomic rollback of learning lineages via the ledger."
+    },
+    {
+      "name": "META-VARIANT",
+      "description": "Safe runtime overlay experimentation with canarying and rollback."
+    }
+  ],
+  "harness": {
+    "strategy": "installed_cli_agentic_scenarios",
+    "provider": "current ollama via installed rocky CLI",
+    "notes": [
+      "Use generated workspaces instead of fixed example repositories or hard-coded case literals.",
+      "Judge both agentic behavior and task result from the real installed `rocky` process.",
+      "For learning scenarios, verify that `/learn` persists reusable guidance and that a fresh Rocky process loads it on the retry."
+    ],
+    "phases": [
+      {
+        "slug": "prepare_workspace",
+        "title": "Phase 1 — Prepare workspace",
+        "description": "Create an isolated temporary workspace and seed only the files needed for the scenario.",
+        "success_signals": [
+          "workspace_created",
+          "fixtures_materialized"
+        ]
+      },
+      {
+        "slug": "install_and_baseline",
+        "title": "Phase 2 — Install and baseline run",
+        "description": "Install the current Rocky package, run the installed CLI with ollama, and record the initial trace and answer.",
+        "success_signals": [
+          "pipx_install",
+          "baseline_trace",
+          "baseline_answer"
+        ]
+      },
+      {
+        "slug": "teach",
+        "title": "Phase 3 — Teach Rocky",
+        "description": "Send explicit `/learn` feedback when the scenario calls for it and confirm Rocky persisted a reusable lesson.",
+        "success_signals": [
+          "feedback_recorded",
+          "skill_published_or_skipped_honestly"
+        ]
+      },
+      {
+        "slug": "retry_with_learning",
+        "title": "Phase 4 — Retry with learning",
+        "description": "Re-run the follow-up task in a fresh Rocky process and verify whether the learned guidance is loaded and used.",
+        "success_signals": [
+          "fresh_process_retry",
+          "learned_skill_selected",
+          "improved_behavior"
+        ]
+      },
+      {
+        "slug": "grade_results",
+        "title": "Phase 5 — Grade behavior and result",
+        "description": "Grade the real tool trace, route, artifacts, and final answer together instead of relying on mock provider assertions.",
+        "success_signals": [
+          "behavior_checked",
+          "result_checked",
+          "report_written"
+        ]
+      }
+    ],
+    "scenarios": [
+      {
+        "name": "agentic_repo_lookup_11",
+        "phases": [
+          "single_phase"
+        ],
+        "notes": ""
+      },
+      {
+        "name": "agentic_exact_output_131",
+        "phases": [
+          "single_phase"
+        ],
+        "notes": ""
+      },
+      {
+        "name": "learning_catalog_review_181",
+        "phases": [
+          "prepare_workspace",
+          "install_and_baseline",
+          "teach",
+          "retry_with_learning",
+          "grade_results"
+        ],
+        "notes": ""
+      }
+    ]
+  }
+}

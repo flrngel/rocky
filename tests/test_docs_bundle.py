@@ -1,23 +1,16 @@
-"""
-O19 — Documentation + version bump.
-
-The v1.2.0 docs bundle (follow-up §10) must cover 8 user-facing topics in
-``README.md`` plus reference ``answer_bounded_text`` for integrators. Version
-must be consistent across ``src/rocky/__init__.py`` and ``pyproject.toml`` at
-``1.2.0`` — current is ``1.1.0`` and this batch ships feature additions so a
-minor bump is required.
-"""
+"""Documentation and release-bundle drift guards."""
 from __future__ import annotations
 
 from pathlib import Path
 
 import rocky
+from rocky.version import __version__
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_readme_covers_follow_up_topics() -> None:
+def test_readme_covers_core_operator_topics() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     required_topics = [
         "--route",
@@ -28,9 +21,12 @@ def test_readme_covers_follow_up_topics() -> None:
         "--freeze",
         "tool_output_limits",
         "semantic_enabled",
+        "docs/scenarios.md",
+        "docs/capabilities.json",
+        f"docs/releases/v{__version__}.md",
     ]
     missing = [topic for topic in required_topics if topic not in readme]
-    assert missing == [], f"README is missing follow-up §10 topics: {missing}"
+    assert missing == [], f"README is missing operator/release topics: {missing}"
 
 
 def test_readme_references_answer_bounded_text() -> None:
@@ -40,15 +36,7 @@ def test_readme_references_answer_bounded_text() -> None:
     )
 
 
-def test_version_bumped_to_one_two_zero() -> None:
-    assert rocky.__version__ == "1.2.0", (
-        f"Rocky version must be 1.2.0 for this batch; got {rocky.__version__!r}"
-    )
-
-
-def test_version_matches_between_init_and_pyproject() -> None:
-    init_version = rocky.__version__
-
+def test_versions_match_between_package_and_pyproject() -> None:
     try:
         import tomllib
     except ImportError:  # pragma: no cover - python < 3.11
@@ -56,16 +44,20 @@ def test_version_matches_between_init_and_pyproject() -> None:
 
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     py_version = pyproject["project"]["version"]
-    assert init_version == py_version, (
-        f"src/rocky/__init__.py version {init_version!r} must match "
-        f"pyproject.toml version {py_version!r}"
-    )
+    assert rocky.__version__ == py_version == __version__
+
+
+def test_readme_status_mentions_current_version() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert f"Active development. v{__version__}." in readme
+
+
+def test_release_note_for_current_version_exists() -> None:
+    release_note = REPO_ROOT / "docs" / "releases" / f"v{__version__}.md"
+    assert release_note.exists(), f"missing release note for {__version__}: {release_note}"
 
 
 def test_freeze_retro_suppression_mentioned() -> None:
-    """The follow-up §10 call-out specifically requires that README mention
-    that `--freeze` implicitly ignores retrospectives — it is a P2 invariant
-    operator-facing users need to know about."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8").lower()
     assert "freeze" in readme
     assert "retrospective" in readme or "retros" in readme

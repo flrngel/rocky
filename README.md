@@ -100,6 +100,8 @@ Tool families are deliberately small and operator-grade:
 
 Every tool returns structured `ToolResult`s; traces are saved to `.rocky/traces/` for inspection.
 
+Scenario catalog: `docs/scenarios.md` (human-readable) and `docs/capabilities.json` (machine-readable). Release notes: `docs/releases/v1.3.0.md`.
+
 ### Providers
 
 `providers/registry.py` supports three styles: `LITELLM_CHAT` (default — local Ollama), `OPENAI_CHAT`, and `OPENAI_RESPONSES`. Provider, model, and base URL are overridable per-call from the CLI.
@@ -214,6 +216,6 @@ docs/xlfg/          # current state, hyperlearning backlog, run evidence
 
 ## Status
 
-Active development. v1.1.0. Phase 1 of Hyperlearning v2 shipped. Phases 2–4 (unified retrieval, bounded meta-learning archive, transfer evaluation) on the backlog.
+Active development. v1.3.0. Phase 1 of Hyperlearning v2 shipped. This release hardens packaging, harness assets, scenario docs, and public API consistency; Phases 2–4 (unified retrieval, bounded meta-learning archive, transfer evaluation) remain on the backlog.
 
 License: MIT.

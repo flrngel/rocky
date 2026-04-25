@@ -1,0 +1,9 @@
+{
+  "name": "sl-undo",
+  "style": "live-subprocess",
+  "target_path": "tests/agent/test_self_learn_live.py::test_sl_undo_behavioral_correction_fully_gone",
+  "commands": [
+    "ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_self_learn_live.py -k sl_undo -v"
+  ],
+  "summary": "Rollback of a learning lineage and absence of post-undo behavioral residue."
+}

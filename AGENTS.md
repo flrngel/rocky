@@ -4,7 +4,7 @@ Prove Rocky through real agentic scenarios, not provider mocks.
 
 ## Tests
 
-**Deterministic** — every commit must stay green (baseline: 730 passed + 14 skipped):
+**Deterministic** — every commit must stay green:
 
     ./.venv/bin/pytest -q
 
@@ -18,7 +18,7 @@ Or via `/agent-testing` with a structured run manifest:
       --repo . --spec .agent-testing/specs/sl-all.json \
       --out .agent-testing/runs/$(date -u +%Y%m%dT%H%M%SZ)-<label>.json
 
-Layout: `tests/agent/` (live tests + `_helpers.py` with explicit `__all__`), `.agent-testing/{repo-profile.json, specs/, runs/, evidence/}` (gitignored except where force-added).
+Layout: `tests/agent/` (live tests + `_helpers.py` with explicit `__all__`), `.agent-testing/{repo-profile.json, specs/, runs/, evidence/}` (tracked specs/profile; `runs/` and `evidence/` ignored local outputs).
 
 ## L20 — when live-LLM A/B is required
 
