@@ -1,0 +1,9 @@
+{
+  "name": "mt-continuation",
+  "style": "live-subprocess",
+  "target_path": "tests/agent/test_mt_continuation_live.py::test_mt_continuation_phase_B_t3_recalls_t1_token",
+  "commands": [
+    "ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_mt_continuation_live.py -k mt_continuation -v"
+  ],
+  "summary": "Multi-turn in-session continuation across three sequential subprocess invocations. T3 must recall a unique token introduced in T1 via the on-disk session, not a fresh-context fallback."
+}

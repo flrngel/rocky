@@ -32,6 +32,13 @@ Thumbs.db
 .env
 .env.*
 
+# Rocky workspace state
+.rocky/
+
+# Agent-testing run/evidence output
+.agent-testing/runs/
+.agent-testing/evidence/
+
 # xlfg
 .xlfg/
 docs/xlfg/runs/*

@@ -1,0 +1,9 @@
+{
+  "name": "lc-perform",
+  "style": "live-subprocess",
+  "target_path": "tests/agent/test_lc_perform_live.py::test_lc_perform_phase_B_artifact_obeys_constraint",
+  "commands": [
+    "ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_lc_perform_live.py -k lc_perform -v"
+  ],
+  "summary": "Learn-then-perform end-to-end. Teach a safety constraint, then a fresh subprocess executes a lexically-different real task whose produced artifact must obey the learned constraint."
+}
