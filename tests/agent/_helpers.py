@@ -82,14 +82,21 @@ NPM_INSTALL_RE = re.compile(r"npm\s+install", re.IGNORECASE)
 # ---------------------------------------------------------------------------
 
 
-def _run_rocky(workspace: Path, *task_args: str, label: str, captures: dict) -> dict:
+def _run_rocky(
+    workspace: Path,
+    *task_args: str,
+    label: str,
+    captures: dict,
+    timeout_s: int | None = None,
+) -> dict:
     cmd = [ROCKY_BIN, "--cwd", str(workspace), "--json", *task_args]
+    effective_timeout = timeout_s if timeout_s is not None else SUBPROCESS_TIMEOUT_S
     try:
         proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=SUBPROCESS_TIMEOUT_S,
+            timeout=effective_timeout,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
@@ -97,7 +104,7 @@ def _run_rocky(workspace: Path, *task_args: str, label: str, captures: dict) -> 
         captures[f"{label}__stderr"] = exc.stderr or ""
         pytest.fail(
             f"autonomous self-learn: `rocky` timed out at label={label} after "
-            f"{SUBPROCESS_TIMEOUT_S}s; cmd={cmd}"
+            f"{effective_timeout}s; cmd={cmd}"
         )
     captures[f"{label}__cmd"] = cmd
     captures[f"{label}__returncode"] = proc.returncode
@@ -125,6 +132,7 @@ def _run_rocky_until(
     predicate,
     predicate_reason: str,
     max_attempts: int = 3,
+    timeout_s: int | None = None,
 ) -> dict:
     """Run `rocky` up to `max_attempts` times; return the first JSON whose
     output satisfies `predicate(payload) -> bool`.
@@ -151,7 +159,13 @@ def _run_rocky_until(
     attempts: list[dict] = []
     for attempt_num in range(1, max_attempts + 1):
         attempt_label = f"{label}__attempt_{attempt_num}"
-        payload = _run_rocky(workspace, *task_args, label=attempt_label, captures=captures)
+        payload = _run_rocky(
+            workspace,
+            *task_args,
+            label=attempt_label,
+            captures=captures,
+            timeout_s=timeout_s,
+        )
         attempts.append(payload)
         try:
             satisfied = bool(predicate(payload))

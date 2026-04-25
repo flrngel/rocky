@@ -1,0 +1,9 @@
+{
+  "name": "catalog-dedup",
+  "style": "live-subprocess",
+  "target_path": "tests/agent/test_catalog_dedup_live.py::test_catalog_dedup_phase_B_count_bounded_by_fingerprints",
+  "commands": [
+    "ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_catalog_dedup_live.py -k catalog_dedup -v"
+  ],
+  "summary": "Catalog-style memory dedup. Feeds near-duplicate constraint statements (whitespace/case variants) and asserts MemoryStore._existing_auto_note_by_fingerprint collapses them on disk. Bit-flip negative on bytewise-distinct constraints."
+}

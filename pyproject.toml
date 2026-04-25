@@ -64,3 +64,6 @@ rocky = ["data/bundled_skills/**/SKILL.md"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+markers = [
+    "slow: long-running scenario tests; opt in with -m slow",
+]

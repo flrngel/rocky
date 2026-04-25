@@ -1,0 +1,9 @@
+{
+  "name": "route-upgrade-perf",
+  "style": "live-subprocess",
+  "target_path": "tests/agent/test_route_upgrade_perf_live.py::test_route_upgrade_perf_phase_B_carry_field_at_position_zero",
+  "commands": [
+    "ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_route_upgrade_perf_live.py -k route_upgrade_perf -v"
+  ],
+  "summary": "End-to-end carry-field witness for AgentCore._route_upgrade_driving_policy on the automation/general task family (extends the existing repo/shell_execution unit witness to a different family in a real LLM run)."
+}

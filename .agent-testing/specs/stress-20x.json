@@ -1,0 +1,9 @@
+{
+  "name": "stress-20x",
+  "style": "live-subprocess",
+  "target_path": "tests/agent/test_stress_20x_live.py::test_stress_20x_phase_B_reuse_honors_constraint",
+  "commands": [
+    "ROCKY_LLM_SMOKE=1 ROCKY_BIN=./.venv/bin/rocky pytest tests/agent/test_stress_20x_live.py -k stress_20x -v -m slow"
+  ],
+  "summary": "Learn-load-perform stress test: teach a safety constraint once, then perform 19 lexically-different bash-script tasks in the same workspace. Asserts policy dedup on disk (exactly 1 policy_id), bounded auto-memory growth, and >=18/19 reuse turns honor the constraint. Marked slow."
+}
